@@ -1,0 +1,94 @@
+# G1000 softkey label vocabulary.
+#
+# Raw OCR output is snapped to the closest entry here (difflib, configurable
+# cutoff) which fixes the usual confusions -- DCLTP -> DCLTR, lNSET -> INSET,
+# 0BS -> OBS -- for the cost of one difflib call.
+#
+# THIS FILE IS MEANT TO BE EDITED. The exact softkey set depends on the
+# X-Plane version, the aircraft's G1000 configuration and the avionics
+# software version being emulated. If a label on your setup is missing here
+# it will be reported raw (and logged); add it and restart the daemon.
+#
+# Blank lines and '#' comments are ignored. One label per line, uppercase.
+
+# --- PFD top level -------------------------------------------------------
+INSET
+SENSOR
+PFD
+OBS
+CDI
+DME
+XPDR
+IDENT
+TMR/REF
+NRST
+ALERTS
+BACK
+
+# --- PFD configuration menu ---------------------------------------------
+SYN VIS
+DFLTS
+WIND
+BRG1
+BRG2
+HSI FMT
+360 HSI
+ARC HSI
+ALT UNIT
+STD BARO
+METERS
+IN
+HPA
+
+# --- Synthetic vision submenu -------------------------------------------
+PATHWAY
+SYN TERR
+HRZN HDG
+APTSIGNS
+
+# --- Inset map / MFD map submenus ---------------------------------------
+OFF
+ON
+DCLTR
+TRAFFIC
+TOPO
+TERRAIN
+STRMSCP
+NEXRAD
+XM LTNG
+METAR
+WX LGND
+LEGEND
+WPT
+
+# --- Transponder ---------------------------------------------------------
+STBY
+ALT
+GROUND
+GND
+VFR
+CODE
+MODE A
+MODE C
+BKSP
+
+# --- MFD -----------------------------------------------------------------
+ENGINE
+MAP
+FLIGHT PLAN
+PROCEDURE
+CHKLIST
+SHW CHRT
+SYSTEM
+FUEL
+LEAN
+
+# --- Digits (transponder CODE entry) -------------------------------------
+0
+1
+2
+3
+4
+5
+6
+7

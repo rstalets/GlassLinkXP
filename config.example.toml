@@ -1,0 +1,77 @@
+# G1000 softkey OCR daemon -- copy to config.toml and edit.
+# Run with:  python -m g1000_softkey.main -c config.toml run
+
+[app]
+# Capture/OCR rate. 4 Hz is plenty: softkeys change only when you press one,
+# and with change gating on, unchanged cells cost nothing.
+loop_hz = 4.0
+# Skip OCR for cells whose pixels did not change since the previous frame.
+change_gating = true
+# Per-pixel intensity difference that counts as a change (0..255).
+change_tolerance = 6
+
+# --- displays --------------------------------------------------------------
+# One section per captured window. `key` is the table name and also the
+# dataref prefix: g1000/softkey/<key>/1..12
+#
+# window_title is a case-insensitive SUBSTRING of the pop-out window title.
+# Run `python -m g1000_softkey.main list-windows` on the X-Plane machine to
+# see the real titles, then paste a distinctive part of them here.
+#
+# geometry is expressed as FRACTIONS of the window's client area so it
+# survives a resize. Get a starting point from:
+#   python -m g1000_softkey.main -c config.toml calibrate
+# then check calibration/<key>_overlay.png and nudge the numbers.
+
+[display.pfd]
+window_title = "G1000 PFD"
+enabled = true
+# dataref_prefix = "g1000/softkey/pfd"   # defaults to g1000/softkey/<key>
+
+[display.pfd.geometry]
+x = 0.050      # left edge of the softkey strip
+y = 0.915      # top edge
+w = 0.900      # width
+h = 0.055      # height
+cells = 12
+cell_pad_x = 0.10   # fraction of a cell trimmed off each side
+cell_pad_y = 0.12   # fraction of the strip height trimmed top and bottom
+
+[display.mfd]
+window_title = "G1000 MFD"
+enabled = true
+
+[display.mfd.geometry]
+x = 0.050
+y = 0.915
+w = 0.900
+h = 0.055
+cells = 12
+cell_pad_x = 0.10
+cell_pad_y = 0.12
+
+# --- OCR -------------------------------------------------------------------
+[ocr]
+engine = "auto"          # auto | tesserocr | pytesseract  (auto prefers tesserocr)
+lang = "eng"
+psm = 7                  # single text line
+whitelist = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -/"
+upscale = 3.0            # Tesseract wants roughly a 30 px cap height
+threshold = "otsu"       # otsu | adaptive -- per cell, never global
+fuzzy_cutoff = 0.62      # difflib cutoff for snapping to labels.txt
+blank_ink_ratio = 0.004  # below this fraction of "ink" a cell is reported as ""
+# labels_file = "g1000_softkey/labels.txt"   # relative paths resolve next to this file
+# tessdata_path = "C:/Program Files/Tesseract-OCR/tessdata"
+
+# --- publishing ------------------------------------------------------------
+[publish]
+target = "webapi"        # webapi | file | console
+base_url = "http://localhost:8086"
+api_version = "v1"       # v1 works on X-Plane 12.1.1+; v2 from 12.1.4
+field_width = 16         # bytes per dataref -> PilotsDeck address ':s16'
+timeout = 1.0
+retry_interval = 5.0     # seconds between reconnect attempts
+# json_path = "C:/Users/you/AppData/Local/Temp/g1000_softkey_labels.json"
+# (empty -> <system temp>/g1000_softkey_labels.json, the same default the
+#  XPPython3 plugin uses; override both sides with the G1000_SOFTKEY_JSON
+#  environment variable)

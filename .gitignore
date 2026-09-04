@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# g1000-softkey local output
+config.toml
+calibration/
+cells/
+frames/
