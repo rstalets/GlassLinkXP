@@ -60,15 +60,19 @@ lang = "eng"
 psm = 7                  # single text line
 whitelist = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -/"
 # The glyphs are only ~10 px tall in the capture and arrive slightly soft.
-# Thresholding them at that size closes the counters of 0, 6, 8 and 9, and a
-# filled counter is not a character at all -- Tesseract returns an empty string
-# rather than a wrong digit. An unsharp mask before thresholding keeps the holes
-# open: measured on cells at the captured scale, digit accuracy went from 43/64
-# to 58/64 with no loss on multi-character labels. Set sharpen_amount = 0 to
-# disable. If short labels still read empty, the strip needs more pixels.
+# Thresholding at that size can close the counters of 0, 6, 8 and 9, and a
+# filled counter is not a character -- Tesseract returns an empty string rather
+# than a wrong digit. Sharpening reopens them, but too much rings and grows
+# strokes instead, turning a 0 into a B. The right amount depends on the font
+# and the capture scale, so rather than fix one value we try each (amount,
+# radius) pair in order and keep whichever answer lands on a known label.
+#
+# The first rung is no sharpening, and an exact vocabulary hit stops the ladder
+# there, so this can never overwrite an answer the gentle path got right. The
+# extra OCR calls are spent only on cells that failed, and only when they
+# change.
 upscale = 4.0
-sharpen_amount = 1.2
-sharpen_radius = 1.4
+sharpen_ladder = [[0.0, 0.0], [0.5, 1.0], [1.0, 1.4]]
 threshold = "otsu"       # otsu | adaptive -- per cell, never global
 fuzzy_cutoff = 0.62      # difflib cutoff for snapping to labels.txt
 blank_ink_ratio = 0.004  # below this fraction of "ink" a cell is reported as ""

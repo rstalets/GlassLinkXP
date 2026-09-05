@@ -90,11 +90,21 @@ class OcrConfig:
     psm: int = 7  # single text line
     whitelist: str = DEFAULT_WHITELIST
     upscale: float = 4.0
-    #: Unsharp mask applied before thresholding. The glyphs are ~10 px tall and
-    #: slightly soft from the capture; without this the counters of 0/6/8/9 fill
-    #: in and Tesseract returns nothing at all for them. 0 disables it.
-    sharpen_amount: float = 1.2
-    sharpen_radius: float = 1.4
+    #: Unsharp mask settings tried in order, as (amount, radius) pairs.
+    #:
+    #: The glyphs are ~10 px tall and slightly soft, and thresholding at that
+    #: size can close the counters of 0/6/8/9 -- a filled counter is not a
+    #: character, so Tesseract returns nothing. Sharpening reopens them, but
+    #: too much of it rings and grows strokes instead, turning a 0 into a B.
+    #: The right amount depends on the font and the capture scale, which is not
+    #: knowable in advance, so instead of guessing one value we try several and
+    #: keep whichever result the vocabulary and Tesseract agree on. The first
+    #: rung is no sharpening at all, so this can never do worse than not trying.
+    sharpen_ladder: tuple[tuple[float, float], ...] = (
+        (0.0, 0.0),
+        (0.5, 1.0),
+        (1.0, 1.4),
+    )
     threshold: str = "otsu"  # otsu | adaptive
     labels_file: str = str(PACKAGE_DIR / "labels.txt")
     fuzzy_cutoff: float = 0.62
@@ -158,6 +168,11 @@ def _subsection(data: Mapping[str, Any], name: str) -> dict[str, Any]:
     return dict(section)
 
 
+def _coerce_ladder(value):
+    """TOML gives lists; the config holds tuples so it stays hashable/frozen."""
+    return tuple((float(a), float(b)) for a, b in value)
+
+
 def _build(cls, data: Mapping[str, Any]):
     known = set(cls.__dataclass_fields__)
     unknown = set(data) - known
@@ -183,6 +198,14 @@ def load_config(path: str | Path | None) -> AppConfig:
 def from_mapping(raw: Mapping[str, Any], base_dir: Path | None = None) -> AppConfig:
     app_data = _subsection(raw, "app")
     ocr_data = _subsection(raw, "ocr")
+    if "sharpen_ladder" in ocr_data:
+        try:
+            ocr_data["sharpen_ladder"] = _coerce_ladder(ocr_data["sharpen_ladder"])
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(
+                "ocr.sharpen_ladder must be a list of [amount, radius] pairs, "
+                f"e.g. [[0.0, 0.0], [0.5, 1.0]] -- got {ocr_data['sharpen_ladder']!r} ({exc})"
+            ) from exc
     publish_data = _subsection(raw, "publish")
 
     if base_dir is not None and ocr_data.get("labels_file"):

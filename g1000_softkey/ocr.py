@@ -270,5 +270,32 @@ class SoftkeyReader:
             index=index, text=snapped, raw=raw, confidence=confidence, match_score=score
         )
 
+    def read_best(self, index: int, images: Sequence[np.ndarray]) -> CellResult:
+        """OCR each preprocessing variant and keep the most trustworthy answer.
+
+        Ranked by: landing exactly on a known softkey label, then Tesseract's
+        own confidence. An exact vocabulary hit is worth more than confidence
+        because the label set is small and closed -- a variant reading "0" is
+        certainly right, while one reading "B" with high confidence is
+        certainly wrong, and only the vocabulary knows the difference.
+
+        Stops at the first exact hit, so the common case costs one OCR call
+        and the extra work is spent only on cells that actually need it.
+        """
+        best: CellResult | None = None
+        for image in images:
+            result = self.read(index, image)
+            if best is None or self._rank(result) > self._rank(best):
+                best = result
+            if result.text and result.match_score >= 1.0:
+                break
+        assert best is not None  # images is never empty
+        return best
+
+    @staticmethod
+    def _rank(result: CellResult) -> tuple[int, float]:
+        exact = 1 if (result.text and result.match_score >= 1.0) else 0
+        return (exact, result.confidence)
+
     def close(self) -> None:
         self.engine.close()

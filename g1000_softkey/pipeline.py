@@ -100,17 +100,20 @@ class DisplayPipeline:
                 )
                 results.append(CellResult(index=index, blank=True))
                 continue
-            image = preprocess_cell(
-                cell,
-                upscale=self.reader.config.upscale,
-                method=self.reader.config.threshold,
-                sharpen_amount=self.reader.config.sharpen_amount,
-                sharpen_radius=self.reader.config.sharpen_radius,
-            )
+            variants = [
+                preprocess_cell(
+                    cell,
+                    upscale=self.reader.config.upscale,
+                    method=self.reader.config.threshold,
+                    sharpen_amount=amount,
+                    sharpen_radius=radius,
+                )
+                for amount, radius in self.reader.config.sharpen_ladder
+            ]
             preprocess_ms += (time.perf_counter() - t0) * 1000.0
 
             t0 = time.perf_counter()
-            cell_result = self.reader.read(index, image)
+            cell_result = self.reader.read_best(index, variants)
             results.append(cell_result)
             ocr_ms += (time.perf_counter() - t0) * 1000.0
             ocr_calls += 1
