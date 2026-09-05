@@ -70,6 +70,21 @@ class DisplayPipeline:
             return "disabled (ocr.screen_confidence = 0)"
         if not len(self.screens):
             return f"no page definitions loaded from {self.reader.config.screens_file}"
+
+        # Nothing to help, so do not go looking for a page. Identification only
+        # ever serves cells that read below the threshold; when every cell is
+        # confident there is no question to answer, and the common case costs a
+        # single comparison instead of a scan over every known page.
+        shaky = [
+            r.index + 1 for r in results
+            if not r.blank and r.confidence < self.reader.config.screen_confidence
+        ]
+        if not shaky:
+            return (
+                f"not needed: every cell read at or above "
+                f"{self.reader.config.screen_confidence:.0f}%"
+            )
+
         labels = {r.index + 1: r.text for r in results}
         confidences = {r.index + 1: r.confidence for r in results}
         screen = self.screens.identify(
@@ -77,14 +92,9 @@ class DisplayPipeline:
             self.reader.config.screen_match_confidence,
         )
         if screen is None:
-            shaky = [
-                r.index + 1 for r in results
-                if not r.blank and r.confidence < self.reader.config.screen_confidence
-            ]
             return (
-                f"no page matched ({len(self.screens)} known)"
-                + (f"; {len(shaky)} cell(s) below "
-                   f"{self.reader.config.screen_confidence:.0f}%: {shaky}" if shaky else "")
+                f"no page matched ({len(self.screens)} known); {len(shaky)} cell(s) below "
+                f"{self.reader.config.screen_confidence:.0f}% went unhelped: {shaky}"
             )
         replaced: list[int] = []
         confirmed: list[int] = []

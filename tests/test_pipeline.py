@@ -258,4 +258,47 @@ def test_a_confident_cell_is_neither_replaced_nor_confirmed():
     outcome = _pipeline(screens=ScreenLibrary([screen]))._apply_screen(results)
 
     assert not results[0].by_screen and not results[0].confirmed_by
-    assert "no low-confidence cells to act on" in outcome
+    assert "not needed" in outcome, "no page should even be looked for"
+
+
+def test_no_page_is_looked_for_when_every_cell_read_confidently():
+    """Identification only ever serves cells below the threshold.
+
+    Scanning the page library when nothing needs help is wasted work, and
+    implying otherwise made the documented flow read backwards.
+    """
+    from g1000_softkey.screens import Screen, ScreenLibrary
+
+    class Counting(ScreenLibrary):
+        def __init__(self, screens):
+            super().__init__(screens)
+            self.calls = 0
+
+        def identify(self, *args, **kwargs):
+            self.calls += 1
+            return super().identify(*args, **kwargs)
+
+    screen = Screen(name="x", display="pfd", match={9: "IDENT"}, labels={1: "0"})
+    library = Counting([screen])
+    results = [
+        CellResult(index=0, text="0", raw="0", confidence=99.0, match_score=1.0),
+        CellResult(index=8, text="IDENT", raw="IDENT", confidence=95.0, match_score=1.0),
+    ]
+    outcome = _pipeline(screens=library)._apply_screen(results)
+
+    assert library.calls == 0, "no identification when nothing is below the threshold"
+    assert "not needed" in outcome
+
+
+def test_a_page_is_looked_for_as_soon_as_one_cell_is_shaky():
+    from g1000_softkey.screens import Screen, ScreenLibrary
+
+    screen = Screen(name="x", display="pfd", match={9: "IDENT"}, labels={1: "0"})
+    results = [
+        CellResult(index=0, text="2", raw="2", confidence=41.0, match_score=1.0),
+        CellResult(index=8, text="IDENT", raw="IDENT", confidence=95.0, match_score=1.0),
+    ]
+    outcome = _pipeline(screens=ScreenLibrary([screen]))._apply_screen(results)
+
+    assert results[0].text == "0"
+    assert "replaced [1]" in outcome

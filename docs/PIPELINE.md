@@ -3,6 +3,13 @@
 Two views: what happens once at startup and on every cycle, and what happens to
 a single captured frame.
 
+> **On naming.** What the config and these diagrams call a *page* or *screen* --
+> `screens.toml`, `screen_confidence` -- is the softkey-page signature idea:
+> the labels that read cleanly identify which page is showing, and the page
+> supplies the ones that did not. There is a separate, off-by-default
+> *shape signature* fallback in `signatures.py` that compares glyph pixels;
+> it is a different mechanism and is not in these diagrams.
+
 ## The daemon
 
 ```mermaid
@@ -72,12 +79,15 @@ flowchart TD
     CACHE --> CELLS
     BLANK --> CELLS
 
-    CELLS --> IDENT{"Do any page's match cells<br/>all read above<br/>screen_match_confidence?"}
-    IDENT -->|no| OUT
-    IDENT -->|"two pages tie"| OUT
-    IDENT -->|yes| APPLY["For each cell the page defines<br/>that read below screen_confidence"]
+    CELLS --> NEED{"Any cell below<br/>screen_confidence?"}
+    NEED -->|"no -- nothing to help"| OUT
+    NEED -->|yes| IDENT{"Do some page's match cells<br/>all read above<br/>screen_match_confidence?"}
 
-    APPLY --> AGREE{"Does it already<br/>agree with the page?"}
+    IDENT -->|"no page matches"| OUT
+    IDENT -->|"two pages tie"| OUT
+    IDENT -->|yes| APPLY["Take only the shaky cells<br/>that page defines"]
+
+    APPLY --> AGREE{"Does the cell already<br/>agree with the page?"}
     AGREE -->|yes| CONF["Mark confirmed<br/>value unchanged"]
     AGREE -->|no| REPL["Replace with the page's value"]
 
@@ -102,6 +112,12 @@ vocabulary agrees with wins. The first rung is no sharpening at all.
 **Confidence gates the early exit.** Landing on a known label is not proof:
 every digit 0-7 is a valid softkey, so a 0 misread as 2 still matches exactly.
 Only a hit that is also confident ends the search.
+
+**Page lookup runs only when something needs it.** The stage exists to serve
+cells OCR was unsure about, so the first question is whether any exist. When
+every cell read confidently there is nothing to answer and no page is looked
+for at all -- which is the common case, and costs one comparison rather than a
+scan of the page library.
 
 **Page lookup last.** Recognising a ten-pixel 0 is hard. Noticing that IDENT,
 BKSP and BACK occupy cells 9-11 is easy, and that only happens on the
