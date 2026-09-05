@@ -123,13 +123,36 @@ Leptonica prebuilt. The catch: conda-forge's **win-64 builds stop at tesserocr
 Last resort: `engine = "pytesseract"` in `[ocr]`, which works with a plain UB
 Mannheim install but restarts Tesseract for every cell (measured ~24x slower
 per frame; same accuracy).
-4. **XPPython3 plugin**: copy `xppython3/PI_G1000SoftkeyLabels.py` into
-   `<X-Plane 12>/Resources/plugins/PythonPlugins/` and restart X-Plane. It
-   creates 24 writable 16-byte datarefs and does nothing else:
-   `g1000/softkey/pfd/1..12` and `g1000/softkey/mfd/1..12`.
-   (The Web API can *write* datarefs but cannot *create* them, hence the
-   plugin. All the expensive work stays in the standalone daemon so it never
-   touches X-Plane's flight-loop thread.)
+4. **The X-Plane side** -- XPPython3 plus the dataref plugin:
+   ```
+   powershell -ExecutionPolicy Bypass -File scripts\install-xplane-plugin.ps1
+   ```
+   `scripts\install-windows.ps1` runs this for you unless you pass
+   `-SkipXPlane`. What it does, and why each part is needed:
+
+   * **XPPython3** goes in `<X-Plane 12>/Resources/plugins/XPPython3`. Version 4
+     bundles its own **Python 3.12**, so no system Python is required -- and
+     note the plugin therefore runs in *that* interpreter, not this project's
+     venv. That is why `PI_G1000SoftkeyLabels.py` imports nothing beyond the
+     standard library and the XPPython3 API.
+   * **`Resources/plugins/PythonPlugins/`** is created by XPPython3 on the
+     *first X-Plane run*, so on a fresh install it does not exist yet. The
+     script creates it early, which is harmless and saves a launch cycle.
+   * **`PI_G1000SoftkeyLabels.py`** is copied into that folder (XPPython3 loads
+     plugins by the `PI_` prefix). It creates 24 writable 16-byte datarefs and
+     does nothing else: `g1000/softkey/pfd/1..12` and `g1000/softkey/mfd/1..12`.
+
+   The Web API can *write* datarefs but cannot *create* them, which is the only
+   reason a plugin exists at all. Everything expensive stays in the standalone
+   daemon so it never touches X-Plane's flight-loop thread.
+
+   Restart X-Plane, then confirm the datarefs actually registered:
+   ```
+   powershell -ExecutionPolicy Bypass -File scripts\install-xplane-plugin.ps1 -VerifyOnly
+   ```
+   That queries a running X-Plane over the web API and reports how many of the
+   24 exist and their `value_type` (expect `data`). If the plugin failed to
+   load, look in `<X-Plane>/Log.txt` and `<X-Plane>/XPPython3.log`.
 5. **X-Plane web server**: 12.1.1+ serves the REST API on
    `http://localhost:8086`. Check `http://localhost:8086/api/v1/datarefs`
    in a browser; if it does not answer, enable the web server in

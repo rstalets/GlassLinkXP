@@ -37,6 +37,15 @@
 .PARAMETER SkipVcpkg
     Reuse an existing vcpkg tesseract build without re-running vcpkg install.
 
+.PARAMETER XPlanePath
+    X-Plane 12 root. When given (or auto-detected), this script also runs
+    scripts\install-xplane-plugin.ps1 to install XPPython3 and the dataref
+    plugin. Without the sim side there is nothing for the daemon to publish
+    into, because the Web API can write datarefs but cannot create them.
+
+.PARAMETER SkipXPlane
+    Install only the daemon; do not touch X-Plane.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
 
@@ -50,7 +59,9 @@ param(
     [string]$VcpkgRoot     = 'C:\vcpkg',
     [string]$PythonVersion = '3.12',
     [string]$TessdataPrefix,
-    [switch]$SkipVcpkg
+    [string]$XPlanePath,
+    [switch]$SkipVcpkg,
+    [switch]$SkipXPlane
 )
 
 $ErrorActionPreference = 'Stop'
@@ -375,6 +386,27 @@ assert got, "OCR returned nothing; check TESSDATA_PREFIX"
 }
 finally { Pop-Location }
 
+# --------------------------------------------------------------------------
+# 13. The X-Plane side
+# --------------------------------------------------------------------------
+$simInstalled = $false
+if ($SkipXPlane) {
+    Write-Step 'Skipping the X-Plane side (-SkipXPlane)'
+    Write-Warn2 'remember to run scripts\install-xplane-plugin.ps1 -- without the'
+    Write-Warn2 'plugin the datarefs do not exist and the daemon has nowhere to publish.'
+} else {
+    Write-Step 'Installing the X-Plane side (XPPython3 + dataref plugin)'
+    $simArgs = @()
+    if ($XPlanePath) { $simArgs += @('-XPlanePath', $XPlanePath) }
+    try {
+        & (Join-Path $PSScriptRoot 'install-xplane-plugin.ps1') @simArgs
+        if ($LASTEXITCODE -eq 0 -or $null -eq $LASTEXITCODE) { $simInstalled = $true }
+    } catch {
+        Write-Warn2 "the X-Plane side did not complete: $_"
+        Write-Warn2 'the daemon is still installed; re-run scripts\install-xplane-plugin.ps1 on its own.'
+    }
+}
+
 Write-Host @"
 
 ============================================================
@@ -383,6 +415,15 @@ Write-Host @"
    .venv\Scripts\activate
    python -m g1000_softkey.main list-windows
    python -m g1000_softkey.main calibrate --display pfd
+
+$(if ($simInstalled) {
+"  X-Plane side installed. Start X-Plane, then confirm the
+  datarefs registered:
+    scripts\install-xplane-plugin.ps1 -VerifyOnly"
+} else {
+"  X-Plane side NOT installed. Run:
+    scripts\install-xplane-plugin.ps1"
+})
 
  Note: LIBPATH/INCLUDE were set for THIS shell only -- they are
  build-time settings and are not needed to run the daemon.
