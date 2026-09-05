@@ -60,10 +60,16 @@ class DisplayPipeline:
         self._previous_cells: list[np.ndarray] | None = None
         self._previous_results: list[CellResult] | None = None
 
-    def _apply_screen(self, results: list[CellResult]) -> None:
-        """Fill low-confidence cells from a page the confident ones identify."""
-        if not len(self.screens) or self.reader.config.screen_confidence <= 0:
-            return
+    def _apply_screen(self, results: list[CellResult]) -> str:
+        """Fill low-confidence cells from a page the confident ones identify.
+
+        Returns a one-line account of what happened, for the debug log: which
+        page matched or why none did, and how many cells it replaced.
+        """
+        if self.reader.config.screen_confidence <= 0:
+            return "disabled (ocr.screen_confidence = 0)"
+        if not len(self.screens):
+            return f"no page definitions loaded from {self.reader.config.screens_file}"
         labels = {r.index + 1: r.text for r in results}
         confidences = {r.index + 1: r.confidence for r in results}
         screen = self.screens.identify(
@@ -71,7 +77,16 @@ class DisplayPipeline:
             self.reader.config.screen_match_confidence,
         )
         if screen is None:
-            return
+            shaky = [
+                r.index + 1 for r in results
+                if not r.blank and r.confidence < self.reader.config.screen_confidence
+            ]
+            return (
+                f"no page matched ({len(self.screens)} known)"
+                + (f"; {len(shaky)} cell(s) below "
+                   f"{self.reader.config.screen_confidence:.0f}%: {shaky}" if shaky else "")
+            )
+        replaced = []
         for result in results:
             cell = result.index + 1
             expected = screen.labels.get(cell)
@@ -81,13 +96,17 @@ class DisplayPipeline:
                 continue
             if result.text == expected:
                 continue
-            LOG.debug(
-                "%s cell %-2d %r at %.0f%% -> %r (page %s)",
-                self.display.key, cell, result.text, result.confidence, expected, screen.name,
-            )
+            # Not logged here: the per-cell debug lines are emitted after this
+            # stage so they can show the replacement, and duplicating it would
+            # print every substitution twice.
             results[result.index] = replace(
                 result, text=expected, match_score=1.0, by_screen=screen.name
             )
+            replaced.append(cell)
+        return (
+            f"matched {screen.name!r} on cells {sorted(screen.match)}; "
+            + (f"replaced {replaced}" if replaced else "nothing needed replacing")
+        )
 
     def reset(self) -> None:
         self._previous_cells = None
@@ -110,6 +129,7 @@ class DisplayPipeline:
         timings["gate_ms"] = (time.perf_counter() - t0) * 1000.0
 
         results: list[CellResult] = []
+        diagnostics: dict[int, str] = {}
         preprocess_ms = 0.0
         ocr_ms = 0.0
         ocr_calls = 0
@@ -132,10 +152,9 @@ class DisplayPipeline:
                 preprocess_ms += (time.perf_counter() - t0) * 1000.0
                 # Distinguishing "gated out as empty" from "OCR read nothing" is
                 # the whole question when a short label goes missing, so say which.
-                LOG.debug(
-                    "%s cell %-2d BLANK   ink=%.4f < %.4f (contrast=%d) -- never reached OCR",
-                    self.display.key, index + 1, ink,
-                    self.reader.config.blank_ink_ratio, self.reader.config.blank_contrast,
+                diagnostics[index] = (
+                    f"BLANK   ink={ink:.4f} < {self.reader.config.blank_ink_ratio:.4f} "
+                    f"(contrast={self.reader.config.blank_contrast}) -- never reached OCR"
                 )
                 results.append(CellResult(index=index, blank=True))
                 continue
@@ -158,18 +177,33 @@ class DisplayPipeline:
             ocr_calls += 1
             x0, x1 = ink_bounds(cell, self.reader.config.blank_contrast)
             clipped = " CLIPPED?" if (x0 <= 0.02 or x1 >= 0.98) else ""
-            LOG.debug(
-                "%s cell %-2d ink=%.4f x=%.2f-%.2f raw=%-12r -> %-12r conf=%5.1f match=%.2f%s",
-                self.display.key, index + 1, ink, x0, x1, cell_result.raw, cell_result.text,
-                cell_result.confidence, cell_result.match_score, clipped,
+            diagnostics[index] = (
+                f"ink={ink:.4f} x={x0:.2f}-{x1:.2f} raw={cell_result.raw!r:<12} "
+                f"ocr={cell_result.text!r:<12} conf={cell_result.confidence:5.1f} "
+                f"match={cell_result.match_score:.2f}{clipped}"
             )
 
         timings["preprocess_ms"] = preprocess_ms
         timings["ocr_ms"] = ocr_ms
 
         t0 = time.perf_counter()
-        self._apply_screen(results)
+        outcome = self._apply_screen(results)
         timings["screen_ms"] = (time.perf_counter() - t0) * 1000.0
+
+        # Logged here rather than inside the loop above: page lookup can change
+        # a cell after OCR has spoken, and a debug line that stops at the OCR
+        # answer disagrees with the dataref that actually gets published.
+        if LOG.isEnabledFor(logging.DEBUG):
+            LOG.debug("%s screen lookup: %s", self.display.key, outcome)
+            for result in results:
+                detail = diagnostics.get(result.index)
+                if detail is None:
+                    continue
+                if result.by_screen:
+                    detail += f" -> {result.text!r} FROM PAGE {result.by_screen!r}"
+                elif result.by_signature:
+                    detail += f" -> {result.text!r} FROM SIGNATURE"
+                LOG.debug("%s cell %-2d %s", self.display.key, result.index + 1, detail)
 
         self._previous_cells = gray_cells
         self._previous_results = results

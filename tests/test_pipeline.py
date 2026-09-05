@@ -4,6 +4,7 @@ import pytest
 
 from g1000_softkey import synth
 from g1000_softkey.config import AppConfig, DisplayConfig, StripGeometry
+from g1000_softkey.ocr import CellResult
 from g1000_softkey.pipeline import DisplayPipeline
 from g1000_softkey.strip import auto_detect_strip
 
@@ -103,3 +104,81 @@ def test_frames_from_disk_round_trip(tmp_path, reader, config):
     assert frame is not None
     labels = pipeline.process(frame).labels
     assert any(labels == menu for menu in synth.MENUS.values())
+
+
+def _pipeline(screens=None):
+    """A DisplayPipeline with only the fields _apply_screen touches."""
+    from g1000_softkey.config import AppConfig, DisplayConfig, OcrConfig
+    from g1000_softkey.pipeline import DisplayPipeline
+    from g1000_softkey.screens import ScreenLibrary
+
+    class _Reader:
+        def __init__(self):
+            self.config = OcrConfig()
+
+    return DisplayPipeline(
+        DisplayConfig(key="pfd"), _Reader(), AppConfig(),
+        screens=screens if screens is not None else ScreenLibrary(),
+    )
+
+# ---------------------------------------------------------------------------
+# Debug output must agree with what actually gets published
+# ---------------------------------------------------------------------------
+
+
+def test_apply_screen_reports_a_match_and_what_it_replaced():
+    from g1000_softkey.screens import Screen, ScreenLibrary
+
+    screen = Screen(
+        name="xpdr-code", display="pfd",
+        match={9: "IDENT", 10: "BKSP"}, labels={1: "0"},
+    )
+    results = [
+        CellResult(index=0, text="2", raw="2", confidence=54.0, match_score=1.0),
+        CellResult(index=8, text="IDENT", raw="IDENT", confidence=95.0, match_score=1.0),
+        CellResult(index=9, text="BKSP", raw="BKSP", confidence=95.0, match_score=1.0),
+    ]
+    pipeline = _pipeline(screens=ScreenLibrary([screen]))
+    outcome = pipeline._apply_screen(results)
+
+    assert "xpdr-code" in outcome and "replaced [1]" in outcome
+    assert results[0].text == "0"
+    assert results[0].by_screen == "xpdr-code"
+    assert results[0].raw == "2", "the OCR answer stays visible for debugging"
+
+
+def test_apply_screen_says_why_no_page_matched():
+    from g1000_softkey.screens import Screen, ScreenLibrary
+
+    screen = Screen(name="x", display="pfd", match={9: "IDENT"}, labels={1: "0"})
+    results = [CellResult(index=0, text="2", raw="2", confidence=54.0, match_score=1.0)]
+    outcome = _pipeline(screens=ScreenLibrary([screen]))._apply_screen(results)
+
+    assert "no page matched" in outcome
+    assert "below" in outcome, "should name the cells that wanted help"
+    assert results[0].text == "2", "nothing changed"
+
+
+def test_apply_screen_says_when_it_is_switched_off():
+    from dataclasses import replace as _replace
+
+    from g1000_softkey.screens import Screen, ScreenLibrary
+
+    screen = Screen(name="x", display="pfd", match={9: "IDENT"}, labels={1: "0"})
+    pipeline = _pipeline(screens=ScreenLibrary([screen]))
+    pipeline.reader.config = _replace(pipeline.reader.config, screen_confidence=0.0)
+    assert "disabled" in pipeline._apply_screen([])
+
+
+def test_apply_screen_leaves_a_confident_cell_alone():
+    """Page lookup fills gaps; it does not overrule a clear reading."""
+    from g1000_softkey.screens import Screen, ScreenLibrary
+
+    screen = Screen(name="x", display="pfd", match={9: "IDENT"}, labels={1: "0"})
+    results = [
+        CellResult(index=0, text="9", raw="9", confidence=99.0, match_score=1.0),
+        CellResult(index=8, text="IDENT", raw="IDENT", confidence=95.0, match_score=1.0),
+    ]
+    _pipeline(screens=ScreenLibrary([screen]))._apply_screen(results)
+    assert results[0].text == "9"
+    assert not results[0].by_screen
