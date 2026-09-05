@@ -4,7 +4,10 @@
 [app]
 # Capture/OCR rate. 4 Hz is plenty: softkeys change only when you press one,
 # and with change gating on, unchanged cells cost nothing.
-loop_hz = 4.0
+# 12 Hz keeps the worst-case detection delay under ~85 ms. Change gating makes
+# an unchanged cycle cost a fraction of a millisecond, so a high rate is nearly
+# free; the OCR only runs on cells whose pixels actually moved.
+loop_hz = 12.0
 # Skip OCR for cells whose pixels did not change since the previous frame.
 change_gating = true
 # Per-pixel intensity difference that counts as a change (0..255).
@@ -65,7 +68,7 @@ blank_ink_ratio = 0.004  # below this fraction of "ink" a cell is reported as ""
 
 # --- publishing ------------------------------------------------------------
 [publish]
-target = "webapi"        # webapi | file | console
+target = "websocket"        # websocket | webapi | file | console
 base_url = "http://localhost:8086"
 api_version = "v1"       # v1 works on X-Plane 12.1.1+; v2 from 12.1.4
 field_width = 16         # bytes per dataref -> PilotsDeck address ':s16'

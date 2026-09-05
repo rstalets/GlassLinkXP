@@ -1,8 +1,12 @@
 import base64
 import json
+import sys
+import types
+from types import SimpleNamespace
 
 import pytest
 
+from g1000_softkey import publish
 from g1000_softkey.config import PublishConfig
 from g1000_softkey.publish import (
     ConsolePublisher,
@@ -140,3 +144,111 @@ def test_create_publisher_rejects_unknown_targets():
     with pytest.raises(ValueError):
         create_publisher(PublishConfig(target="carrier-pigeon"), NAMES)
     assert create_publisher(PublishConfig(target="console"), NAMES).name == "console"
+
+
+# ---------------------------------------------------------------------------
+# WebSocketPublisher: one message per cycle instead of one PATCH per dataref
+# ---------------------------------------------------------------------------
+
+
+class _FakeWs:
+    def __init__(self):
+        self.sent = []
+        self.closed = False
+
+    def settimeout(self, _value):
+        return None
+
+    def send(self, message):
+        self.sent.append(message)
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def ws_env(monkeypatch):
+    """A stubbed websocket module plus a REST session that resolves ids."""
+    names = [f"g1000/softkey/pfd/{i}" for i in range(1, 13)]
+    ws = _FakeWs()
+    module = types.ModuleType("websocket")
+    module.create_connection = lambda url, timeout=None: ws
+    monkeypatch.setitem(sys.modules, "websocket", module)
+
+    session = SimpleNamespace(
+        get=lambda url, timeout=None: SimpleNamespace(
+            status_code=200,
+            json=lambda: {"data": [{"id": 1000 + i, "name": n} for i, n in enumerate(names)]},
+        ),
+        close=lambda: None,
+    )
+    return names, ws, session
+
+
+def test_websocket_batches_a_whole_menu_into_one_message(ws_env):
+    names, ws, session = ws_env
+    pub = publish.WebSocketPublisher(PublishConfig(target="websocket"), names, session=session)
+    labels = ["INSET", "", "PFD", "OBS", "CDI", "DME",
+              "XPDR", "IDENT", "TMR/REF", "NRST", "", "ALERTS"]
+
+    pub.publish(dict(zip(names, labels)))
+
+    assert len(ws.sent) == 1, "a 12-cell change must cost exactly one message"
+    message = json.loads(ws.sent[0])
+    assert message["type"] == "dataref_set_values"
+    assert len(message["params"]["datarefs"]) == 12
+    first = message["params"]["datarefs"][0]
+    assert first["id"] == 1000
+    assert base64.b64decode(first["value"]).rstrip(b"\x00").decode() == "INSET"
+
+
+def test_websocket_sends_nothing_when_labels_are_unchanged(ws_env):
+    names, ws, session = ws_env
+    pub = publish.WebSocketPublisher(PublishConfig(target="websocket"), names, session=session)
+    labels = {n: "PFD" for n in names}
+
+    pub.publish(labels)
+    ws.sent.clear()
+    pub.publish(labels)
+
+    assert ws.sent == []
+
+
+def test_websocket_sends_only_the_cells_that_changed(ws_env):
+    names, ws, session = ws_env
+    pub = publish.WebSocketPublisher(PublishConfig(target="websocket"), names, session=session)
+    labels = {n: "PFD" for n in names}
+    pub.publish(labels)
+    ws.sent.clear()
+
+    labels[names[4]] = "GPS"
+    pub.publish(labels)
+
+    assert len(ws.sent) == 1
+    payload = json.loads(ws.sent[0])["params"]["datarefs"]
+    assert len(payload) == 1
+    assert payload[0]["id"] == 1004
+
+
+def test_websocket_reconnects_after_a_send_failure(ws_env):
+    names, ws, session = ws_env
+    pub = publish.WebSocketPublisher(PublishConfig(target="websocket"), names, session=session)
+
+    def _boom(_message):
+        raise OSError("connection reset")
+
+    ws.send = _boom
+    pub.publish({names[0]: "INSET"})
+    assert pub._ws is None, "a failed send must drop the socket so the next cycle reconnects"
+
+    # with the transport healthy again, the next cycle reconnects and delivers
+    ws.send = ws.sent.append
+    pub.publish({names[0]: "INSET"})
+    assert pub._ws is not None
+    assert len(ws.sent) == 1
+
+
+def test_create_publisher_accepts_websocket_target(ws_env):
+    names, _ws, session = ws_env
+    pub = publish.WebSocketPublisher(PublishConfig(target="websocket"), names, session=session)
+    assert pub.name == "websocket"

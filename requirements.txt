@@ -8,6 +8,9 @@ numpy>=1.24,<3            # verified with 2.4.6
 opencv-python-headless>=4.8,<6  # verified with 5.0.0.93 (crop/threshold/resize)
 Pillow>=10,<13            # verified with 12.3.0 (synthetic frames, PIL<->Tesseract)
 requests>=2.31,<3         # verified with 2.33.1 (X-Plane Web API client)
+# One WebSocket message per cycle instead of one HTTP PATCH per changed cell.
+# Pure-Python wheel, no build step.
+websocket-client>=1.7,<2  # verified with 1.9.2
 
 # --- OCR -------------------------------------------------------------------
 # tesserocr is the production path: a direct C++ binding, so the Tesseract API

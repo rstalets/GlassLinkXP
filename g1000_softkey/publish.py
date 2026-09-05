@@ -241,6 +241,108 @@ class WebApiPublisher:
             LOG.debug("ignoring session close error: %s", exc)
 
 
+class WebSocketPublisher(WebApiPublisher):
+    """One WebSocket message per cycle instead of one HTTP round-trip per cell.
+
+    The REST publisher issues a separate blocking PATCH for every changed
+    dataref. A softkey press typically changes most of a 12-cell strip, so a
+    single menu change costs a dozen sequential round-trips into X-Plane's
+    embedded web server -- the dominant source of the lag, since OCR of the
+    same strip is only tens of milliseconds.
+
+    ``dataref_set_values`` accepts many datarefs in one message and needs no
+    prior subscription, so the whole strip goes out as a single frame and we do
+    not block waiting for a reply.
+
+    Name-to-id resolution still uses REST (inherited); only writes move.
+    """
+
+    name = "websocket"
+
+    def __init__(self, config: PublishConfig, dataref_names: Sequence[str], session=None) -> None:
+        self._ws = None
+        self._req_id = 0
+        self._ws_warned = False
+        super().__init__(config, dataref_names, session=session)
+
+    @property
+    def _ws_url(self) -> str:
+        root = self.config.base_url.rstrip("/")
+        root = root.replace("https://", "wss://").replace("http://", "ws://")
+        return f"{root}/api/{self.config.api_version}"
+
+    def _connect(self) -> bool:
+        if self._ws is not None:
+            return True
+        try:
+            from websocket import create_connection
+        except ImportError:
+            if not self._ws_warned:
+                LOG.error(
+                    "publish.target = 'websocket' needs the websocket-client package "
+                    "(pip install websocket-client). Falling back is not automatic; "
+                    "set publish.target = 'webapi' to use REST instead."
+                )
+                self._ws_warned = True
+            return False
+        try:
+            self._ws = create_connection(self._ws_url, timeout=self.config.timeout)
+            # Writes are fire-and-forget; never block the capture loop on a reply.
+            self._ws.settimeout(0.0)
+        except Exception as exc:  # noqa: BLE001 - many socket error types
+            self._log_offline(f"websocket connect failed: {exc}")
+            self._ws = None
+            return False
+        LOG.info("websocket connected to %s", self._ws_url)
+        self._ws_warned = False
+        return True
+
+    def _drop(self, detail: str) -> None:
+        LOG.debug("websocket dropped (%s); will reconnect", detail)
+        try:
+            if self._ws is not None:
+                self._ws.close()
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            pass
+        self._ws = None
+
+    def publish(self, values: Mapping[str, str]) -> None:
+        if not self._ids and time.monotonic() >= self._next_resolve:
+            self.resolve()
+        changed = [
+            (self._ids[name], text)
+            for name, text in values.items()
+            if self._last.get(name) != text and name in self._ids
+        ]
+        if not changed:
+            return
+        if not self._connect():
+            return
+        self._req_id += 1
+        message = {
+            "req_id": self._req_id,
+            "type": "dataref_set_values",
+            "params": {
+                "datarefs": [
+                    {"id": ref_id, "value": encode_field_b64(text, self.config.field_width)}
+                    for ref_id, text in changed
+                ]
+            },
+        }
+        try:
+            self._ws.send(json.dumps(message))
+        except Exception as exc:  # noqa: BLE001
+            self._drop(str(exc))
+            return
+        for name, text in values.items():
+            if name in self._ids:
+                self._last[name] = text
+
+    def close(self) -> None:
+        self._drop("closing")
+        super().close()
+
+
 def create_publisher(config: PublishConfig, dataref_names: Sequence[str]) -> Publisher:
     if config.target == "console":
         return ConsolePublisher(config)
@@ -248,4 +350,8 @@ def create_publisher(config: PublishConfig, dataref_names: Sequence[str]) -> Pub
         return FilePublisher(config)
     if config.target == "webapi":
         return WebApiPublisher(config, dataref_names)
-    raise ValueError(f"unknown publish target {config.target!r} (webapi | file | console)")
+    if config.target == "websocket":
+        return WebSocketPublisher(config, dataref_names)
+    raise ValueError(
+        f"unknown publish target {config.target!r} (websocket | webapi | file | console)"
+    )

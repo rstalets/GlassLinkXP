@@ -320,6 +320,41 @@ display).
 Run any command with `-v` for debug logging (per-cell raw OCR strings,
 confidences and match scores).
 
+## Latency
+
+Where the delay between a softkey press and the Stream Deck face actually comes
+from, worst case:
+
+| stage | cost | notes |
+| --- | --- | --- |
+| polling interval | up to `1/loop_hz` | 250 ms at the old 4 Hz default; ~83 ms at 12 Hz |
+| capture | a few ms | WGC hands over the latest composed frame |
+| OCR | ~45 ms per display | only for cells whose pixels changed; unchanged cycles are ~0.3 ms |
+| publish | **1 message** | was one blocking HTTP PATCH *per changed cell* |
+
+The two things that dominated were the polling interval and the publish path,
+not the OCR. A softkey press typically changes most of a 12-cell strip, and the
+REST publisher issued a separate blocking `PATCH` for each one -- a dozen
+sequential round-trips into X-Plane's embedded web server per press, against
+tens of milliseconds for recognising the whole strip.
+
+`target = "websocket"` sends the entire strip in a single `dataref_set_values`
+message and does not wait for a reply. `dataref_set_values` accepts many
+datarefs at once and needs no prior subscription; name-to-id resolution still
+uses REST. `target = "webapi"` keeps the old per-dataref REST behaviour if you
+need it.
+
+Run with `--timing` to see the breakdown on your own machine; it prints a line
+whenever the labels change:
+
+```
+cycle 118 ms (work) + 0 ms (sleep budget)  publish=0.8  ocr_ms=86.9  preprocess_ms=7.8  split_ms=0.4
+```
+
+If `publish` is large, X-Plane is the bottleneck; if `ocr_ms` is large, look at
+the crop (`dump-cells`) -- an over-wide strip means more non-blank cells than
+there really are.
+
 ## Known limitations
 
 * PSM 7 reads a **single line**. Softkey labels that X-Plane draws on two

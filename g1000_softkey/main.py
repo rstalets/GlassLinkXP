@@ -240,18 +240,41 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
         while not stopping:
             cycle_start = time.perf_counter()
             values: dict[str, str] = {}
+            last_results = {}
+            changed_this_cycle = False
             for display in config.active_displays:
                 frame = sources[display.key].grab()
                 if frame is None:
                     LOG.debug("no frame yet for %s", display.key)
                     continue
                 result = pipelines[display.key].process(frame)
+                last_results[display.key] = result
                 values.update(_values(display, result))
                 if previous.get(display.key) != result.labels:
                     previous[display.key] = result.labels
+                    changed_this_cycle = True
                     LOG.info("%s", _format_row(result))
+            publish_ms = 0.0
             if values:
+                t0 = time.perf_counter()
                 publisher.publish(values)
+                publish_ms = (time.perf_counter() - t0) * 1000.0
+            work_ms = (time.perf_counter() - cycle_start) * 1000.0
+            if changed_this_cycle:
+                # Only report cycles that actually did something; steady-state
+                # cycles are gated down to a fraction of a millisecond.
+                stages = {}
+                for key, res in last_results.items():
+                    for stage, ms in res.timings.items():
+                        stages[stage] = stages.get(stage, 0.0) + ms
+                if getattr(args, "timing", False):
+                    detail = "  ".join(f"{k}={v:.1f}" for k, v in sorted(stages.items()))
+                    LOG.info(
+                        "cycle %.0f ms (work) + %.0f ms (sleep budget)  publish=%.1f  %s",
+                        work_ms, max(0.0, period * 1000 - work_ms), publish_ms, detail,
+                    )
+                elif work_ms > period * 1000:
+                    LOG.debug("cycle %.0f ms, publish %.0f ms", work_ms, publish_ms)
             if args.once:
                 break
             elapsed = time.perf_counter() - cycle_start
@@ -291,7 +314,9 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="capture, OCR and publish continuously")
     add_image(run)
     run.add_argument("--once", action="store_true", help="single pass, then exit")
-    run.add_argument("--publisher", choices=["webapi", "file", "console"],
+    run.add_argument("--timing", action="store_true",
+                     help="log a per-stage latency breakdown whenever labels change")
+    run.add_argument("--publisher", choices=["websocket", "webapi", "file", "console"],
                      help="override publish.target from the config")
     run.set_defaults(func=cmd_run)
 

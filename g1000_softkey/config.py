@@ -112,7 +112,7 @@ class PublishConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
-    loop_hz: float = 4.0
+    loop_hz: float = 12.0
     change_gating: bool = True
     change_tolerance: int = 6
     displays: tuple[DisplayConfig, ...] = ()
