@@ -73,6 +73,12 @@ whitelist = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -/"
 # change.
 upscale = 4.0
 sharpen_ladder = [[0.0, 0.0], [0.5, 1.0], [1.0, 1.4]]
+# Landing on a known label is not proof of being right when the vocabulary
+# holds near-identical members: every digit 0-7 is a valid softkey, so a 0
+# misread as 2 is still an exact match. Only a hit at least this confident ends
+# the ladder early; below it the remaining rungs are tried and the most
+# confident answer wins. 0 disables early stopping entirely.
+accept_confidence = 80.0
 threshold = "otsu"       # otsu | adaptive -- per cell, never global
 fuzzy_cutoff = 0.62      # difflib cutoff for snapping to labels.txt
 blank_ink_ratio = 0.004  # below this fraction of "ink" a cell is reported as ""

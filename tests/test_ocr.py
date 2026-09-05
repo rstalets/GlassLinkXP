@@ -144,3 +144,30 @@ def test_read_best_falls_back_to_confidence_when_nothing_matches():
     reader = _reader([("", 0.0), ("ZZQ", 42.0)])
     result = reader.read_best(0, [object(), object()])
     assert result.raw == "ZZQ"
+
+
+def test_a_shaky_exact_match_does_not_end_the_ladder():
+    """Reported live: a 0 read as '2' at 54% stopped the search.
+
+    Every digit is a valid softkey, so a misread digit still matches the
+    vocabulary exactly. Only a *confident* hit is allowed to stop early.
+    """
+    reader = _reader([("2", 54.0), ("0", 88.0)])
+    result = reader.read_best(0, [object(), object()])
+    assert result.text == "0"
+    assert reader.engine.calls == 2
+
+
+def test_a_confident_exact_match_still_ends_the_ladder():
+    reader = _reader([("2", 96.0), ("0", 99.0)])
+    result = reader.read_best(0, [object(), object()])
+    assert result.text == "2"
+    assert reader.engine.calls == 1, "no extra OCR when the first rung is solid"
+
+
+def test_accept_confidence_of_zero_always_tries_every_rung():
+    engine = _ScriptedEngine([("2", 96.0), ("0", 99.0)])
+    reader = SoftkeyReader(OcrConfig(accept_confidence=0.0), engine=engine)
+    result = reader.read_best(0, [object(), object()])
+    assert result.text == "0"
+    assert engine.calls == 2

@@ -274,20 +274,28 @@ class SoftkeyReader:
         """OCR each preprocessing variant and keep the most trustworthy answer.
 
         Ranked by: landing exactly on a known softkey label, then Tesseract's
-        own confidence. An exact vocabulary hit is worth more than confidence
-        because the label set is small and closed -- a variant reading "0" is
-        certainly right, while one reading "B" with high confidence is
-        certainly wrong, and only the vocabulary knows the difference.
+        own confidence. An exact vocabulary hit outranks a confident miss,
+        because the label set is small and closed -- a variant reading "B" at
+        96% is certainly wrong, and only the vocabulary knows that.
 
-        Stops at the first exact hit, so the common case costs one OCR call
-        and the extra work is spent only on cells that actually need it.
+        But an exact hit is not proof either, because the vocabulary holds
+        near-identical members: every digit 0-7 is a valid softkey, so a 0
+        misread as 2 also "matches exactly". The ladder therefore only stops
+        early on a hit that is *also* confident; a shaky one is left to compete
+        with the remaining rungs on confidence. In the common case the first
+        rung is both, and this costs a single OCR call.
         """
         best: CellResult | None = None
         for image in images:
             result = self.read(index, image)
             if best is None or self._rank(result) > self._rank(best):
                 best = result
-            if result.text and result.match_score >= 1.0:
+            if (
+                self.config.accept_confidence > 0
+                and result.text
+                and result.match_score >= 1.0
+                and result.confidence >= self.config.accept_confidence
+            ):
                 break
         assert best is not None  # images is never empty
         return best

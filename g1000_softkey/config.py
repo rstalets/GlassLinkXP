@@ -100,6 +100,14 @@ class OcrConfig:
     #: knowable in advance, so instead of guessing one value we try several and
     #: keep whichever result the vocabulary and Tesseract agree on. The first
     #: rung is no sharpening at all, so this can never do worse than not trying.
+    #: Confidence above which an exact vocabulary hit ends the ladder early.
+    #:
+    #: Landing on a known label is not proof of being right when the label set
+    #: contains near-identical members: every digit 0-7 is a valid softkey, so
+    #: a 0 misread as 2 is still an "exact match" and would stop the search.
+    #: Below this, the remaining rungs are tried and the most confident answer
+    #: wins. Set to 0 to always try every rung.
+    accept_confidence: float = 80.0
     sharpen_ladder: tuple[tuple[float, float], ...] = (
         (0.0, 0.0),
         (0.5, 1.0),
