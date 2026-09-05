@@ -66,3 +66,33 @@ def test_from_mapping_overrides_and_disabled_displays():
 def test_bad_loop_rate():
     with pytest.raises(ConfigError):
         from_mapping({"app": {"loop_hz": 0}})
+
+
+# ---------------------------------------------------------------------------
+# window_size: forcing the pop-out larger so the capture has more pixels
+# ---------------------------------------------------------------------------
+
+
+def test_window_size_is_read_as_a_tuple(tmp_path):
+    """TOML gives a list; the frozen config needs a tuple."""
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[display.pfd]\nwindow_title = "G1000 PFD"\nwindow_size = [1400, 1000]\n',
+        encoding="utf-8",
+    )
+    config = load_config(path)
+    assert config.display("pfd").window_size == (1400, 1000)
+
+
+def test_window_size_defaults_to_none_so_nothing_is_resized(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[display.pfd]\nwindow_title = "G1000 PFD"\n', encoding="utf-8")
+    assert load_config(path).display("pfd").window_size is None
+
+
+@pytest.mark.parametrize("value", ["1400", "[1400]", "[1400, 1000, 900]"])
+def test_a_malformed_window_size_is_rejected_with_the_display_named(tmp_path, value):
+    path = tmp_path / "config.toml"
+    path.write_text(f"[display.pfd]\nwindow_size = {value}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="display.pfd.window_size"):
+        load_config(path)

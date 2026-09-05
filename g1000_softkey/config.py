@@ -73,6 +73,17 @@ class DisplayConfig:
     geometry: StripGeometry = field(default_factory=StripGeometry)
     dataref_prefix: str = ""
     enabled: bool = True
+    #: Client size to force the pop-out window to, as [width, height].
+    #:
+    #: The G1000 renders to a 1024x768 texture, so a pop-out whose *display
+    #: area* is smaller than that throws away real detail before capture ever
+    #: sees it -- and the glyphs are already marginal for OCR at ~10 px. Note
+    #: the pop-out includes the bezel, so the window has to be bigger than
+    #: 1024x768 for the display area itself to reach it; find the number with
+    #: one calibrate pass. Growing beyond that point only interpolates.
+    #:
+    #: Geometry is fractional, so a resize does not invalidate calibration.
+    window_size: tuple[int, int] | None = None
 
     def __post_init__(self) -> None:
         if not self.dataref_prefix:
@@ -253,6 +264,15 @@ def from_mapping(raw: Mapping[str, Any], base_dir: Path | None = None) -> AppCon
         entry.pop("geometry", None)
         entry["key"] = key
         entry["geometry"] = geometry
+        if entry.get("window_size") is not None:
+            try:
+                width, height = entry["window_size"]
+                entry["window_size"] = (int(width), int(height))
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(
+                    f"display.{key}.window_size must be [width, height], "
+                    f"got {entry['window_size']!r} ({exc})"
+                ) from exc
         displays.append(_build(DisplayConfig, entry))
 
     config = AppConfig(

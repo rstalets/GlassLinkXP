@@ -190,6 +190,44 @@ def find_window(title_substring: str) -> WindowInfo:  # pragma: no cover - Windo
     return matches[0]
 
 
+def resize_window(hwnd: int, width: int, height: int) -> tuple[int, int]:
+    """Resize a window so its *client area* is width x height.
+
+    The client area is what gets captured, and it is smaller than the window by
+    the title bar and borders, so the outer size is the target plus whatever
+    that frame costs -- measured rather than assumed, since it varies with DPI
+    and theme.
+
+    Returns the client size actually achieved. X-Plane enforces a minimum on
+    pop-out windows, so a request below that comes back larger than asked.
+    """
+    if not is_windows():  # pragma: no cover - Windows only
+        raise CaptureError("resizing windows requires Windows")
+
+    user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+
+    class RECT(ctypes.Structure):
+        _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                    ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+    window_rect, client_rect = RECT(), RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(window_rect)):
+        raise CaptureError(f"GetWindowRect failed for hwnd 0x{hwnd:08X}")
+    if not user32.GetClientRect(hwnd, ctypes.byref(client_rect)):
+        raise CaptureError(f"GetClientRect failed for hwnd 0x{hwnd:08X}")
+
+    frame_w = (window_rect.right - window_rect.left) - client_rect.right
+    frame_h = (window_rect.bottom - window_rect.top) - client_rect.bottom
+
+    SWP_NOMOVE, SWP_NOZORDER, SWP_NOACTIVATE = 0x0002, 0x0004, 0x0010
+    user32.SetWindowPos(
+        hwnd, 0, 0, 0, width + frame_w, height + frame_h,
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+    )
+    user32.GetClientRect(hwnd, ctypes.byref(client_rect))
+    return client_rect.right, client_rect.bottom
+
+
 class WgcCapture:
     """Windows Graphics Capture backend (``windows-capture`` PyPI package).
 
@@ -204,6 +242,7 @@ class WgcCapture:
         window_title: str,
         cursor_capture: bool = False,
         draw_border: bool = False,
+        target_size: tuple[int, int] | None = None,
     ) -> None:
         if not is_windows():
             raise CaptureError(
@@ -227,6 +266,25 @@ class WgcCapture:
         # Resolve the exact title first so we can give a useful error message
         # rather than whatever the Rust layer raises.
         window = find_window(window_title)  # pragma: no cover
+        if target_size is not None:  # pragma: no cover - Windows only
+            want_w, want_h = target_size
+            if (window.width, window.height) != (want_w, want_h):
+                LOG.info(
+                    "resizing %r from %dx%d to %dx%d",
+                    window.title, window.width, window.height, want_w, want_h,
+                )
+                try:
+                    got_w, got_h = resize_window(window.hwnd, want_w, want_h)
+                except CaptureError as exc:
+                    LOG.warning("could not resize %r: %s", window.title, exc)
+                else:
+                    if (got_w, got_h) != (want_w, want_h):
+                        LOG.warning(
+                            "%r settled at %dx%d, not %dx%d -- X-Plane enforces a "
+                            "minimum size on pop-out windows",
+                            window.title, got_w, got_h, want_w, want_h,
+                        )
+                    window = find_window(window_title)
         LOG.info("capturing %s", window)  # pragma: no cover
 
         capture = WindowsCapture(  # pragma: no cover - Windows only
@@ -293,5 +351,7 @@ def sources_for(displays: Iterable, image_path: str | Path | None) -> dict[str, 
             per_display = path / f"{display.key}.png"
             sources[display.key] = ImageCapture(per_display if per_display.is_file() else path)
         else:
-            sources[display.key] = WgcCapture(display.window_title)
+            sources[display.key] = WgcCapture(
+                display.window_title, target_size=getattr(display, "window_size", None)
+            )
     return sources

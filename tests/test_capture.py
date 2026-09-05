@@ -70,3 +70,13 @@ def test_windows_only_entry_points_fail_cleanly():
     with pytest.raises(CaptureError) as excinfo:
         WgcCapture("G1000 PFD")
     assert "--image" in str(excinfo.value)
+
+
+def test_resize_window_refuses_off_windows():
+    """The Windows path is unexercised here; at least the guard is."""
+    from g1000_softkey.capture import CaptureError, is_windows, resize_window
+
+    if is_windows():  # pragma: no cover - not the CI platform
+        pytest.skip("this asserts the non-Windows guard")
+    with pytest.raises(CaptureError, match="requires Windows"):
+        resize_window(0x1234, 1400, 1000)

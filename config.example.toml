@@ -30,6 +30,18 @@ change_tolerance = 6
 window_title = "G1000 PFD"
 enabled = true
 # dataref_prefix = "g1000/softkey/pfd"   # defaults to g1000/softkey/<key>
+# Force the pop-out to this client size at startup, as [width, height].
+#
+# The G1000 renders to a 1024x768 texture, so a pop-out whose *display area* is
+# smaller than that discards real detail before capture ever sees it -- and the
+# softkey glyphs are already marginal for OCR at around 10 px tall. The pop-out
+# includes the bezel, so the window has to be larger than 1024x768 for the
+# display area itself to reach it; find the number with one calibrate pass.
+# Growing beyond that only interpolates and will not help.
+#
+# Geometry below is fractional, so resizing does not invalidate calibration.
+# Omit to leave the window alone.
+# window_size = [1400, 1000]
 
 [display.pfd.geometry]
 x = 0.050      # left edge of the softkey strip
