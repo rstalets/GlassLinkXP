@@ -364,20 +364,60 @@ Download it manually into $TessdataPrefix :
     # 12. Verify
     # ----------------------------------------------------------------------
     Write-Step 'Verifying the installation'
-    & $venvPython -c @'
-import tesserocr, numpy as np
-print("    tesserocr", tesserocr.__version__, "/ libtesseract", tesserocr.tesseract_version().split()[1])
-with tesserocr.PyTessBaseAPI(psm=tesserocr.PSM.SINGLE_LINE) as api:
+    # Write the check to a file rather than passing it with -c. On Windows,
+    # arguments reach a native executable as one command-line string, so a
+    # multi-line snippet containing double quotes gets truncated mid-statement
+    # ("SyntaxError: '(' was never closed"). A file has no quoting to get wrong.
+    $checkPy = Join-Path ([System.IO.Path]::GetTempPath()) 'g1000_verify_tesserocr.py'
+    $checkSrc = @'
+import sys
+
+import tesserocr
+from PIL import Image, ImageDraw
+
+print("    tesserocr", tesserocr.__version__)
+print("    libtesseract", tesserocr.tesseract_version().splitlines()[0])
+
+# Pass the tessdata directory explicitly, exactly as ocr.py does. Relying on
+# TESSDATA_PREFIX alone fails with "invalid tessdata path: ./" when the
+# variable is unset or points at the wrong level.
+kwargs = {"psm": tesserocr.PSM.SINGLE_LINE}
+tessdata = sys.argv[1] if len(sys.argv) > 1 else ""
+if tessdata:
+    kwargs["path"] = tessdata
+print("    tessdata", tessdata or "(TESSDATA_PREFIX)")
+
+img = Image.new("L", (240, 64), 255)
+ImageDraw.Draw(img).text((12, 16), "INSET", fill=0)
+
+try:
+    api = tesserocr.PyTessBaseAPI(**kwargs)
+except RuntimeError as exc:
+    raise SystemExit(
+        "could not initialise Tesseract ({}). The compile worked, but the "
+        "language data was not found: point TESSDATA_PREFIX at a directory "
+        "containing eng.traineddata.".format(exc)
+    )
+try:
     api.SetVariable("tessedit_char_whitelist", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-    from PIL import Image, ImageDraw
-    img = Image.new("L", (240, 64), 255)
-    ImageDraw.Draw(img).text((12, 16), "INSET", fill=0)
     api.SetImage(img)
     got = api.GetUTF8Text().strip()
+finally:
+    api.End()
+
 print("    round-trip OCR ->", repr(got))
-assert got, "OCR returned nothing; check TESSDATA_PREFIX"
+if not got:
+    raise SystemExit("OCR returned nothing; check the tessdata directory.")
 '@
-    if ($LASTEXITCODE -ne 0) { Fail 'tesserocr imported or ran incorrectly. See the error above.' }
+    # ASCII, so no BOM ends up in front of the first statement.
+    Set-Content -Path $checkPy -Value $checkSrc -Encoding ASCII
+    try {
+        & $venvPython $checkPy $TessdataPrefix
+        $checkExit = $LASTEXITCODE
+    } finally {
+        Remove-Item $checkPy -Force -ErrorAction SilentlyContinue
+    }
+    if ($checkExit -ne 0) { Fail 'tesserocr imported or ran incorrectly. See the error above.' }
     Write-Ok 'tesserocr works'
 
     Write-Step 'Running the offline test suite'
