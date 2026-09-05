@@ -93,6 +93,24 @@ def ink_ratio(cell: np.ndarray, contrast: int = 40) -> float:
     return float(np.mean(np.abs(gray - dominant) > contrast))
 
 
+def ink_bounds(cell: np.ndarray, contrast: int = 40) -> tuple[float, float]:
+    """Horizontal extent of the ink, as fractions of the cell width.
+
+    A glyph centred in its cell reports something like (0.3, 0.7). Ink hard
+    against 0.0 or 1.0 means the crop is cutting the label off, which starves
+    Tesseract of the shape it needs -- a half "0" is not a character, and comes
+    back as an empty string rather than a wrong one.
+    """
+    gray = to_gray(cell)
+    dominant = np.median(gray)
+    mask = np.abs(gray.astype(np.int16) - dominant) > contrast
+    columns = np.flatnonzero(mask.any(axis=0))
+    if columns.size == 0:
+        return (0.0, 0.0)
+    width = max(1, gray.shape[1] - 1)
+    return (float(columns[0]) / width, float(columns[-1]) / width)
+
+
 def is_blank(cell: np.ndarray, min_ink_ratio: float = 0.004, contrast: int = 40) -> bool:
     return ink_ratio(cell, contrast) < min_ink_ratio
 

@@ -12,6 +12,7 @@ from .config import AppConfig, DisplayConfig
 from .ocr import CellResult, SoftkeyReader
 from .strip import (
     changed_cells,
+    ink_bounds,
     ink_ratio,
     is_blank,
     preprocess_cell,
@@ -109,10 +110,12 @@ class DisplayPipeline:
             results.append(cell_result)
             ocr_ms += (time.perf_counter() - t0) * 1000.0
             ocr_calls += 1
+            x0, x1 = ink_bounds(cell, self.reader.config.blank_contrast)
+            clipped = " CLIPPED?" if (x0 <= 0.02 or x1 >= 0.98) else ""
             LOG.debug(
-                "%s cell %-2d ink=%.4f raw=%-12r -> %-12r conf=%5.1f match=%.2f",
-                self.display.key, index + 1, ink, cell_result.raw, cell_result.text,
-                cell_result.confidence, cell_result.match_score,
+                "%s cell %-2d ink=%.4f x=%.2f-%.2f raw=%-12r -> %-12r conf=%5.1f match=%.2f%s",
+                self.display.key, index + 1, ink, x0, x1, cell_result.raw, cell_result.text,
+                cell_result.confidence, cell_result.match_score, clipped,
             )
 
         timings["preprocess_ms"] = preprocess_ms
