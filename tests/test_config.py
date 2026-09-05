@@ -21,7 +21,6 @@ def test_example_config_loads():
     assert len(config.display("mfd").dataref_names()) == 12
     assert config.loop_hz == 12.0
     assert config.publish.field_width == 64
-    assert config.publish.embed_text_color is False, "the PilotsDeck prefix must be opt-in"
     assert config.color.enabled is True
 
 

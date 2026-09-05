@@ -239,25 +239,14 @@ class PublishConfig:
     #: 64 rather than a snug fit. The width is fixed in three places that have
     #: to agree -- FIELD_WIDTH in the plugin (an X-Plane restart, since the
     #: buffer is allocated when the accessor is registered), this setting, and
-    #: every PilotsDeck button address -- so the cost of raising it later is
-    #: paid by the user re-editing buttons. The longest label is 11 characters
-    #: and the optional colour prefix adds 9, so 16 truncates
-    #: "[[#000000FLIGHT PLAN" outright. 64 bytes is ~1.5 KB of plugin memory
-    #: for all 24 fields and noise on the wire.
+    #: every PilotsDeck button address -- so the cost of changing it later is
+    #: paid by the user re-editing every button. The longest label in
+    #: labels.txt is "FLIGHT PLAN" at 11 characters, which left the previous
+    #: 16-byte field four characters of headroom for a vocabulary that grows
+    #: whenever someone finds a softkey nobody had listed. 64 bytes is ~1.5 KB
+    #: of plugin memory across all 24 fields and noise on the wire, so it is
+    #: set generously once instead of tuned.
     field_width: int = 64
-    #: Prefix each label with an inline text colour for PilotsDeck.
-    #:
-    #: PilotsDeck reads a leading "[[#RRGGBB" in a displayed string as an
-    #: override of the button's configured text colour, so "[[#000000STD BARO"
-    #: draws black text -- which is what a white or yellow softkey needs.
-    #:
-    #: Off by default and deliberately: on a PilotsDeck build that predates
-    #: the feature, or on any other Stream Deck plugin, the prefix is not
-    #: interpreted and renders as literal "[[#000000" on the button face,
-    #: which looks exactly like the daemon has broken. The colour is published
-    #: unconditionally as the /bg dataref either way; this only changes the
-    #: label string.
-    embed_text_color: bool = False
     timeout: float = 1.0
     json_path: str = ""
     #: seconds between reconnect attempts when X-Plane is not answering

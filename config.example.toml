@@ -144,6 +144,10 @@ blank_contrast = 40
 #   g1000/softkey/pfd/1        the label string
 #   g1000/softkey/pfd/1/bg     0 black, 1 white, 2 yellow, 3 red
 #
+# The label itself is published exactly as the sim draws it -- the daemon
+# never prepends a colour hint or any other markup. What colour to draw the
+# text is the Stream Deck's decision, made from /bg.
+#
 # The background is measured from the outermost ring of the cell -- labels are
 # centred, so that ring is essentially never glyph, and unlike a whole-cell
 # statistic it needs no assumption about the glyphs being the minority class,
@@ -192,22 +196,12 @@ api_version = "v1"       # v1 works on X-Plane 12.1.1+; v2 from 12.1.4
 # The width is fixed in three places that must agree: FIELD_WIDTH in the
 # XPPython3 plugin (changing it needs an X-Plane restart, because the buffer
 # is allocated when the accessor is registered), this setting, and the ':sNN'
-# on every PilotsDeck button. Raising it later means re-editing every button,
-# so it is set generously once: the longest label is 11 characters and the
-# optional colour prefix adds 9, which 16 bytes would truncate.
+# on every PilotsDeck button. Changing it later means re-editing every button,
+# so it is set generously once rather than tuned: the longest label in
+# labels.txt is "FLIGHT PLAN" at 11 characters, which left the previous
+# 16-byte field four characters of headroom for a vocabulary that grows
+# whenever someone finds a softkey nobody had listed.
 field_width = 64
-# Prefix each label with an inline text colour, e.g. "[[#000000STD BARO".
-#
-# PilotsDeck reads a leading "[[#RRGGBB" as an override of the button's
-# configured text colour, which is what a white, yellow or red softkey needs
-# if you have coloured the button face from the /bg dataref.
-#
-# OFF BY DEFAULT, and check before turning it on: a PilotsDeck build that
-# predates the feature -- or any other Stream Deck plugin -- does not
-# interpret the prefix and will render a literal "[[#000000" on the button,
-# which looks exactly like the daemon has broken. The colour is published as
-# the /bg dataref either way; this only changes the label string.
-embed_text_color = false
 timeout = 1.0
 retry_interval = 5.0     # seconds between reconnect attempts
 # json_path = "C:/Users/you/AppData/Local/Temp/g1000_softkey_labels.json"

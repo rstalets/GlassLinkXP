@@ -90,14 +90,13 @@ def test_creates_a_label_and_a_colour_dataref_per_cell(plugin):
     assert fake_xp.messages, "custom datarefs should be announced to DataRefEditor"
 
 
-def test_the_field_is_wide_enough_for_a_colour_prefixed_label(plugin):
-    """20 bytes for '[[#000000FLIGHT PLAN' plus its NUL; the old 16 truncated it."""
+def test_the_field_holds_the_longest_label_with_room_to_spare(plugin):
     instance, _, _ = plugin
     from g1000_softkey.publish import encode_field
 
     assert all(len(buffer) == 64 for buffer in instance.buffers.values())
     name = "g1000/softkey/pfd/1"
-    longest = "[[#000000FLIGHT PLAN"
+    longest = "FLIGHT PLAN"
     instance.write_data(name, encode_field(longest, 64), 0, 64)
     assert bytes(instance.buffers[name]).rstrip(b"\x00").decode() == longest
 

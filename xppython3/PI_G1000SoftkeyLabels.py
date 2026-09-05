@@ -14,10 +14,10 @@ FIELD_WIDTH is one of three places the label width is fixed -- the others are
 ``publish.field_width`` in the daemon's config and the ``:sNN`` suffix on
 every PilotsDeck button. All three have to agree, and changing this one needs
 an X-Plane restart, because the buffer is allocated when the accessor is
-registered. Hence 64 rather than a snug fit: the longest label is 11
-characters and the optional inline colour prefix adds 9, so the original 16
-truncated "[[#000000FLIGHT PLAN" outright. 64 bytes across all 24 fields is
-about 1.5 KB.
+registered. Hence 64 rather than a snug fit: the longest label in labels.txt
+is "FLIGHT PLAN" at 11 characters, which left the original 16-byte field four
+characters of headroom for a vocabulary that grows whenever somebody finds a
+softkey nobody had listed. 64 bytes across all 24 fields is about 1.5 KB.
 
 The plugin deliberately does no OCR and no capture -- X-Plane calls its
 flight loop inline with the sim, so anything expensive here costs frame rate.

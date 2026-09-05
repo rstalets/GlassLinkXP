@@ -271,8 +271,10 @@ NUL-terminated string. The daemon writes exactly 64 bytes, NUL padded.
 `PI_G1000SoftkeyLabels.py` (changing it needs an X-Plane restart -- the buffer
 is allocated when the accessor is registered), `publish.field_width` in the
 config, and the `:sNN` on every button. That is why it is 64 and not a snug
-fit: the longest label is 11 characters, and the optional colour prefix below
-adds 9, so raising it later would mean re-editing every button you had made.
+fit: changing it later means re-editing every button you had made, and the
+longest label in `labels.txt` -- `FLIGHT PLAN`, 11 characters -- left the
+previous 16-byte field only four characters of headroom for a vocabulary that
+grows whenever someone finds a softkey nobody had listed.
 
 ### Softkey colours
 
@@ -284,25 +286,15 @@ the cell the label sits on:
 | `g1000/softkey/pfd/1/bg` | `0` black, `1` white (selected/inverted), `2` yellow, `3` red |
 
 Use it to pick the button image or background -- a PilotsDeck display value of
-`g1000/softkey/pfd/1/bg` switches on a number, no string parsing needed. The
-implied text colour is white on `0` and black on `1`, `2` and `3`.
+`g1000/softkey/pfd/1/bg` switches on a number, no string parsing needed.
 
-That text colour is a *legibility rule* for the Stream Deck face, not a
-measurement of the G1000's own font colour, which the daemon deliberately does
-not try to read. If you want the daemon to apply it for you, set:
-
-```toml
-[publish]
-embed_text_color = true
-```
-
-and each label goes out prefixed with PilotsDeck's inline colour marker --
-`[[#000000STD BARO`, say -- which overrides the button's configured text
-colour for that update. It is **off by default**: a PilotsDeck build that
-predates the feature does not interpret the prefix and renders a literal
-`[[#000000` on the button face, which looks exactly like the daemon has
-broken. Try it on one button before turning it on for a whole profile. The
-`/bg` dataref is published either way.
+The label dataref is the label and nothing else: the daemon never prepends a
+colour hint or any other markup to it, so a client that knows nothing about
+`/bg` still shows a clean label. Setting the text colour so it stays readable
+against a coloured face is the Stream Deck's job -- in PilotsDeck, per button.
+The daemon does not measure the G1000's own font colour either; the glyphs are
+~10 px of anti-aliased, sometimes cyan text, and it is not what a Stream Deck
+needs.
 
 Check the classification against your own display before relying on it:
 
@@ -489,11 +481,6 @@ The following code paths are written from the documented APIs but have
   windows match X-Plane's actual softkey colours -- those numbers came from
   plausible swatches, and nothing here has seen a real frame. `dump-colors`
   exists so the real numbers can replace them without guessing.
-* **PilotsDeck's `[[#RRGGBB` inline text colour.** `publish.embed_text_color`
-  emits the prefix as documented to this project, but the marker is not
-  described in PilotsDeck's public README (which does document the `:sNN`
-  string suffix), and no PilotsDeck build has rendered one of these strings
-  here. That is the other reason the setting is off by default.
 * **The `Type_Int` datarefs.** The plugin registers them with `readInt` /
   `writeInt` per the XPPython3 documentation and the round trip is tested
   against the stubbed SDK, but no X-Plane has created one, and no Web API has

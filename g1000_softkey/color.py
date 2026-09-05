@@ -45,18 +45,10 @@ RED = 3
 
 BACKGROUND_NAMES = {BLACK: "black", WHITE: "white", YELLOW: "yellow", RED: "red"}
 
-#: Text colour per background. This is a **legibility rule** for the Stream
-#: Deck face, not a measurement of the G1000's own font colour: whatever the
-#: sim draws, a button whose face we have coloured needs text that can be read
-#: against it. Measuring the real font colour is a different (and much harder)
-#: problem -- the glyphs are ~10 px of anti-aliased, sometimes cyan text -- and
-#: it is not what the Stream Deck needs.
-TEXT_COLORS = {
-    BLACK: "#FFFFFF",
-    WHITE: "#000000",
-    YELLOW: "#000000",
-    RED: "#000000",
-}
+#: Nothing here derives a *text* colour from the background. The daemon
+#: publishes what colour the cell is and stops there; making the label legible
+#: against it is the Stream Deck's job, and PilotsDeck can do it per button
+#: from the /bg dataref without the daemon having an opinion.
 
 #: Where an unnameable hue falls back to black rather than white. Only reached
 #: when a cell is chromatic but matches neither the red nor the yellow window
@@ -137,23 +129,3 @@ def measure_cell(cell: np.ndarray, config: ColorConfig) -> tuple[tuple[int, int,
 
 def background_name(background: int) -> str:
     return BACKGROUND_NAMES.get(background, "?")
-
-
-def text_color(background: int) -> str:
-    """Legible text colour for a background classification, as ``#RRGGBB``."""
-    return TEXT_COLORS.get(background, "#FFFFFF")
-
-
-#: PilotsDeck's inline text-colour marker. A displayed string beginning with
-#: "[[#RRGGBB" overrides the button's configured font colour for that update.
-TEXT_COLOR_MARKER = "[["
-
-
-def text_color_prefix(background: int) -> str:
-    """The 9-character PilotsDeck prefix for a background, e.g. ``[[#000000``.
-
-    Kept next to the colours it wraps so the one place that knows this markup
-    is the one place that knows the colours; ``publish.embed_text_color``
-    decides whether a label ever gets it.
-    """
-    return TEXT_COLOR_MARKER + text_color(background)

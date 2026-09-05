@@ -22,8 +22,6 @@ from g1000_softkey.color import (
     classify_cell,
     classify_hsv,
     measure_cell,
-    text_color,
-    text_color_prefix,
 )
 from g1000_softkey.config import ColorConfig, ConfigError, StripGeometry, from_mapping
 from g1000_softkey.strip import split_cells
@@ -150,29 +148,9 @@ def test_grayscale_and_bgra_cells_are_accepted():
     assert classify_cell(bgra, COLOR) == RED
 
 
-# ---------------------------------------------------------------------------
-# the derived text colour
-# ---------------------------------------------------------------------------
-
-
-def test_text_colour_is_a_pure_function_of_the_background():
-    assert text_color(BLACK) == "#FFFFFF"
-    assert text_color(WHITE) == text_color(YELLOW) == text_color(RED) == "#000000"
-
-
-def test_the_pilotsdeck_prefix_is_nine_characters():
-    """The width budget depends on it: 9 + the 11-character longest label."""
-    for background in (BLACK, WHITE, YELLOW, RED):
-        prefix = text_color_prefix(background)
-        assert len(prefix) == 9
-        assert prefix.startswith("[[#")
-        assert prefix.endswith(text_color(background))
-
-
-def test_every_class_has_a_name_and_a_text_colour():
-    for background in (BLACK, WHITE, YELLOW, RED):
-        assert background_name(background) in {"black", "white", "yellow", "red"}
-        assert len(text_color(background)) == 7
+def test_every_class_has_a_distinct_name():
+    names = {background_name(b) for b in (BLACK, WHITE, YELLOW, RED)}
+    assert names == {"black", "white", "yellow", "red"}
 
 
 # ---------------------------------------------------------------------------

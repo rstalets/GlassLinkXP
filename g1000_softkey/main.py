@@ -15,8 +15,8 @@ import numpy as np
 
 from . import synth
 from .capture import CaptureError, FrameSource, ImageCapture, list_windows, sources_for
-from .color import BLACK, background_name, measure_cell, text_color, text_color_prefix
-from .config import AppConfig, ConfigError, DisplayConfig, PublishConfig, load_config
+from .color import BLACK, background_name, measure_cell
+from .config import AppConfig, ConfigError, DisplayConfig, load_config
 from .ocr import OcrUnavailable, SoftkeyReader
 from .pipeline import DisplayPipeline, DisplayResult
 from .publish import Value, create_publisher
@@ -59,19 +59,16 @@ def _grab(source: FrameSource, retries: int = 25, delay: float = 0.2) -> np.ndar
     raise CaptureError(f"no frame arrived from {source.name}")
 
 
-def _values(
-    display: DisplayConfig, result: DisplayResult, publish: PublishConfig
-) -> dict[str, Value]:
-    """The dataref writes for one display: a label and a colour per cell."""
+def _values(display: DisplayConfig, result: DisplayResult) -> dict[str, Value]:
+    """The dataref writes for one display: a label and a colour per cell.
+
+    The label goes out as the sim draws it, with nothing prepended. What
+    colour to draw it in is the Stream Deck's decision to make from the /bg
+    dataref, not something to smuggle into the string.
+    """
     values: dict[str, Value] = {}
     for name, cell in zip(display.dataref_names(), result.cells):
-        text = cell.text
-        if publish.embed_text_color and text:
-            # Never prefix an empty label: "[[#FFFFFF" with nothing after it
-            # is not an empty button, it is nine characters of markup on a
-            # cell the G1000 left blank.
-            text = text_color_prefix(cell.background) + text
-        values[name] = text
+        values[name] = cell.text
         values[f"{name}/bg"] = cell.background
     return values
 
@@ -196,19 +193,18 @@ def cmd_dump_colors(args: argparse.Namespace, config: AppConfig) -> int:
             cells = split_cells(frame, display.geometry)
             print(f"\n[{display.key}]  ring = outer {config.color.ring_fraction:.0%} of each cell")
             print(f"{'cell':>4}  {'B':>4}{'G':>4}{'R':>4}   {'H':>4}{'S':>4}{'V':>4}   "
-                  f"{'class':<7} {'text':<8}")
+                  f"{'class':<7} {'bg':>3}")
             for index, cell in enumerate(cells, start=1):
                 bgr, hsv, background = measure_cell(cell, config.color)
                 print(
                     f"{index:>4}  {bgr[0]:>4}{bgr[1]:>4}{bgr[2]:>4}   "
                     f"{hsv[0]:>4}{hsv[1]:>4}{hsv[2]:>4}   "
-                    f"{background_name(background):<7} {text_color(background):<8}"
+                    f"{background_name(background):<7} {background:>3}"
                 )
                 records.append({
                     "display": display.key, "cell": index,
                     "bgr": list(bgr), "hsv": list(hsv),
                     "background": background, "name": background_name(background),
-                    "text_color": text_color(background),
                 })
     finally:
         for source in sources.values():
@@ -358,7 +354,7 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
                         LOG.info("%s is delivering frames again", display.key)
                 result = pipelines[display.key].process(frame)
                 last_results[display.key] = result
-                values.update(_values(display, result, config.publish))
+                values.update(_values(display, result))
                 # Compared against labels *and* backgrounds: a softkey
                 # becoming selected changes only the colour, and a log line
                 # that ignores that reports nothing happened while the
