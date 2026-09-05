@@ -34,6 +34,11 @@ g1000_softkey/
   config.example.toml
   labels.txt    the softkey vocabulary (edit this)
 xppython3/PI_G1000SoftkeyLabels.py   creates the 24 datarefs
+scripts/
+  install-windows.ps1        daemon: vcpkg + MSVC + uv venv + tesserocr wheel
+  install-xplane-plugin.ps1  sim: XPPython3 + the dataref plugin, and -VerifyOnly
+g1000.cmd       run any command without activating the venv
+wheels/         the compiled tesserocr wheel (git-ignored, but keep it)
 tests/          offline tests over the whole pipeline
 ```
 
@@ -47,6 +52,16 @@ powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
 
 That script does everything in this section. Read on only if you want to know
 what it is doing, or you would rather do it by hand.
+
+**It compiles tesserocr exactly once.** The expensive part -- vcpkg building
+Tesseract and Leptonica, then MSVC compiling the Cython extension -- produces a
+single `.whl`, which is saved in `wheels/` and repaired with `delvewheel` so it
+carries its own DLLs. Re-running the script finds that wheel and skips MSVC and
+vcpkg altogether: installing from it takes well under a second instead of the
+better part of an hour. Once it exists you can delete the vcpkg tree (several
+GB) and still rebuild the environment freely. `-RebuildWheel` forces a
+recompile; the cache is per Python minor version, so moving from 3.12 to 3.13
+does mean one more build.
 
 ### Why `pip install tesserocr` fails on Windows
 
@@ -169,21 +184,23 @@ enable the web server in Settings -> Network.
 
 ## Calibration workflow
 
-> **Activate the venv first.** Everything below assumes it -- `numpy`, OpenCV
-> and the `tesserocr` you built all live there. A bare `python` (or `py`) with
-> no venv active picks up a system interpreter and fails with
-> `ModuleNotFoundError: No module named 'numpy'`.
+> **Use `g1000.cmd`.** It calls the venv interpreter directly, so there is
+> nothing to activate and PowerShell's execution policy never enters into it
+> (a `.cmd` file is not a PowerShell script):
 >
 > ```powershell
-> .venv\Scripts\Activate.ps1     # PowerShell; .venv\Scripts\activate.bat in cmd
+> .\g1000 list-windows
+> .\g1000 calibrate --display pfd
+> .\g1000 run
 > ```
 >
-> If PowerShell's execution policy blocks that, either run
-> `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` for the session,
-> or skip activation entirely and call `.venv\Scripts\python.exe` directly.
->
-> The Python Launcher (`py`) does honour an active venv, so `py -m ...` works
-> once activated -- but it silently falls back to a system Python if it is not.
+> Activating still works if you prefer it (`.venv\Scripts\Activate.ps1` in
+> PowerShell, `activate.bat` in cmd), and so does calling
+> `.venv\Scripts\python.exe -m g1000_softkey.main` directly. What does *not*
+> work is a bare `python`/`py` with no venv active: that picks up a system
+> interpreter and fails with `ModuleNotFoundError: No module named 'numpy'`.
+> (`py` does honour an *active* venv -- it just falls back silently when there
+> is none.)
 
 
 The strip geometry depends on the pop-out window size and bezel, so it is
@@ -192,14 +209,14 @@ expressed as *fractions* of the client area and has to be set once per setup.
 1. Pop the PFD and MFD out into their own windows in X-Plane.
 2. Find the window titles:
    ```
-   python -m g1000_softkey.main list-windows
+   .\g1000 list-windows
    ```
    Copy a distinctive substring of each title into `window_title` under
    `[display.pfd]` / `[display.mfd]` in your `config.toml` (copy
    `config.example.toml` to start).
 3. Dump the calibration images and a suggested geometry:
    ```
-   python -m g1000_softkey.main -c config.toml calibrate --out calibration
+   .\g1000 -c config.toml calibrate --out calibration
    ```
    This writes `<display>_raw.png` (what was captured), `<display>_strip.png`
    (the current crop), `<display>_overlay.png` (crop + numbered cell
@@ -214,7 +231,7 @@ expressed as *fractions* of the client area and has to be set once per setup.
    the vertical band right but the horizontal extent only approximately.
 5. Check what Tesseract actually sees:
    ```
-   python -m g1000_softkey.main -c config.toml dump-cells --out cells
+   .\g1000 -c config.toml dump-cells --out cells
    ```
    `<display>_NN_prep.png` should be black text on a white background, with
    the glyphs roughly 30 px tall, including for the highlighted (selected)
@@ -222,11 +239,11 @@ expressed as *fractions* of the client area and has to be set once per setup.
    before blaming the OCR.
 6. Watch the labels live before wiring anything to X-Plane:
    ```
-   python -m g1000_softkey.main -c config.toml run --publisher console
+   .\g1000 -c config.toml run --publisher console
    ```
 7. Then run for real (`target = "webapi"` in `[publish]`, or `--publisher webapi`):
    ```
-   python -m g1000_softkey.main -c config.toml run
+   .\g1000 -c config.toml run
    ```
 
 If the Web API refuses to write the plugin's datarefs, use the fallback --

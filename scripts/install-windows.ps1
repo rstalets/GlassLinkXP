@@ -46,6 +46,9 @@
 .PARAMETER SkipXPlane
     Install only the daemon; do not touch X-Plane.
 
+.PARAMETER RebuildWheel
+    Ignore any cached wheel in wheels\ and compile tesserocr again.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
 
@@ -61,7 +64,8 @@ param(
     [string]$TessdataPrefix,
     [string]$XPlanePath,
     [switch]$SkipVcpkg,
-    [switch]$SkipXPlane
+    [switch]$SkipXPlane,
+    [switch]$RebuildWheel
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,6 +90,23 @@ if (-not (Test-Path (Join-Path $RepoRoot 'requirements.txt'))) {
 }
 Write-Ok "repository root: $RepoRoot"
 
+# The expensive part of this script is compiling tesserocr, and the result is
+# a single .whl. Keep it in wheels\ so the vcpkg/MSVC path runs exactly once
+# per Python minor version -- reinstalling then takes well under a second, and
+# vcpkg (several GB) can be deleted afterwards because delvewheel bundles the
+# DLLs into the wheel itself.
+$wheelDir = Join-Path $RepoRoot 'wheels'
+$cpTag    = 'cp' + ($PythonVersion -replace '\.', '')
+$cached   = @(Get-ChildItem -Path $wheelDir -Filter "tesserocr-*$cpTag*.whl" -ErrorAction SilentlyContinue)
+$needBuild = $true
+if ($cached -and -not $RebuildWheel) {
+    $needBuild = $false
+    Write-Ok "cached wheel: $($cached[0].Name)"
+    Write-Host '        skipping MSVC and vcpkg entirely (-RebuildWheel forces a recompile)' -ForegroundColor DarkGray
+} elseif ($cached -and $RebuildWheel) {
+    Write-Warn2 'ignoring the cached wheel (-RebuildWheel)'
+}
+
 # --------------------------------------------------------------------------
 # 1. git
 # --------------------------------------------------------------------------
@@ -102,8 +123,15 @@ if (-not (Test-Command git)) {
 Write-Ok "git: $((git --version) -join '')"
 
 # --------------------------------------------------------------------------
-# 2. MSVC build tools
+# 2-5. Toolchain and Tesseract development files.
+#      Only needed when a wheel has to be compiled; a cached wheel skips all
+#      of it, which is the difference between an hour and a few seconds.
 # --------------------------------------------------------------------------
+$binDir = $null
+if (-not $needBuild) {
+    Write-Step 'Skipping the build toolchain (using the cached wheel)'
+} else {
+
 Write-Step 'Locating the MSVC C++ toolchain'
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -157,7 +185,8 @@ Write-Ok "vcpkg: $vcpkgExe"
 $installed = Join-Path $VcpkgRoot "installed\$Triplet"
 $libDir    = Join-Path $installed 'lib'
 $incDir    = Join-Path $installed 'include'
-$binDir    = Join-Path $installed 'bin'
+$script:binDir = Join-Path $installed 'bin'
+$binDir    = $script:binDir
 
 if (-not $SkipVcpkg) {
     Write-Host "    vcpkg install tesseract:$Triplet  (pulls in leptonica; 20-60 min first time)"
@@ -238,6 +267,8 @@ foreach ($pair in @(@('INCLUDE', $incDir), @('LIB', $libDir), @('LIBPATH', $libD
 Write-Ok "INCLUDE += $incDir"
 Write-Ok "LIB, LIBPATH += $libDir"
 
+}  # end of the build-only toolchain section
+
 # --------------------------------------------------------------------------
 # 6. uv
 # --------------------------------------------------------------------------
@@ -273,17 +304,27 @@ try {
     # ----------------------------------------------------------------------
     # 8. Build dependencies, then tesserocr WITHOUT build isolation
     # ----------------------------------------------------------------------
-    Write-Step 'Installing build dependencies'
-    # tesserocr declares Cython only through the legacy setup_requires, so an
-    # isolated PEP 517 build environment would not contain it.
-    uv pip install --python $venvPython 'setuptools>=68' wheel 'Cython>=3.0.0,<3.2.0' cysignals
-    if ($LASTEXITCODE -ne 0) { Fail 'could not install the build dependencies.' }
-    Write-Ok 'setuptools, wheel, Cython, cysignals'
+    if ($needBuild) {
+        Write-Step 'Installing build dependencies'
+        # tesserocr declares Cython only through the legacy setup_requires, so
+        # an isolated PEP 517 build environment would not contain it. pip is
+        # needed too: uv has no `uv pip wheel`, and uv venvs ship without pip.
+        uv pip install --python $venvPython pip 'setuptools>=68' wheel `
+            'Cython>=3.0.0,<3.2.0' cysignals delvewheel
+        if ($LASTEXITCODE -ne 0) { Fail 'could not install the build dependencies.' }
+        Write-Ok 'pip, setuptools, wheel, Cython, cysignals, delvewheel'
 
-    Write-Step 'Compiling tesserocr'
-    uv pip install --python $venvPython --no-build-isolation --no-cache tesserocr
-    if ($LASTEXITCODE -ne 0) {
-        Fail @"
+        Write-Step 'Compiling tesserocr into a wheel'
+        # Build a wheel rather than installing straight into the venv, so this
+        # hour-long step is never repeated: the wheel is the durable artifact.
+        $rawDir = Join-Path ([System.IO.Path]::GetTempPath()) 'g1000-tesserocr-build'
+        if (Test-Path $rawDir) { Remove-Item $rawDir -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $rawDir | Out-Null
+
+        & $venvPython -m pip wheel tesserocr --no-binary tesserocr `
+            --no-build-isolation --no-deps -w $rawDir
+        if ($LASTEXITCODE -ne 0) {
+            Fail @"
 tesserocr failed to compile.
 
 Check the error above against these usual causes:
@@ -292,24 +333,56 @@ Check the error above against these usual causes:
   * a Cython or 'cythonize' error -> build isolation crept back in
   * C1083 cannot open include file -> INCLUDE was replaced instead of appended
 "@
+        }
+        $raw = @(Get-ChildItem -Path $rawDir -Filter 'tesserocr-*.whl')[0]
+        if (-not $raw) { Fail "pip wheel reported success but produced no .whl in $rawDir" }
+        Write-Ok "compiled: $($raw.Name)"
+
+        Write-Step 'Making the wheel self-contained'
+        # delvewheel copies tesseract55.dll, leptonica and friends INTO the
+        # wheel, so installing it later needs neither vcpkg nor the compiler.
+        New-Item -ItemType Directory -Force -Path $wheelDir | Out-Null
+        & $venvPython -m delvewheel repair --add-path $binDir -w $wheelDir $raw.FullName
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn2 'delvewheel failed; keeping the unrepaired wheel instead.'
+            Write-Warn2 'the DLLs will be copied next to the .pyd as a fallback.'
+            Copy-Item $raw.FullName -Destination $wheelDir -Force
+        }
+        Remove-Item $rawDir -Recurse -Force -ErrorAction SilentlyContinue
+        $cached = @(Get-ChildItem -Path $wheelDir -Filter "tesserocr-*$cpTag*.whl")
+        if (-not $cached) { $cached = @(Get-ChildItem -Path $wheelDir -Filter 'tesserocr-*.whl') }
+        Write-Ok "saved: $(Join-Path 'wheels' $cached[0].Name)"
     }
-    Write-Ok 'tesserocr compiled'
+
+    Write-Step 'Installing tesserocr from the wheel'
+    uv pip install --python $venvPython $cached[0].FullName cysignals
+    if ($LASTEXITCODE -ne 0) { Fail "could not install $($cached[0].FullName)" }
+    Write-Ok "installed $($cached[0].Name)"
 
     # ----------------------------------------------------------------------
     # 9. Runtime DLLs
     # ----------------------------------------------------------------------
-    Write-Step 'Placing the runtime DLLs'
-    # Since Python 3.8, PATH is not searched for extension-module dependencies,
-    # so the DLLs must sit beside the .pyd (or be added via os.add_dll_directory).
+    Write-Step 'Checking the runtime DLLs'
+    # Since Python 3.8, PATH is not searched for extension-module dependencies.
+    # A delvewheel-repaired wheel already carries them, so this is only a
+    # fallback for the case where delvewheel was unavailable or failed.
     $sitePkgs = & $venvPython -c "import sysconfig; print(sysconfig.get_paths()['purelib'])"
     $target   = Join-Path $sitePkgs 'tesserocr'
     if (-not (Test-Path $target)) { $target = $sitePkgs }
-    $copied = 0
-    Get-ChildItem -Path $binDir -Filter '*.dll' -ErrorAction SilentlyContinue | ForEach-Object {
-        Copy-Item $_.FullName -Destination $target -Force
-        $copied++
+    $bundled = @(Get-ChildItem -Path $sitePkgs -Filter 'tesserocr*.libs' -Directory -ErrorAction SilentlyContinue)
+    if ($bundled) {
+        Write-Ok "wheel is self-contained (DLLs bundled in $($bundled[0].Name))"
+    } elseif ($binDir -and (Test-Path $binDir)) {
+        $copied = 0
+        Get-ChildItem -Path $binDir -Filter '*.dll' -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName -Destination $target -Force
+            $copied++
+        }
+        Write-Ok "copied $copied DLL(s) into $target"
+    } else {
+        Write-Warn2 'no bundled DLLs and no vcpkg bin directory to copy from.'
+        Write-Warn2 'if `import tesserocr` fails with a DLL load error, re-run with -RebuildWheel.'
     }
-    Write-Ok "copied $copied DLL(s) into $target"
 
     # ----------------------------------------------------------------------
     # 10. Language data
@@ -452,16 +525,19 @@ Write-Host @"
 ============================================================
  Done. To use it:
 
-   .venv\Scripts\Activate.ps1        <- PowerShell (use activate.bat in cmd)
-   python -m g1000_softkey.main list-windows
-   python -m g1000_softkey.main calibrate --display pfd
+   .\g1000 list-windows
+   .\g1000 calibrate --display pfd
+   .\g1000 run
 
- Every command must run inside the venv -- that is where numpy,
- opencv and the tesserocr you just built live. If activation is
- blocked by the execution policy, either run
-   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
- or skip activation and call the interpreter directly:
-   .venv\Scripts\python.exe -m g1000_softkey.main list-windows
+ g1000.cmd calls the venv interpreter directly, so there is no
+ venv to activate and no execution policy to argue with. (If you
+ prefer, .venv\Scripts\Activate.ps1 still works.)
+
+ The compiled tesserocr is cached at:
+   $(if ($cached) { Join-Path 'wheels' $cached[0].Name } else { 'wheels\ (not built)' })
+ Re-running this script reuses it and skips MSVC and vcpkg
+ entirely. You can delete $VcpkgRoot to reclaim the disk --
+ the wheel carries its own DLLs.
 
 $(if ($simInstalled) {
 "  X-Plane side installed. Start X-Plane, then confirm the
