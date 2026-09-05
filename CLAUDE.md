@@ -37,11 +37,12 @@ flight loop, so anything slow there costs frame rate.
 
 ```
 g1000_softkey/
-  main.py       CLI: run, list-windows, calibrate, dump-cells, bench,
-                     screen-template, learn, tune, synth
+  main.py       CLI: run, list-windows, calibrate, dump-cells, dump-colors,
+                     bench, screen-template, learn, tune, synth
   capture.py    Windows Graphics Capture, plus a PNG backend for offline work
   strip.py      strip crop, 12-cell split, per-cell preprocessing
   ocr.py        Tesseract, label vocabulary, CellResult
+  color.py      border-ring sampling, HSV background classification
   pipeline.py   DisplayPipeline.process(): one frame -> 12 CellResults
   publish.py    WebSocket / REST / file / console publishers
   screens.py    softkey page definitions (screens.toml)
@@ -65,8 +66,12 @@ So:
 
 - **Measure before you tune.** If you are choosing a threshold, a colour, or a
   filter strength, add a diagnostic that prints the real values from a real
-  capture first. `tune`, `dump-cells`, `calibrate` and `screen-template` all
-  exist because of this.
+  capture first. `tune`, `dump-cells`, `dump-colors`, `calibrate` and
+  `screen-template` all exist because of this. One such measurement is still
+  outstanding: the `[color]` HSV thresholds ship as plausible swatch values and
+  have never been checked against a real G1000 frame -- `dump-colors` prints
+  what a live capture actually contains, so replace them rather than trusting
+  them.
 - **Synthetic frames are for regression, not calibration.** `synth.py` renders
   softkey strips for the test suite. They do not use X-Plane's font and must
   never be the basis for a tuning decision.
@@ -80,23 +85,32 @@ So:
 
 ## Things that will catch you out
 
-**The publisher is string-only.** `Publisher.publish(values: Mapping[str, str])`,
-`encode_field_b64()`, and both transports send `{"data": <base64>}`. Publishing
-anything numeric needs per-dataref typing, across all four publishers.
+**Publishing dispatches on the Python type of the value, not a registry.**
+`publish(values: Mapping[str, Value])` sends a `str` as base64 into a Data
+dataref and a number bare into an Int one. X-Plane types the dataref, so the
+daemon and the plugin have to agree without either checking: send a number to a
+name the plugin registered as `Type_Data` and the write fails at the sim, not
+here. Adding a dataref means touching both sides.
 
 **The plugin may only import the standard library.** It runs inside XPPython3's
 own bundled Python 3.12, not this project's venv. No numpy, no requests.
 
 **Field width is set in three places that must agree**: `FIELD_WIDTH` in the
 plugin (changing it needs an X-Plane restart -- the buffer is allocated at
-accessor registration), `publish.field_width` in config, and the user's
-PilotsDeck addresses (`:s16`). Out of step means truncated or garbage labels.
+accessor registration), `publish.field_width` in config, and every PilotsDeck
+button address the user has written (`:s64`). Out of step means truncated or
+garbage labels. It went 16 -> 64 once already, which cost the user a re-edit of
+every button; it is deliberately generous now so it does not move again.
 
 **Change gating caches post-processing results.** A cell whose pixels have not
 moved is served from cache, and that cache holds the result from *after* page
 lookup. Re-running a later stage over cached results makes it re-derive its own
 earlier output -- which shipped once as a bug where corrections were re-reported
-as confirmations.
+as confirmations. Note what the gate is *for*: skipping OCR, which is
+expensive. Background colour is classified outside it, on every cell of every
+frame, because a softkey becoming selected changes the background while leaving
+the label identical -- so anything cheap that must not miss that case belongs
+outside the gate too.
 
 **Windows-only paths cannot be tested here**: capture, window enumeration and
 resizing, the installer scripts, and anything touching a live X-Plane.
@@ -104,7 +118,7 @@ resizing, the installer scripts, and anything touching a live X-Plane.
 ## Working on it
 
 ```
-python -m pytest -q              # 150 tests, all offline, keep them green
+python -m pytest -q              # 219 tests, all offline, keep them green
 python -m g1000_softkey.main synth --out frames
 python -m g1000_softkey.main run --once --image frames/xpdr.png --publisher console -v
 ```
