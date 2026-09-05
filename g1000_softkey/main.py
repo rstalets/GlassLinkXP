@@ -211,6 +211,11 @@ def cmd_synth(args: argparse.Namespace, config: AppConfig) -> int:
 def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
     if args.publisher:
         object.__setattr__(config.publish, "target", args.publisher)
+    if getattr(args, "hz", None):
+        if args.hz <= 0:
+            LOG.error("--hz must be > 0")
+            return 2
+        object.__setattr__(config, "loop_hz", args.hz)
     sources = _open_sources(config, args.image)
     reader = SoftkeyReader(config.ocr)
     names: list[str] = []
@@ -314,6 +319,8 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="capture, OCR and publish continuously")
     add_image(run)
     run.add_argument("--once", action="store_true", help="single pass, then exit")
+    run.add_argument("--hz", type=float, default=None,
+                     help="override app.loop_hz for this run (handy for A/B timing)")
     run.add_argument("--timing", action="store_true",
                      help="log a per-stage latency breakdown whenever labels change")
     run.add_argument("--publisher", choices=["websocket", "webapi", "file", "console"],
