@@ -86,7 +86,8 @@ class DisplayPipeline:
                 + (f"; {len(shaky)} cell(s) below "
                    f"{self.reader.config.screen_confidence:.0f}%: {shaky}" if shaky else "")
             )
-        replaced = []
+        replaced: list[int] = []
+        confirmed: list[int] = []
         for result in results:
             cell = result.index + 1
             expected = screen.labels.get(cell)
@@ -95,6 +96,12 @@ class DisplayPipeline:
             if result.confidence >= self.reader.config.screen_confidence:
                 continue
             if result.text == expected:
+                # The page was consulted and agreed. Worth recording: a shaky
+                # reading the page backs up is on much firmer ground than one
+                # nothing corroborated, and without this the two are
+                # indistinguishable in the log.
+                results[result.index] = replace(result, confirmed_by=screen.name)
+                confirmed.append(cell)
                 continue
             # Not logged here: the per-cell debug lines are emitted after this
             # stage so they can show the replacement, and duplicating it would
@@ -103,9 +110,14 @@ class DisplayPipeline:
                 result, text=expected, match_score=1.0, by_screen=screen.name
             )
             replaced.append(cell)
+        parts = []
+        if replaced:
+            parts.append(f"replaced {replaced}")
+        if confirmed:
+            parts.append(f"confirmed {confirmed}")
         return (
             f"matched {screen.name!r} on cells {sorted(screen.match)}; "
-            + (f"replaced {replaced}" if replaced else "nothing needed replacing")
+            + ("; ".join(parts) if parts else "no low-confidence cells to act on")
         )
 
     def reset(self) -> None:
@@ -201,6 +213,8 @@ class DisplayPipeline:
                     continue
                 if result.by_screen:
                     detail += f" -> {result.text!r} FROM PAGE {result.by_screen!r}"
+                elif result.confirmed_by:
+                    detail += f" -> CONFIRMED BY PAGE {result.confirmed_by!r}"
                 elif result.by_signature:
                     detail += f" -> {result.text!r} FROM SIGNATURE"
                 LOG.debug("%s cell %-2d %s", self.display.key, result.index + 1, detail)

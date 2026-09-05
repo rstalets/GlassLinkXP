@@ -320,6 +320,11 @@ display).
 Run any command with `-v` for debug logging (per-cell raw OCR strings,
 confidences and match scores).
 
+## How it works
+
+`docs/PIPELINE.md` has flowcharts of the daemon loop and of what happens to a
+single frame, plus a key for reading the `-v` output.
+
 ## Latency
 
 Where the delay between a softkey press and the Stream Deck face actually comes

@@ -224,8 +224,13 @@ def test_the_page_is_identified_once_per_strip_not_once_per_cell():
     assert sum(1 for r in results if r.by_screen) == 4
 
 
-def test_a_low_confidence_cell_already_matching_the_page_is_not_touched():
-    """Nothing to correct, so it is not counted as a replacement."""
+def test_a_low_confidence_cell_the_page_agrees_with_is_recorded_as_confirmed():
+    """Not a replacement, but not nothing either.
+
+    A shaky reading the page corroborates stands on much firmer ground than one
+    nothing checked. Without recording it, the log cannot tell "the page looked
+    and agreed" apart from "the page never considered this cell".
+    """
     from g1000_softkey.screens import Screen, ScreenLibrary
 
     screen = Screen(name="x", display="pfd", match={9: "IDENT"}, labels={1: "0"})
@@ -235,6 +240,22 @@ def test_a_low_confidence_cell_already_matching_the_page_is_not_touched():
     ]
     outcome = _pipeline(screens=ScreenLibrary([screen]))._apply_screen(results)
 
-    assert results[0].text == "0"
-    assert not results[0].by_screen
-    assert "nothing needed replacing" in outcome
+    assert results[0].text == "0", "the value is unchanged"
+    assert not results[0].by_screen, "it was not replaced"
+    assert results[0].confirmed_by == "x", "but the page did back it up"
+    assert "confirmed [1]" in outcome
+
+
+def test_a_confident_cell_is_neither_replaced_nor_confirmed():
+    """Above the threshold the page is not consulted, so it corroborates nothing."""
+    from g1000_softkey.screens import Screen, ScreenLibrary
+
+    screen = Screen(name="x", display="pfd", match={9: "IDENT"}, labels={1: "0"})
+    results = [
+        CellResult(index=0, text="0", raw="0", confidence=99.0, match_score=1.0),
+        CellResult(index=8, text="IDENT", raw="IDENT", confidence=95.0, match_score=1.0),
+    ]
+    outcome = _pipeline(screens=ScreenLibrary([screen]))._apply_screen(results)
+
+    assert not results[0].by_screen and not results[0].confirmed_by
+    assert "no low-confidence cells to act on" in outcome
