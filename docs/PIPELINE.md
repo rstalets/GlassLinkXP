@@ -153,14 +153,23 @@ matches the value that gets published:
 
 ```
 pfd screen lookup: matched 'xpdr-code' on cells [9, 10, 11]; replaced [1]; confirmed [5, 6, 8]
-pfd cell 1  ink=0.0498 x=0.53-0.63 raw=''   ocr=''   conf=  0.0 match=0.00 -> '0' FROM PAGE 'xpdr-code'
-pfd cell 5  ink=0.0405 x=0.51-0.60 raw='4'  ocr='4'  conf= 43.0 match=1.00 -> CONFIRMED BY PAGE 'xpdr-code'
-pfd cell 7  ink=0.0447 x=0.50-0.60 raw='6'  ocr='6'  conf= 96.0 match=1.00
-pfd cell 12 BLANK   ink=0.0000 < 0.0040 (contrast=40) -- never reached OCR
+pfd cell 1  bg=black  ink=0.0498 x=0.53-0.63 raw=''   ocr=''   conf=  0.0 match=0.00 -> '0' FROM PAGE 'xpdr-code'
+pfd cell 5  bg=black  ink=0.0405 x=0.51-0.60 raw='4'  ocr='4'  conf= 43.0 match=1.00 -> CONFIRMED BY PAGE 'xpdr-code'
+pfd cell 7  bg=white  ink=0.0447 x=0.50-0.60 raw='6'  ocr='6'  conf= 96.0 match=1.00
+pfd cell 12 BLANK   bg=black  ink=0.0000 < 0.0040 (contrast=40) -- never reached OCR
+```
+
+A frame where only a background moved does no OCR at all, so it gets a line
+of its own rather than passing in silence:
+
+```
+pfd cell 3  CACHED  bg=white  was bg=black -- colour changed, label unchanged, no OCR
 ```
 
 | what you see | what it means |
 | --- | --- |
+| `bg=` | the cell's background class; absent when `color.enabled` is false |
+| `CACHED` | the change gate skipped OCR, but the colour moved anyway |
 | `raw` then `ocr` | what Tesseract returned, then the label it snapped to |
 | `FROM PAGE` | OCR was unsure and the page supplied the value |
 | `CONFIRMED BY PAGE` | OCR was unsure, but the page agreed -- value unchanged |

@@ -420,3 +420,58 @@ def test_colour_can_be_switched_off(reader, config):
     result = pipeline.process(synth.render_menu("alerts"))
     assert result.backgrounds == [BLACK] * 12
     assert result.timings["color_ms"] >= 0.0
+
+
+def test_the_debug_line_carries_the_background(reader, config, caplog):
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="g1000_softkey.pipeline")
+    pipeline = make_pipeline(reader, config)
+    pipeline.process(synth.render_menu("alerts"))
+    lines = {}
+    for record in caplog.records:
+        parts = record.getMessage().split()
+        if len(parts) > 2 and parts[1] == "cell" and parts[2].isdigit():
+            lines[int(parts[2])] = record.getMessage()
+    assert "bg=yellow" in lines[5]
+    assert "bg=red" in lines[6]
+    assert "bg=white" in lines[9]
+    assert "bg=black" in lines[1]
+    assert "bg=black" in lines[4], "a blank cell still has a background"
+
+
+def test_a_colour_only_change_is_logged_even_though_no_cell_was_ocrd(reader, config, caplog):
+    """The frame that would otherwise look completely idle in the log.
+
+    Forced here with a change tolerance nothing can trip, because colour is
+    measured outside the gate and so must be reported outside it too.
+    """
+    import logging
+
+    display = DisplayConfig(key="pfd", geometry=StripGeometry())
+    app = AppConfig(displays=(display,), ocr=config.ocr, change_gating=True,
+                    change_tolerance=255)
+    pipeline = DisplayPipeline(display, reader, app)
+
+    labels = list(synth.MENUS["pfd_top"])
+    pipeline.process(synth.render_frame(labels))
+    caplog.set_level(logging.DEBUG, logger="g1000_softkey.pipeline")
+    result = pipeline.process(synth.render_frame(labels, backgrounds={2: "white"}))
+
+    assert result.ocr_calls == 0, "the gate must have swallowed the pixel change"
+    assert result.backgrounds[2] == WHITE
+    cached = [r.getMessage() for r in caplog.records if "CACHED" in r.getMessage()]
+    assert len(cached) == 1
+    assert "cell 3" in cached[0]
+    assert "bg=white" in cached[0] and "was bg=black" in cached[0]
+
+
+def test_a_quiet_frame_still_logs_nothing(reader, config, caplog):
+    import logging
+
+    frame = synth.render_menu("pfd_top")
+    pipeline = make_pipeline(reader, config, gating=True)
+    pipeline.process(frame)
+    caplog.set_level(logging.DEBUG, logger="g1000_softkey.pipeline")
+    pipeline.process(frame)
+    assert [r.getMessage() for r in caplog.records] == []
