@@ -85,7 +85,11 @@ class DisplayPipeline:
                 continue
 
             t0 = time.perf_counter()
-            blank = is_blank(cell, self.reader.config.blank_ink_ratio)
+            blank = is_blank(
+                cell,
+                self.reader.config.blank_ink_ratio,
+                self.reader.config.blank_contrast,
+            )
             if blank:
                 preprocess_ms += (time.perf_counter() - t0) * 1000.0
                 results.append(CellResult(index=index, blank=True))

@@ -96,6 +96,11 @@ class OcrConfig:
     #: fraction of a cell's pixels that must deviate from the cell's dominant
     #: brightness for the cell to count as "has a label on it"
     blank_ink_ratio: float = 0.004
+    #: how far a pixel must sit from the cell's dominant tone to count as ink.
+    #: The G1000 draws unavailable softkeys dimmed rather than hiding them, so
+    #: too high a value reads a dim-but-present label as an empty cell. Short
+    #: labels break first: a lone digit carries far less evidence than a word.
+    blank_contrast: int = 40
 
 
 @dataclass(frozen=True)

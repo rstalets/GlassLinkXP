@@ -63,6 +63,13 @@ upscale = 3.0            # Tesseract wants roughly a 30 px cap height
 threshold = "otsu"       # otsu | adaptive -- per cell, never global
 fuzzy_cutoff = 0.62      # difflib cutoff for snapping to labels.txt
 blank_ink_ratio = 0.004  # below this fraction of "ink" a cell is reported as ""
+# How far a pixel must sit from the cell's dominant tone to count as ink. The
+# G1000 dims unavailable softkeys rather than hiding them, so too high a value
+# turns a dim-but-present label into an empty cell. Short labels break first --
+# a lone digit carries much less evidence than a word, so a missing "0" on the
+# XPDR code screen while longer labels still read is the signature. Lower it to
+# ~20 if dim labels are being dropped.
+blank_contrast = 40
 # labels_file = "g1000_softkey/labels.txt"   # relative paths resolve next to this file
 # tessdata_path = "C:/Program Files/Tesseract-OCR/tessdata"
 
