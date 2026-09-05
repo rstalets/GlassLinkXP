@@ -79,6 +79,18 @@ sharpen_ladder = [[0.0, 0.0], [0.5, 1.0], [1.0, 1.4]]
 # the ladder early; below it the remaining rungs are tried and the most
 # confident answer wins. 0 disables early stopping entirely.
 accept_confidence = 80.0
+# Below this confidence, fall back to matching the glyph's shape against
+# signatures.json. Tesseract decides what a glyph *is*, and on a ~10 px digit
+# that decision gets shaky -- but the pixels are stable and the label set is
+# small and closed, so "which known label does this look like?" is an easier
+# question than "what character is this?". Build the file with:
+#     g1000 learn --display pfd --labels "0,1,2,3,4,5,6,7,IDENT,BKSP,BACK,"
+# It is additive, so run it on each screen you care about. 0 disables it.
+#
+# This is not a hash of the raw cell -- that is what brightness breaks.
+# Signatures come from the binarised, size-normalised glyph and are compared by
+# distance, so they survive dimming, highlighting and a window resize.
+signature_confidence = 75.0
 threshold = "otsu"       # otsu | adaptive -- per cell, never global
 fuzzy_cutoff = 0.62      # difflib cutoff for snapping to labels.txt
 blank_ink_ratio = 0.004  # below this fraction of "ink" a cell is reported as ""

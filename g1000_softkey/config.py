@@ -108,6 +108,12 @@ class OcrConfig:
     #: Below this, the remaining rungs are tried and the most confident answer
     #: wins. Set to 0 to always try every rung.
     accept_confidence: float = 80.0
+    #: Below this confidence, fall back to matching the glyph's shape against
+    #: signatures.json. Tesseract decides what a glyph *is*; when it is unsure
+    #: the pixels are still stable, and the label set is small and closed.
+    #: 0 disables the fallback.
+    signature_confidence: float = 75.0
+    signatures_file: str = str(PACKAGE_DIR / "signatures.json")
     sharpen_ladder: tuple[tuple[float, float], ...] = (
         (0.0, 0.0),
         (0.5, 1.0),
@@ -216,6 +222,10 @@ def from_mapping(raw: Mapping[str, Any], base_dir: Path | None = None) -> AppCon
             ) from exc
     publish_data = _subsection(raw, "publish")
 
+    if base_dir is not None and ocr_data.get("signatures_file"):
+        signatures = Path(ocr_data["signatures_file"])
+        if not signatures.is_absolute():
+            ocr_data["signatures_file"] = str((base_dir / signatures).resolve())
     if base_dir is not None and ocr_data.get("labels_file"):
         labels = Path(ocr_data["labels_file"])
         if not labels.is_absolute():
