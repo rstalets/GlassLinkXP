@@ -302,3 +302,52 @@ def test_a_page_is_looked_for_as_soon_as_one_cell_is_shaky():
 
     assert results[0].text == "0"
     assert "replaced [1]" in outcome
+
+
+def test_an_unchanged_frame_does_no_work_at_all():
+    """A static strip should be genuinely idle.
+
+    The change-gating cache holds results from *after* page lookup, so
+    re-running it on an unchanged frame rediscovers the same page and reaches
+    the same conclusions -- at the loop rate, and printing a line each time.
+    """
+    import cv2
+
+    from g1000_softkey.config import OcrConfig
+    from g1000_softkey.ocr import SoftkeyReader
+    from g1000_softkey.pipeline import DisplayPipeline
+
+    frame = synth.render_menu("xpdr")
+    reader = SoftkeyReader(OcrConfig())
+    try:
+        pipeline = DisplayPipeline(
+            DisplayConfig(key="pfd", geometry=StripGeometry()), reader, AppConfig()
+        )
+        first = pipeline.process(frame)
+        assert first.ocr_calls > 0
+
+        second = pipeline.process(frame.copy())
+        assert second.ocr_calls == 0, "nothing changed, so nothing should be re-read"
+        assert second.timings["screen_ms"] == 0.0 or second.timings["screen_ms"] < 0.05
+        assert second.labels == first.labels, "the cached answer must be the same answer"
+    finally:
+        reader.close()
+
+
+def test_a_changed_cell_brings_page_lookup_back():
+    import numpy as np
+
+    from g1000_softkey.config import OcrConfig
+    from g1000_softkey.ocr import SoftkeyReader
+    from g1000_softkey.pipeline import DisplayPipeline
+
+    reader = SoftkeyReader(OcrConfig())
+    try:
+        pipeline = DisplayPipeline(
+            DisplayConfig(key="pfd", geometry=StripGeometry()), reader, AppConfig()
+        )
+        pipeline.process(synth.render_menu("xpdr"))
+        changed = pipeline.process(synth.render_menu("pfd_top"))
+        assert changed.ocr_calls > 0
+    finally:
+        reader.close()

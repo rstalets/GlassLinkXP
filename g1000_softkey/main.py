@@ -238,6 +238,8 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
 
     period = 1.0 / config.loop_hz
     previous: dict[str, list[str]] = {}
+    starved: dict[str, float] = {}
+    warned_starved: set[str] = set()
     LOG.info(
         "running at %.1f Hz, gating=%s, publisher=%s",
         config.loop_hz, config.change_gating, publisher.name,
@@ -251,8 +253,26 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
             for display in config.active_displays:
                 frame = sources[display.key].grab()
                 if frame is None:
-                    LOG.debug("no frame yet for %s", display.key)
+                    # A display that never delivers is a setup problem, not a
+                    # transient. Say so once, loudly, instead of a debug line
+                    # per cycle that scrolls the real output away.
+                    first = starved.setdefault(display.key, time.monotonic())
+                    waited = time.monotonic() - first
+                    if waited > 3.0 and display.key not in warned_starved:
+                        warned_starved.add(display.key)
+                        LOG.warning(
+                            "no frames from %s after %.0fs. The window must exist and be "
+                            "rendering: check it is still popped out, not minimised, and "
+                            "that window_title %r still matches. 'list-windows' shows what "
+                            "is open.",
+                            display.key, waited, display.window_title,
+                        )
                     continue
+                if display.key in starved:
+                    del starved[display.key]
+                    if display.key in warned_starved:
+                        warned_starved.discard(display.key)
+                        LOG.info("%s is delivering frames again", display.key)
                 result = pipelines[display.key].process(frame)
                 last_results[display.key] = result
                 values.update(_values(display, result))

@@ -209,13 +209,21 @@ class DisplayPipeline:
         timings["ocr_ms"] = ocr_ms
 
         t0 = time.perf_counter()
-        outcome = self._apply_screen(results)
+        if ocr_calls == 0 and self._previous_results is not None:
+            # Every cell came from the change-gating cache, and the cache holds
+            # results from *after* page lookup ran, so re-running it would
+            # rediscover the same page and reach the same conclusions. Skipping
+            # keeps a static strip genuinely idle instead of re-identifying the
+            # page at the loop rate.
+            outcome = "skipped: no cell changed"
+        else:
+            outcome = self._apply_screen(results)
         timings["screen_ms"] = (time.perf_counter() - t0) * 1000.0
 
         # Logged here rather than inside the loop above: page lookup can change
         # a cell after OCR has spoken, and a debug line that stops at the OCR
         # answer disagrees with the dataref that actually gets published.
-        if LOG.isEnabledFor(logging.DEBUG):
+        if LOG.isEnabledFor(logging.DEBUG) and ocr_calls:
             LOG.debug("%s screen lookup: %s", self.display.key, outcome)
             for result in results:
                 detail = diagnostics.get(result.index)
