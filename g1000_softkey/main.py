@@ -301,12 +301,25 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # -c and -v live on a shared parent so they are accepted both before and
+    # after the subcommand: `main -v run` and `main run -v` are equally natural
+    # to type, and argparse subparsers do not inherit the top-level flags.
+    # SUPPRESS keeps an absent flag from overwriting one given on the other side.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "-c", "--config", default=argparse.SUPPRESS,
+        help="path to config.toml (defaults are used without it)",
+    )
+    common.add_argument(
+        "-v", "--verbose", action="store_true", default=argparse.SUPPRESS,
+        help="debug logging: per-cell raw OCR text, confidence and match score",
+    )
+
     parser = argparse.ArgumentParser(
         prog="g1000-softkey",
         description="OCR the X-Plane G1000 softkey strip into X-Plane datarefs.",
+        parents=[common],
     )
-    parser.add_argument("-c", "--config", help="path to config.toml (defaults are used without it)")
-    parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_image(p: argparse.ArgumentParser) -> None:
@@ -316,7 +329,7 @@ def build_parser() -> argparse.ArgumentParser:
                  "a window (offline dev/test; a directory may hold <display>.png per display)",
         )
 
-    run = sub.add_parser("run", help="capture, OCR and publish continuously")
+    run = sub.add_parser("run", help="capture, OCR and publish continuously", parents=[common])
     add_image(run)
     run.add_argument("--once", action="store_true", help="single pass, then exit")
     run.add_argument("--hz", type=float, default=None,
@@ -327,26 +340,26 @@ def build_parser() -> argparse.ArgumentParser:
                      help="override publish.target from the config")
     run.set_defaults(func=cmd_run)
 
-    windows = sub.add_parser("list-windows", help="list top-level windows (Windows only)")
+    windows = sub.add_parser("list-windows", help="list top-level windows (Windows only)", parents=[common])
     windows.add_argument("--filter", help="only show titles containing this substring")
     windows.set_defaults(func=cmd_list_windows)
 
-    calibrate = sub.add_parser("calibrate", help="dump raw/crop/overlay PNGs and suggest geometry")
+    calibrate = sub.add_parser("calibrate", help="dump raw/crop/overlay PNGs and suggest geometry", parents=[common])
     add_image(calibrate)
     calibrate.add_argument("--out", default="calibration", help="output directory")
     calibrate.set_defaults(func=cmd_calibrate)
 
-    dump = sub.add_parser("dump-cells", help="write raw + preprocessed images for every cell")
+    dump = sub.add_parser("dump-cells", help="write raw + preprocessed images for every cell", parents=[common])
     add_image(dump)
     dump.add_argument("--out", default="cells", help="output directory")
     dump.set_defaults(func=cmd_dump_cells)
 
-    bench = sub.add_parser("bench", help="measure per-stage timings")
+    bench = sub.add_parser("bench", help="measure per-stage timings", parents=[common])
     add_image(bench)
     bench.add_argument("-n", "--iterations", type=int, default=50)
     bench.set_defaults(func=cmd_bench)
 
-    synth_cmd = sub.add_parser("synth", help="write synthetic softkey frames for offline testing")
+    synth_cmd = sub.add_parser("synth", help="write synthetic softkey frames for offline testing", parents=[common])
     synth_cmd.add_argument("--out", default="frames", help="output directory")
     synth_cmd.set_defaults(func=cmd_synth)
     return parser
@@ -355,9 +368,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    _setup_logging(args.verbose)
+    _setup_logging(getattr(args, "verbose", False))
     try:
-        config = load_config(args.config)
+        config = load_config(getattr(args, "config", None))
         return args.func(args, config)
     except (ConfigError, CaptureError, OcrUnavailable, ValueError) as exc:
         LOG.error("%s", exc)

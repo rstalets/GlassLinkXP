@@ -12,6 +12,7 @@ from .config import AppConfig, DisplayConfig
 from .ocr import CellResult, SoftkeyReader
 from .strip import (
     changed_cells,
+    ink_ratio,
     is_blank,
     preprocess_cell,
     snapshot_cells,
@@ -85,13 +86,17 @@ class DisplayPipeline:
                 continue
 
             t0 = time.perf_counter()
-            blank = is_blank(
-                cell,
-                self.reader.config.blank_ink_ratio,
-                self.reader.config.blank_contrast,
-            )
+            ink = ink_ratio(cell, self.reader.config.blank_contrast)
+            blank = ink < self.reader.config.blank_ink_ratio
             if blank:
                 preprocess_ms += (time.perf_counter() - t0) * 1000.0
+                # Distinguishing "gated out as empty" from "OCR read nothing" is
+                # the whole question when a short label goes missing, so say which.
+                LOG.debug(
+                    "%s cell %-2d BLANK   ink=%.4f < %.4f (contrast=%d) -- never reached OCR",
+                    self.display.key, index + 1, ink,
+                    self.reader.config.blank_ink_ratio, self.reader.config.blank_contrast,
+                )
                 results.append(CellResult(index=index, blank=True))
                 continue
             image = preprocess_cell(
@@ -100,9 +105,15 @@ class DisplayPipeline:
             preprocess_ms += (time.perf_counter() - t0) * 1000.0
 
             t0 = time.perf_counter()
-            results.append(self.reader.read(index, image))
+            cell_result = self.reader.read(index, image)
+            results.append(cell_result)
             ocr_ms += (time.perf_counter() - t0) * 1000.0
             ocr_calls += 1
+            LOG.debug(
+                "%s cell %-2d ink=%.4f raw=%-12r -> %-12r conf=%5.1f match=%.2f",
+                self.display.key, index + 1, ink, cell_result.raw, cell_result.text,
+                cell_result.confidence, cell_result.match_score,
+            )
 
         timings["preprocess_ms"] = preprocess_ms
         timings["ocr_ms"] = ocr_ms
