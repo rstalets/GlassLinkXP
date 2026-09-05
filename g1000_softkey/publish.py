@@ -2,10 +2,12 @@
 
 Three targets:
 
-``webapi``  PATCH the plugin-created byte-array datarefs through X-Plane's
-            built-in REST API (12.1.1+). Data datarefs are base64 in both
-            directions. Dataref ids are session-scoped, so names are resolved
-            to ids at startup and re-resolved whenever a write 404s.
+``webapi``  PATCH the plugin-created datarefs through X-Plane's built-in REST
+            API (12.1.1+). Data (byte array) datarefs are base64 in both
+            directions; the Int datarefs carrying the background colour are
+            written as bare numbers. Dataref ids are session-scoped, so names
+            are resolved to ids at startup and re-resolved whenever a write
+            404s.
 ``file``    Atomically write a small JSON file that the XPPython3 plugin
             polls at 5 Hz. Fallback for the case where the Web API refuses to
             write a plugin-created dataref.
@@ -53,11 +55,31 @@ def encode_field_b64(text: str, width: int = 16) -> str:
     return base64.b64encode(encode_field(text, width)).decode("ascii")
 
 
+#: What a publisher accepts per dataref. A ``str`` is a label bound for a byte
+#: array; an ``int`` is a numeric dataref (today, the ``/bg`` colour class).
+Value = str | int | float
+
+
+def encode_value(value: Value, width: int = 16) -> str | int | float:
+    """Encode one dataref value for the wire.
+
+    X-Plane's Web API distinguishes the two by dataref *type*, not by any flag
+    we send: a Data (byte array) dataref takes a base64 string in ``data`` /
+    ``value``, and an Int or Float dataref takes a bare JSON number in the
+    same field. So the publisher does not need a type registry -- the Python
+    type of the value it was handed already says which dataref it is going to,
+    and getting that wrong is a rejected write, not a silently wrong one.
+    """
+    if isinstance(value, str):
+        return encode_field_b64(value, width)
+    return value
+
+
 class Publisher(Protocol):
     name: str
 
-    def publish(self, values: Mapping[str, str]) -> None:
-        """Push ``{dataref name: label}``. Must never raise."""
+    def publish(self, values: Mapping[str, Value]) -> None:
+        """Push ``{dataref name: label or number}``. Must never raise."""
 
     def close(self) -> None:
         ...
@@ -67,9 +89,9 @@ class ConsolePublisher:
     name = "console"
 
     def __init__(self, config: PublishConfig | None = None) -> None:
-        self._last: dict[str, str] = {}
+        self._last: dict[str, Value] = {}
 
-    def publish(self, values: Mapping[str, str]) -> None:
+    def publish(self, values: Mapping[str, Value]) -> None:
         changed = {k: v for k, v in values.items() if self._last.get(k) != v}
         if not changed:
             return
@@ -89,16 +111,22 @@ class FilePublisher:
     def __init__(self, config: PublishConfig) -> None:
         self.path = Path(config.json_path) if config.json_path else default_json_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._last: dict[str, str] = {}
+        self._last: dict[str, Value] = {}
         LOG.info("publishing labels to %s", self.path)
 
-    def publish(self, values: Mapping[str, str]) -> None:
+    def publish(self, values: Mapping[str, Value]) -> None:
         if dict(values) == self._last:
             return
+        # Strings and numbers go in separate tables rather than one mixed one:
+        # the plugin has a byte buffer for the first and a plain int for the
+        # second, and a JSON number and a JSON string are the only signal it
+        # would otherwise have to tell them apart. A v1 file (labels only) is
+        # still a valid v2 file with no numbers, so the plugin reads both.
         payload = {
-            "version": 1,
+            "version": 2,
             "updated": time.time(),
-            "labels": dict(values),
+            "labels": {k: v for k, v in values.items() if isinstance(v, str)},
+            "numbers": {k: v for k, v in values.items() if not isinstance(v, str)},
         }
         tmp = self.path.with_suffix(f".{os.getpid()}.tmp")
         try:
@@ -133,7 +161,7 @@ class WebApiPublisher:
         self.config = config
         self.names = list(dataref_names)
         self._ids: dict[str, int] = {}
-        self._last: dict[str, str] = {}
+        self._last: dict[str, Value] = {}
         self._next_resolve = 0.0
         self._warned = False
         self.resolve()
@@ -191,19 +219,19 @@ class WebApiPublisher:
         return bool(found)
 
     # -- writing ----------------------------------------------------------
-    def publish(self, values: Mapping[str, str]) -> None:
+    def publish(self, values: Mapping[str, Value]) -> None:
         if not self._ids and time.monotonic() >= self._next_resolve:
             self.resolve()
         stale = False
-        for name, text in values.items():
-            if self._last.get(name) == text:
+        for name, value in values.items():
+            if self._last.get(name) == value:
                 continue
             dataref_id = self._ids.get(name)
             if dataref_id is None:
                 continue
-            ok, retry = self._write(dataref_id, name, text)
+            ok, retry = self._write(dataref_id, name, value)
             if ok:
-                self._last[name] = text
+                self._last[name] = value
             elif retry:
                 stale = True
                 break
@@ -211,9 +239,9 @@ class WebApiPublisher:
             LOG.info("dataref ids look stale, re-resolving")
             self.resolve()
 
-    def _write(self, dataref_id: int, name: str, text: str) -> tuple[bool, bool]:
+    def _write(self, dataref_id: int, name: str, value: Value) -> tuple[bool, bool]:
         """Returns (written, should_re_resolve)."""
-        payload = {"data": encode_field_b64(text, self.config.field_width)}
+        payload = {"data": encode_value(value, self.config.field_width)}
         try:
             response = self._session.patch(
                 f"{self._root}/datarefs/{dataref_id}/value",
@@ -383,13 +411,13 @@ class WebSocketPublisher(WebApiPublisher):
             pass
         self._ws = None
 
-    def publish(self, values: Mapping[str, str]) -> None:
+    def publish(self, values: Mapping[str, Value]) -> None:
         if not self._ids and time.monotonic() >= self._next_resolve:
             self.resolve()
         changed = [
-            (self._ids[name], text)
-            for name, text in values.items()
-            if self._last.get(name) != text and name in self._ids
+            (self._ids[name], value)
+            for name, value in values.items()
+            if self._last.get(name) != value and name in self._ids
         ]
         if not changed:
             return
@@ -403,8 +431,8 @@ class WebSocketPublisher(WebApiPublisher):
             "type": "dataref_set_values",
             "params": {
                 "datarefs": [
-                    {"id": ref_id, "value": encode_field_b64(text, self.config.field_width)}
-                    for ref_id, text in changed
+                    {"id": ref_id, "value": encode_value(value, self.config.field_width)}
+                    for ref_id, value in changed
                 ]
             },
         }
@@ -414,9 +442,9 @@ class WebSocketPublisher(WebApiPublisher):
             self._drop(str(exc))
             super().publish(values)
             return
-        for name, text in values.items():
+        for name, value in values.items():
             if name in self._ids:
-                self._last[name] = text
+                self._last[name] = value
 
     def close(self) -> None:
         self._drop("closing")

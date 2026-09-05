@@ -1,4 +1,4 @@
-"""CLI entry point: run | list-windows | calibrate | dump-cells | bench | synth."""
+"""CLI entry point: run | list-windows | calibrate | dump-cells | dump-colors | bench | synth."""
 
 from __future__ import annotations
 
@@ -15,10 +15,11 @@ import numpy as np
 
 from . import synth
 from .capture import CaptureError, FrameSource, ImageCapture, list_windows, sources_for
+from .color import BLACK, background_name, measure_cell
 from .config import AppConfig, ConfigError, DisplayConfig, load_config
 from .ocr import OcrUnavailable, SoftkeyReader
 from .pipeline import DisplayPipeline, DisplayResult
-from .publish import create_publisher
+from .publish import Value, create_publisher
 from .strip import (
     auto_detect_strip,
     crop_strip,
@@ -58,13 +59,34 @@ def _grab(source: FrameSource, retries: int = 25, delay: float = 0.2) -> np.ndar
     raise CaptureError(f"no frame arrived from {source.name}")
 
 
-def _values(display: DisplayConfig, result: DisplayResult) -> dict[str, str]:
-    return dict(zip(display.dataref_names(), result.labels))
+def _values(display: DisplayConfig, result: DisplayResult) -> dict[str, Value]:
+    """The dataref writes for one display: a label and a colour per cell.
+
+    The label goes out as the sim draws it, with nothing prepended. What
+    colour to draw it in is the Stream Deck's decision to make from the /bg
+    dataref, not something to smuggle into the string.
+    """
+    values: dict[str, Value] = {}
+    for name, cell in zip(display.dataref_names(), result.cells):
+        values[name] = cell.text
+        values[f"{name}/bg"] = cell.background
+    return values
 
 
 def _format_row(result: DisplayResult) -> str:
     cells = " | ".join(f"{i + 1}:{c.text or '-':<9}" for i, c in enumerate(result.cells))
-    return f"[{result.display}] {cells}"
+    row = f"[{result.display}] {cells}"
+    # Only mentioned when there is something to mention. A normal strip is all
+    # black backgrounds, and printing twelve "black"s every time would bury
+    # the one cell that is actually highlighted.
+    coloured = [
+        f"{i + 1}={background_name(c.background)}"
+        for i, c in enumerate(result.cells)
+        if c.background != BLACK
+    ]
+    if coloured:
+        row += "  bg: " + " ".join(coloured)
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +170,63 @@ def cmd_dump_cells(args: argparse.Namespace, config: AppConfig) -> int:
     return 0
 
 
+def cmd_dump_colors(args: argparse.Namespace, config: AppConfig) -> int:
+    """Print each cell's border-ring BGR/HSV and how it classifies.
+
+    This exists because the classification thresholds in ``[color]`` were set
+    from *plausible* G1000 swatches, not from a capture -- nobody on this side
+    of the project has ever seen an X-Plane frame. Guessing at pixel values
+    that could not be observed is what has cost this project the most time so
+    far: two rounds of preprocessing were tuned against synthetic glyphs and
+    made the live display worse. So before trusting the defaults, run this
+    against a real capture with one softkey selected and, if you can find one,
+    a caution or a warning showing, and move the thresholds to fit what it
+    prints. ``--json`` dumps the same numbers for a bug report.
+    """
+    import json
+
+    sources = _open_sources(config, args.image)
+    records: list[dict] = []
+    try:
+        for display in config.active_displays:
+            frame = _grab(sources[display.key])
+            cells = split_cells(frame, display.geometry)
+            print(f"\n[{display.key}]  ring = outer {config.color.ring_fraction:.0%} of each cell")
+            print(f"{'cell':>4}  {'B':>4}{'G':>4}{'R':>4}   {'H':>4}{'S':>4}{'V':>4}   "
+                  f"{'class':<7} {'bg':>3}")
+            for index, cell in enumerate(cells, start=1):
+                bgr, hsv, background = measure_cell(cell, config.color)
+                print(
+                    f"{index:>4}  {bgr[0]:>4}{bgr[1]:>4}{bgr[2]:>4}   "
+                    f"{hsv[0]:>4}{hsv[1]:>4}{hsv[2]:>4}   "
+                    f"{background_name(background):<7} {background:>3}"
+                )
+                records.append({
+                    "display": display.key, "cell": index,
+                    "bgr": list(bgr), "hsv": list(hsv),
+                    "background": background, "name": background_name(background),
+                })
+    finally:
+        for source in sources.values():
+            source.close()
+
+    print(
+        "\nThresholds in [color], applied in this order:\n"
+        f"  V <= {config.color.value_max:<3} -> black\n"
+        f"  S <= {config.color.saturation_max:<3} -> white\n"
+        f"  H <= {config.color.red_hue_max} or H >= {config.color.red_hue_wrap_min} -> red\n"
+        f"  H in {config.color.yellow_hue_min}..{config.color.yellow_hue_max} -> yellow\n"
+        "V is tested first on purpose: hue and saturation barely move when the display is\n"
+        "dimmed, so brightness can only push a cell into black and can never turn a yellow\n"
+        "into a red. If a cell above is named wrong, move the threshold that misfired --\n"
+        "these numbers are the measurement, the defaults are only a guess."
+    )
+    if getattr(args, "json", None):
+        Path(args.json).write_text(json.dumps(records, indent=1), encoding="utf-8")
+        print(f"wrote {args.json}")
+    return 0
+
+
 def cmd_bench(args: argparse.Namespace, config: AppConfig) -> int:
     sources = _open_sources(config, args.image)
     reader = SoftkeyReader(config.ocr)
@@ -221,7 +300,7 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
     reader = SoftkeyReader(config.ocr)
     names: list[str] = []
     for display in config.active_displays:
-        names.extend(display.dataref_names())
+        names.extend(display.all_dataref_names())
     publisher = create_publisher(config.publish, names)
     pipelines = {d.key: DisplayPipeline(d, reader, config) for d in config.active_displays}
 
@@ -237,7 +316,7 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
         signal.signal(signal.SIGTERM, _stop)
 
     period = 1.0 / config.loop_hz
-    previous: dict[str, list[str]] = {}
+    previous: dict[str, tuple[list[str], list[int]]] = {}
     starved: dict[str, float] = {}
     warned_starved: set[str] = set()
     LOG.info(
@@ -276,8 +355,13 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
                 result = pipelines[display.key].process(frame)
                 last_results[display.key] = result
                 values.update(_values(display, result))
-                if previous.get(display.key) != result.labels:
-                    previous[display.key] = result.labels
+                # Compared against labels *and* backgrounds: a softkey
+                # becoming selected changes only the colour, and a log line
+                # that ignores that reports nothing happened while the
+                # published datarefs change underneath it.
+                snapshot = (result.labels, result.backgrounds)
+                if previous.get(display.key) != snapshot:
+                    previous[display.key] = snapshot
                     changed_this_cycle = True
                     LOG.info("%s", _format_row(result))
             publish_ms = 0.0
@@ -573,6 +657,15 @@ def build_parser() -> argparse.ArgumentParser:
     add_image(dump)
     dump.add_argument("--out", default="cells", help="output directory")
     dump.set_defaults(func=cmd_dump_cells)
+
+    colors = sub.add_parser(
+        "dump-colors",
+        help="print each cell's border-ring BGR/HSV and its colour classification",
+        parents=[common],
+    )
+    add_image(colors)
+    colors.add_argument("--json", help="also write the measurements to this JSON file")
+    colors.set_defaults(func=cmd_dump_colors)
 
     bench = sub.add_parser("bench", help="measure per-stage timings", parents=[common])
     add_image(bench)

@@ -5,7 +5,11 @@ import json
 import pytest
 
 from g1000_softkey import synth
-from g1000_softkey.main import main
+from g1000_softkey.color import BLACK, RED, WHITE, YELLOW
+from g1000_softkey.config import DisplayConfig, PublishConfig
+from g1000_softkey.main import _values, main
+from g1000_softkey.ocr import CellResult
+from g1000_softkey.pipeline import DisplayResult
 
 
 @pytest.fixture(scope="module")
@@ -69,3 +73,85 @@ def test_list_windows_off_windows_returns_2(caplog):
 
 def test_missing_image_returns_2():
     assert main(["run", "--image", "/nonexistent/frame.png", "--once"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# background colour and the optional inline text colour
+# ---------------------------------------------------------------------------
+
+
+def _result(cells):
+    return DisplayResult(display="pfd", cells=cells)
+
+
+def test_values_publish_a_label_and_a_colour_per_cell():
+    display = DisplayConfig(key="pfd")
+    result = _result([
+        CellResult(index=0, text="INSET", background=BLACK),
+        CellResult(index=1, text="STD BARO", background=WHITE),
+        CellResult(index=2, text="CAUTION", background=YELLOW),
+        CellResult(index=3, text="WARNING", background=RED),
+        CellResult(index=4, text="", background=YELLOW, blank=True),
+    ])
+    values = _values(display, result)
+    assert values["g1000/softkey/pfd/1"] == "INSET"
+    assert values["g1000/softkey/pfd/1/bg"] == BLACK
+    assert values["g1000/softkey/pfd/2/bg"] == WHITE
+    assert values["g1000/softkey/pfd/3/bg"] == YELLOW
+    assert values["g1000/softkey/pfd/4/bg"] == RED
+    # A blank cell publishes an empty label and still reports its colour.
+    assert values["g1000/softkey/pfd/5"] == ""
+    assert values["g1000/softkey/pfd/5/bg"] == YELLOW
+    assert all(isinstance(v, int) for k, v in values.items() if k.endswith("/bg"))
+
+
+def test_labels_go_out_exactly_as_the_sim_draws_them():
+    """Nothing is prepended to a label -- no markup, no colour hint.
+
+    What colour to draw the text is the Stream Deck's decision, made from the
+    /bg dataref. A daemon that smuggled a prefix into the string would render
+    as literal characters on any client that did not expect it.
+    """
+    display = DisplayConfig(key="pfd")
+    result = _result([
+        CellResult(index=0, text="STD BARO", background=WHITE),
+        CellResult(index=1, text="WARNING", background=RED),
+    ])
+    values = _values(display, result)
+    assert values["g1000/softkey/pfd/1"] == "STD BARO"
+    assert values["g1000/softkey/pfd/2"] == "WARNING"
+
+
+def test_the_longest_label_fits_the_default_field_width():
+    from g1000_softkey.publish import encode_field
+
+    longest = "FLIGHT PLAN"
+    width = PublishConfig().field_width
+    assert encode_field(longest, width).rstrip(b"\x00").decode() == longest
+
+
+def test_run_publishes_colours_through_the_file_publisher(frames, tmp_path, monkeypatch):
+    target = tmp_path / "labels.json"
+    monkeypatch.setenv("G1000_SOFTKEY_JSON", str(target))
+    assert main(["run", "--image", str(frames / "alerts.png"),
+                 "--publisher", "file", "--once"]) == 0
+    payload = json.loads(target.read_text())
+    assert payload["numbers"]["g1000/softkey/pfd/5/bg"] == YELLOW
+    assert payload["numbers"]["g1000/softkey/pfd/6/bg"] == RED
+    assert payload["numbers"]["g1000/softkey/pfd/9/bg"] == WHITE
+    assert payload["numbers"]["g1000/softkey/pfd/1/bg"] == BLACK
+    assert payload["labels"]["g1000/softkey/pfd/5"] == "CAUTION"
+
+
+def test_dump_colors_prints_the_measurements(frames, tmp_path, capsys):
+    out = tmp_path / "colors.json"
+    assert main(["dump-colors", "--image", str(frames / "alerts.png"),
+                 "--json", str(out)]) == 0
+    printed = capsys.readouterr().out
+    assert "yellow" in printed and "red" in printed
+    assert "Thresholds in [color]" in printed
+    records = json.loads(out.read_text())
+    assert len(records) == 24  # both displays, 12 cells each
+    yellow = next(r for r in records if r["display"] == "pfd" and r["cell"] == 5)
+    assert yellow["name"] == "yellow" and yellow["background"] == YELLOW
+    assert len(yellow["bgr"]) == 3 and len(yellow["hsv"]) == 3

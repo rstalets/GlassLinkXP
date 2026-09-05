@@ -55,6 +55,11 @@ class CellResult:
     by_signature: bool = False  # resolved by shape match, not by Tesseract
     by_screen: str = ""      # value came from this known softkey page
     confirmed_by: str = ""   # page agreed with a reading OCR was unsure of
+    #: Background colour class, 0=black 1=white 2=yellow 3=red (see color.py).
+    #: Measured from the cell's own pixels every frame, including on frames
+    #: where the change gate served the text from cache -- a softkey becoming
+    #: selected changes the background while the label stays identical.
+    background: int = 0
 
     def describe(self) -> str:
         if self.blank:

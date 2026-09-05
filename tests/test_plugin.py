@@ -18,6 +18,7 @@ PLUGIN_PATH = Path(__file__).resolve().parents[1] / "xppython3" / "PI_G1000Softk
 
 class FakeXP:
     Type_Data = 8
+    Type_Int = 1
     NO_PLUGIN_ID = -1
 
     def __init__(self):
@@ -30,8 +31,17 @@ class FakeXP:
         self.logs.append(message)
 
     def registerDataAccessor(self, name, dataType, writable, **kwargs):
-        assert dataType == self.Type_Data and writable == 1
-        self.accessors[name] = kwargs
+        assert dataType in (self.Type_Data, self.Type_Int) and writable == 1
+        # An Int dataref must be registered with the int callbacks and a Data
+        # dataref with the data ones: X-Plane types the dataref here, and a
+        # mismatch is a dataref that reads as 0 forever.
+        if dataType == self.Type_Int:
+            assert set(kwargs) >= {"readInt", "writeInt"}, kwargs
+            assert "readData" not in kwargs and "writeData" not in kwargs
+        else:
+            assert set(kwargs) >= {"readData", "writeData"}, kwargs
+            assert "readInt" not in kwargs and "writeInt" not in kwargs
+        self.accessors[name] = dict(kwargs, dataType=dataType)
         return f"accessor:{name}"
 
     def unregisterDataAccessor(self, accessor):
@@ -67,32 +77,61 @@ def plugin(monkeypatch, tmp_path):
     return instance, fake_xp, tmp_path / "labels.json"
 
 
-def test_creates_24_writable_datarefs(plugin):
+def test_creates_a_label_and_a_colour_dataref_per_cell(plugin):
     instance, fake_xp, _ = plugin
-    assert len(fake_xp.accessors) == 24
+    assert len(fake_xp.accessors) == 48  # 24 labels + 24 backgrounds
     assert "g1000/softkey/pfd/1" in fake_xp.accessors
     assert "g1000/softkey/mfd/12" in fake_xp.accessors
-    assert all(len(buffer) == 16 for buffer in instance.buffers.values())
+    assert "g1000/softkey/pfd/1/bg" in fake_xp.accessors
+    assert "g1000/softkey/mfd/12/bg" in fake_xp.accessors
+    assert len(instance.buffers) == 24 and len(instance.ints) == 24
+    assert fake_xp.accessors["g1000/softkey/pfd/1"]["dataType"] == fake_xp.Type_Data
+    assert fake_xp.accessors["g1000/softkey/pfd/1/bg"]["dataType"] == fake_xp.Type_Int
     assert fake_xp.messages, "custom datarefs should be announced to DataRefEditor"
+
+
+def test_the_field_holds_the_longest_label_with_room_to_spare(plugin):
+    instance, _, _ = plugin
+    from g1000_softkey.publish import encode_field
+
+    assert all(len(buffer) == 64 for buffer in instance.buffers.values())
+    name = "g1000/softkey/pfd/1"
+    longest = "FLIGHT PLAN"
+    instance.write_data(name, encode_field(longest, 64), 0, 64)
+    assert bytes(instance.buffers[name]).rstrip(b"\x00").decode() == longest
+
+
+def test_int_datarefs_round_trip_and_ignore_junk(plugin):
+    instance, _, _ = plugin
+    name = "g1000/softkey/pfd/4/bg"
+    assert instance.read_int(name) == 0
+    instance.write_int(name, 2)
+    assert instance.read_int(name) == 2
+    instance.write_int(name, 3.0)  # the Web API may deliver a float
+    assert instance.read_int(name) == 3
+    instance.write_int(name, "not a number")  # must not raise or clobber
+    assert instance.read_int(name) == 3
+    instance.write_int("g1000/softkey/nope/1/bg", 1)  # unknown: ignored
+    assert instance.read_int("g1000/softkey/nope/1/bg") == 0
 
 
 def test_read_and_write_round_trip(plugin):
     instance, _, _ = plugin
     name = "g1000/softkey/pfd/1"
-    instance.write_data(name, b"INSET" + b"\x00" * 11, 0, 16)
-    assert instance.read_data(name, None, 0, 16) == 16
-    out = bytearray(16)
-    assert instance.read_data(name, out, 0, 16) == 16
+    instance.write_data(name, b"INSET" + b"\x00" * 59, 0, 64)
+    assert instance.read_data(name, None, 0, 64) == 64
+    out = bytearray(64)
+    assert instance.read_data(name, out, 0, 64) == 64
     assert bytes(out).rstrip(b"\x00") == b"INSET"
 
 
 def test_write_is_bounded(plugin):
     instance, _, _ = plugin
     name = "g1000/softkey/mfd/3"
-    instance.write_data(name, b"X" * 64, 0, 64)
-    assert len(instance.buffers[name]) == 16
-    instance.write_data(name, b"Y", 99, 1)  # past the end: ignored
-    assert len(instance.buffers[name]) == 16
+    instance.write_data(name, b"X" * 256, 0, 256)
+    assert len(instance.buffers[name]) == 64
+    instance.write_data(name, b"Y", 999, 1)  # past the end: ignored
+    assert len(instance.buffers[name]) == 64
     instance.write_data("g1000/softkey/none", b"Z", 0, 1)  # unknown: ignored
 
 
@@ -101,15 +140,29 @@ def test_json_fallback_is_applied(plugin):
     assert instance.poll(0, 0, 0, None) == 0.2  # no file yet, no crash
 
     json_file.write_text(json.dumps({
-        "version": 1,
+        "version": 2,
         "labels": {"g1000/softkey/pfd/1": "TMR/REF", "g1000/softkey/xxx/9": "ignored"},
+        "numbers": {"g1000/softkey/pfd/1/bg": 1, "g1000/softkey/xxx/9/bg": 2},
     }))
     instance.poll(0, 0, 0, None)
     assert bytes(instance.buffers["g1000/softkey/pfd/1"]).rstrip(b"\x00") == b"TMR/REF"
+    assert instance.ints["g1000/softkey/pfd/1/bg"] == 1
 
     before = instance.last_mtime
     instance.poll(0, 0, 0, None)  # unchanged mtime -> no re-read
     assert instance.last_mtime == before
+
+
+def test_a_version_1_file_without_numbers_still_applies(plugin):
+    """An older daemon writes labels only; the plugin must not care."""
+    instance, _, json_file = plugin
+    json_file.write_text(json.dumps({
+        "version": 1,
+        "labels": {"g1000/softkey/mfd/2": "MAP"},
+    }))
+    instance.poll(0, 0, 0, None)
+    assert bytes(instance.buffers["g1000/softkey/mfd/2"]).rstrip(b"\x00") == b"MAP"
+    assert instance.ints["g1000/softkey/mfd/2/bg"] == 0
 
 
 def test_malformed_json_does_not_raise(plugin):
