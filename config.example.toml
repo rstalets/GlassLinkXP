@@ -79,6 +79,19 @@ sharpen_ladder = [[0.0, 0.0], [0.5, 1.0], [1.0, 1.4]]
 # the ladder early; below it the remaining rungs are tried and the most
 # confident answer wins. 0 disables early stopping entirely.
 accept_confidence = 80.0
+# Below this confidence a cell is a candidate for being filled in from a known
+# softkey page. Recognising a 10-pixel "0" is hard; noticing that IDENT/BKSP/
+# BACK sit in cells 9-11 is easy, and that only happens on the transponder
+# keypad -- whose layout is fixed, so the hard cells can be looked up instead of
+# recognised. Pages live in screens_file; add one with:
+#     g1000 screen-template --display pfd --name my-page
+screen_confidence = 80.0
+# A page is only identified when its match cells all read at least this
+# confidently -- higher on purpose, because an identification made from a guess
+# would propagate that guess into every cell it fills.
+screen_match_confidence = 85.0
+
+# Off by default: page lookup covers the same cells with a stronger signal.
 # Below this confidence, fall back to matching the glyph's shape against
 # signatures.json. Tesseract decides what a glyph *is*, and on a ~10 px digit
 # that decision gets shaky -- but the pixels are stable and the label set is
@@ -90,7 +103,7 @@ accept_confidence = 80.0
 # This is not a hash of the raw cell -- that is what brightness breaks.
 # Signatures come from the binarised, size-normalised glyph and are compared by
 # distance, so they survive dimming, highlighting and a window resize.
-signature_confidence = 75.0
+signature_confidence = 0.0
 threshold = "otsu"       # otsu | adaptive -- per cell, never global
 fuzzy_cutoff = 0.62      # difflib cutoff for snapping to labels.txt
 blank_ink_ratio = 0.004  # below this fraction of "ink" a cell is reported as ""

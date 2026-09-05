@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
 from .config import AppConfig, DisplayConfig
 from .ocr import CellResult, SoftkeyReader
+from .screens import ScreenLibrary
 from .strip import (
     changed_cells,
     ink_bounds,
@@ -43,12 +44,50 @@ class DisplayPipeline:
     steady-state cost is one crop + one array compare per frame.
     """
 
-    def __init__(self, display: DisplayConfig, reader: SoftkeyReader, app: AppConfig) -> None:
+    def __init__(
+        self,
+        display: DisplayConfig,
+        reader: SoftkeyReader,
+        app: AppConfig,
+        screens: ScreenLibrary | None = None,
+    ) -> None:
         self.display = display
         self.reader = reader
         self.app = app
+        self.screens = (
+            screens if screens is not None else ScreenLibrary.load(reader.config.screens_file)
+        )
         self._previous_cells: list[np.ndarray] | None = None
         self._previous_results: list[CellResult] | None = None
+
+    def _apply_screen(self, results: list[CellResult]) -> None:
+        """Fill low-confidence cells from a page the confident ones identify."""
+        if not len(self.screens) or self.reader.config.screen_confidence <= 0:
+            return
+        labels = {r.index + 1: r.text for r in results}
+        confidences = {r.index + 1: r.confidence for r in results}
+        screen = self.screens.identify(
+            self.display.key, labels, confidences,
+            self.reader.config.screen_match_confidence,
+        )
+        if screen is None:
+            return
+        for result in results:
+            cell = result.index + 1
+            expected = screen.labels.get(cell)
+            if expected is None or result.blank:
+                continue
+            if result.confidence >= self.reader.config.screen_confidence:
+                continue
+            if result.text == expected:
+                continue
+            LOG.debug(
+                "%s cell %-2d %r at %.0f%% -> %r (page %s)",
+                self.display.key, cell, result.text, result.confidence, expected, screen.name,
+            )
+            results[result.index] = replace(
+                result, text=expected, match_score=1.0, by_screen=screen.name
+            )
 
     def reset(self) -> None:
         self._previous_cells = None
@@ -127,6 +166,10 @@ class DisplayPipeline:
 
         timings["preprocess_ms"] = preprocess_ms
         timings["ocr_ms"] = ocr_ms
+
+        t0 = time.perf_counter()
+        self._apply_screen(results)
+        timings["screen_ms"] = (time.perf_counter() - t0) * 1000.0
 
         self._previous_cells = gray_cells
         self._previous_results = results

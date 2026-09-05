@@ -53,6 +53,7 @@ class CellResult:
     blank: bool = False
     ocr_ran: bool = True     # False when served from the change-gating cache
     by_signature: bool = False  # resolved by shape match, not by Tesseract
+    by_screen: str = ""      # filled in from this known softkey page
 
     def describe(self) -> str:
         if self.blank:

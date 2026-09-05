@@ -450,6 +450,56 @@ def cmd_learn(args: argparse.Namespace, config: AppConfig) -> int:
     return 0
 
 
+def cmd_screen_template(args: argparse.Namespace, config: AppConfig) -> int:
+    """Print a [[screen]] block for whatever is on screen right now.
+
+    Authoring a page by hand means typing twelve labels correctly; this reads
+    them off the display instead. Cells that read confidently become the match
+    set, everything else is listed for you to correct -- which is the right way
+    round, because the confident cells are exactly the ones that should
+    identify the page.
+    """
+    display = config.display(args.display)
+    if display is None:
+        LOG.error("no display %r in the config", args.display)
+        return 2
+
+    reader = SoftkeyReader(config.ocr)
+    sources = _open_sources(config, args.image)
+    try:
+        frame = _grab(sources[display.key])
+        result = DisplayPipeline(display, reader, config).process(frame)
+    finally:
+        reader.close()
+        for source in sources.values():
+            source.close()
+
+    floor = config.ocr.screen_match_confidence
+    confident = {c.index + 1: c.text for c in result.cells
+                 if c.text and not c.blank and c.confidence >= floor}
+    shaky = {c.index + 1: (c.text, c.confidence) for c in result.cells
+             if not c.blank and c.confidence < floor}
+
+    print(f"\n[[screen]]")
+    print(f'name = "{args.name}"')
+    print(f'display = "{display.key}"')
+    if confident:
+        print("match = { " + ", ".join(f'{k} = "{v}"' for k, v in sorted(confident.items())) + " }")
+    else:
+        print("# nothing read confidently enough to identify this page")
+    labels = {c.index + 1: c.text for c in result.cells if c.text and not c.blank}
+    print("labels = { " + ", ".join(f'{k} = "{v}"' for k, v in sorted(labels.items())) + " }")
+
+    if shaky:
+        print("\n# CHECK THESE -- read below "
+              f"{floor:.0f}% and may be wrong:")
+        for cell, (text, confidence) in sorted(shaky.items()):
+            print(f"#   cell {cell}: {text!r} at {confidence:.0f}%")
+        print("# Correct them in `labels` above, and drop them from `match`.")
+    print()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     # -c and -v live on a shared parent so they are accepted both before and
     # after the subcommand: `main -v run` and `main run -v` are equally natural
@@ -508,6 +558,15 @@ def build_parser() -> argparse.ArgumentParser:
     add_image(bench)
     bench.add_argument("-n", "--iterations", type=int, default=50)
     bench.set_defaults(func=cmd_bench)
+
+    template = sub.add_parser(
+        "screen-template", help="print a [[screen]] block from the current display",
+        parents=[common],
+    )
+    add_image(template)
+    template.add_argument("--display", default="pfd")
+    template.add_argument("--name", default="unnamed-page", help="a name for this page")
+    template.set_defaults(func=cmd_screen_template)
 
     learn = sub.add_parser(
         "learn", help="record shape signatures for a screen you can read yourself",

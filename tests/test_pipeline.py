@@ -63,7 +63,7 @@ def test_gating_can_be_switched_off(reader, config):
 def test_timings_are_reported(reader, config):
     pipeline = make_pipeline(reader, config)
     result = pipeline.process(synth.render_menu("mfd_top"))
-    assert set(result.timings) == {"split_ms", "gate_ms", "preprocess_ms", "ocr_ms"}
+    assert set(result.timings) == {"split_ms", "gate_ms", "preprocess_ms", "ocr_ms", "screen_ms"}
     assert result.timings["ocr_ms"] > 0
 
 
