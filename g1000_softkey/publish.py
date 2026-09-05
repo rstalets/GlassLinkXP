@@ -263,42 +263,109 @@ class WebSocketPublisher(WebApiPublisher):
         self._ws = None
         self._req_id = 0
         self._ws_warned = False
+        self._ws_version = None
+        self._connect_failures = 0
+        self._next_ws_attempt = 0.0
+        self._fell_back = False
         super().__init__(config, dataref_names, session=session)
+
+    def _negotiate_version(self) -> str:
+        """Ask /api/capabilities which API versions this X-Plane speaks.
+
+        The endpoint is unversioned and reports e.g. {"api": {"versions":
+        ["v1","v2","v3"]}}. Picking the highest avoids guessing wrong about
+        which version carries the WebSocket interface.
+        """
+        if self._ws_version:
+            return self._ws_version
+        self._ws_version = self.config.api_version
+        base = self.config.base_url.rstrip("/")
+        try:
+            response = self._session.get(f"{base}/api/capabilities", timeout=self.config.timeout)
+            versions = (response.json() or {}).get("api", {}).get("versions", [])
+            numbered = sorted(
+                (v for v in versions if isinstance(v, str) and v.startswith("v")),
+                key=lambda v: int(v[1:]) if v[1:].isdigit() else -1,
+            )
+            if numbered:
+                self._ws_version = numbered[-1]
+                LOG.info("X-Plane advertises API versions %s; using %s for the websocket",
+                         ", ".join(versions), self._ws_version)
+        except Exception as exc:  # noqa: BLE001 - endpoint is optional
+            LOG.debug("could not read /api/capabilities (%s); using %s", exc, self._ws_version)
+        return self._ws_version
 
     @property
     def _ws_url(self) -> str:
         root = self.config.base_url.rstrip("/")
         root = root.replace("https://", "wss://").replace("http://", "ws://")
-        return f"{root}/api/{self.config.api_version}"
+        return f"{root}/api/{self._negotiate_version()}"
+
+    def _fall_back(self, reason: str) -> None:
+        """Note, once, that this cycle's writes are going out over REST.
+
+        Two properties matter more than using the websocket:
+
+        * never publish *nothing*. REST still works, so a cycle that cannot get
+          a socket writes over REST rather than dropping the labels.
+        * never be slower than the REST publisher. A blocking connect attempt
+          every cycle costs the whole socket timeout, so failures back off and
+          reconnection is retried on the same interval as id resolution.
+        """
+        if self._fell_back:
+            return
+        self._fell_back = True
+        LOG.warning(
+            "websocket unavailable (%s); publishing over REST instead and retrying the "
+            "socket every %.0fs. Labels still update, just with one HTTP write per "
+            "changed cell. Set publish.target = 'webapi' to stop trying.",
+            reason, self.config.retry_interval,
+        )
 
     def _connect(self) -> bool:
         if self._ws is not None:
             return True
+        # NB: _fell_back must not short-circuit here. It records that REST is
+        # covering the writes, not that the websocket is abandoned -- the
+        # backoff below is what limits retries, and recovery depends on this
+        # path still running.
+        now = time.monotonic()
+        if now < self._next_ws_attempt:
+            return False
         try:
             from websocket import create_connection
         except ImportError:
-            if not self._ws_warned:
-                LOG.error(
-                    "publish.target = 'websocket' needs the websocket-client package "
-                    "(pip install websocket-client). Falling back is not automatic; "
-                    "set publish.target = 'webapi' to use REST instead."
-                )
-                self._ws_warned = True
+            # Nothing will change at runtime, so stop attempting entirely.
+            self._next_ws_attempt = float("inf")
+            self._fall_back("websocket-client is not installed; pip install websocket-client")
             return False
+        # Cap the connect timeout: this runs on the capture loop, and the loop
+        # period is the budget we actually care about.
+        connect_timeout = min(self.config.timeout, 0.5)
         try:
-            self._ws = create_connection(self._ws_url, timeout=self.config.timeout)
+            self._ws = create_connection(self._ws_url, timeout=connect_timeout)
             # Writes are fire-and-forget; never block the capture loop on a reply.
             self._ws.settimeout(0.0)
         except Exception as exc:  # noqa: BLE001 - many socket error types
-            self._log_offline(f"websocket connect failed: {exc}")
             self._ws = None
+            self._connect_failures += 1
+            self._next_ws_attempt = now + self.config.retry_interval
+            self._fall_back(str(exc))
+            LOG.debug("websocket connect failed (%s), retry in %.0fs",
+                      exc, self.config.retry_interval)
             return False
-        LOG.info("websocket connected to %s", self._ws_url)
+        if self._fell_back:
+            LOG.info("websocket now available; resuming batched writes")
+        else:
+            LOG.info("websocket connected to %s", self._ws_url)
+        self._fell_back = False
+        self._connect_failures = 0
         self._ws_warned = False
         return True
 
     def _drop(self, detail: str) -> None:
         LOG.debug("websocket dropped (%s); will reconnect", detail)
+        self._next_ws_attempt = 0.0  # an established socket may reconnect at once
         try:
             if self._ws is not None:
                 self._ws.close()
@@ -317,6 +384,8 @@ class WebSocketPublisher(WebApiPublisher):
         if not changed:
             return
         if not self._connect():
+            # No socket this cycle: write over REST so the labels still land.
+            super().publish(values)
             return
         self._req_id += 1
         message = {
@@ -333,6 +402,7 @@ class WebSocketPublisher(WebApiPublisher):
             self._ws.send(json.dumps(message))
         except Exception as exc:  # noqa: BLE001
             self._drop(str(exc))
+            super().publish(values)
             return
         for name, text in values.items():
             if name in self._ids:

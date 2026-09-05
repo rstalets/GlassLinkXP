@@ -180,6 +180,8 @@ def ws_env(monkeypatch):
             status_code=200,
             json=lambda: {"data": [{"id": 1000 + i, "name": n} for i, n in enumerate(names)]},
         ),
+        # the publisher writes over REST on any cycle without a socket
+        patch=lambda url, json=None, timeout=None: SimpleNamespace(status_code=200),
         close=lambda: None,
     )
     return names, ws, session
@@ -241,9 +243,10 @@ def test_websocket_reconnects_after_a_send_failure(ws_env):
     pub.publish({names[0]: "INSET"})
     assert pub._ws is None, "a failed send must drop the socket so the next cycle reconnects"
 
-    # with the transport healthy again, the next cycle reconnects and delivers
+    # The failed send fell through to a REST write, so INSET is already the
+    # published value; only a genuinely new label produces another message.
     ws.send = ws.sent.append
-    pub.publish({names[0]: "INSET"})
+    pub.publish({names[0]: "OBS"})
     assert pub._ws is not None
     assert len(ws.sent) == 1
 
@@ -252,3 +255,98 @@ def test_create_publisher_accepts_websocket_target(ws_env):
     names, _ws, session = ws_env
     pub = publish.WebSocketPublisher(PublishConfig(target="websocket"), names, session=session)
     assert pub.name == "websocket"
+
+def test_websocket_falls_back_to_rest_when_it_cannot_connect(monkeypatch):
+    """A dead socket must never mean dropped labels, nor a stall per cycle."""
+    names = [f"g1000/softkey/pfd/{i}" for i in range(1, 13)]
+    patched = []
+    session = SimpleNamespace(
+        get=lambda url, timeout=None: SimpleNamespace(
+            status_code=200,
+            json=lambda: {"data": [{"id": 1000 + i, "name": n} for i, n in enumerate(names)]},
+        ),
+        patch=lambda url, json=None, timeout=None: (
+            patched.append(url), SimpleNamespace(status_code=200)
+        )[1],
+        close=lambda: None,
+    )
+    attempts = []
+    module = types.ModuleType("websocket")
+
+    def _refuse(url, timeout=None):
+        attempts.append(url)
+        raise TimeoutError("timed out")
+
+    module.create_connection = _refuse
+    monkeypatch.setitem(sys.modules, "websocket", module)
+
+    pub = publish.WebSocketPublisher(
+        PublishConfig(target="websocket", retry_interval=60.0), names, session=session
+    )
+    for cycle in range(5):
+        pub.publish({n: f"L{cycle}{i}" for i, n in enumerate(names)})
+
+    assert len(attempts) == 1, "connect must back off, not retry every cycle"
+    assert len(patched) == 60, "labels must still be written over REST"
+
+
+def test_websocket_resumes_batching_once_the_socket_comes_back(monkeypatch):
+    names = [f"g1000/softkey/pfd/{i}" for i in range(1, 13)]
+    session = SimpleNamespace(
+        get=lambda url, timeout=None: SimpleNamespace(
+            status_code=200,
+            json=lambda: {"data": [{"id": 1000 + i, "name": n} for i, n in enumerate(names)]},
+        ),
+        patch=lambda url, json=None, timeout=None: SimpleNamespace(status_code=200),
+        close=lambda: None,
+    )
+    ws = _FakeWs()
+    state = {"up": False}
+    module = types.ModuleType("websocket")
+
+    def _maybe(url, timeout=None):
+        if not state["up"]:
+            raise TimeoutError("timed out")
+        return ws
+
+    module.create_connection = _maybe
+    monkeypatch.setitem(sys.modules, "websocket", module)
+
+    pub = publish.WebSocketPublisher(
+        PublishConfig(target="websocket", retry_interval=0.0), names, session=session
+    )
+    pub.publish({n: "A" for n in names})
+    assert pub._fell_back is True
+    assert ws.sent == []
+
+    state["up"] = True
+    pub.publish({n: "B" for n in names})
+    assert pub._fell_back is False
+    assert len(ws.sent) == 1, "one batched message once the socket is back"
+
+
+def test_websocket_negotiates_the_highest_advertised_api_version(monkeypatch):
+    names = ["g1000/softkey/pfd/1"]
+
+    def _get(url, timeout=None):
+        if url.endswith("/api/capabilities"):
+            return SimpleNamespace(
+                status_code=200, json=lambda: {"api": {"versions": ["v1", "v2", "v3"]}}
+            )
+        return SimpleNamespace(
+            status_code=200, json=lambda: {"data": [{"id": 1, "name": names[0]}]}
+        )
+
+    session = SimpleNamespace(get=_get, close=lambda: None)
+    ws = _FakeWs()
+    seen = []
+    module = types.ModuleType("websocket")
+    module.create_connection = lambda url, timeout=None: (seen.append(url), ws)[1]
+    monkeypatch.setitem(sys.modules, "websocket", module)
+
+    pub = publish.WebSocketPublisher(
+        PublishConfig(target="websocket", api_version="v1"), names, session=session
+    )
+    pub.publish({names[0]: "INSET"})
+
+    assert seen == ["ws://localhost:8086/api/v3"]
