@@ -267,6 +267,7 @@ class WebSocketPublisher(WebApiPublisher):
         self._connect_failures = 0
         self._next_ws_attempt = 0.0
         self._fell_back = False
+        self._host_rewritten = False
         super().__init__(config, dataref_names, session=session)
 
     def _negotiate_version(self) -> str:
@@ -299,6 +300,15 @@ class WebSocketPublisher(WebApiPublisher):
     def _ws_url(self) -> str:
         root = self.config.base_url.rstrip("/")
         root = root.replace("https://", "wss://").replace("http://", "ws://")
+        # X-Plane's web server binds only to 127.0.0.1. On Windows "localhost"
+        # usually resolves to ::1 first, where nothing is listening -- requests
+        # walks every resolved address so REST still finds the IPv4 socket, but
+        # a websocket connect can sit on ::1 until it times out. Use the literal.
+        if "//localhost" in root:
+            root = root.replace("//localhost", "//127.0.0.1")
+            if not self._host_rewritten:
+                self._host_rewritten = True
+                LOG.info("using 127.0.0.1 for the websocket (X-Plane binds IPv4 loopback only)")
         return f"{root}/api/{self._negotiate_version()}"
 
     def _fall_back(self, reason: str) -> None:

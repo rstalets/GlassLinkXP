@@ -349,4 +349,34 @@ def test_websocket_negotiates_the_highest_advertised_api_version(monkeypatch):
     )
     pub.publish({names[0]: "INSET"})
 
-    assert seen == ["ws://localhost:8086/api/v3"]
+    assert seen == ["ws://127.0.0.1:8086/api/v3"]  # localhost is rewritten; see the IPv4 test
+
+
+def test_websocket_uses_the_ipv4_literal_instead_of_localhost(monkeypatch):
+    """X-Plane binds 127.0.0.1 only; ::1 (which Windows prefers) just hangs."""
+    names = ["g1000/softkey/pfd/1"]
+
+    def _get(url, timeout=None):
+        if url.endswith("/api/capabilities"):
+            return SimpleNamespace(status_code=200, json=lambda: {"api": {"versions": ["v3"]}})
+        return SimpleNamespace(
+            status_code=200, json=lambda: {"data": [{"id": 1, "name": names[0]}]}
+        )
+
+    session = SimpleNamespace(get=_get, close=lambda: None)
+    ws = _FakeWs()
+    seen = []
+    module = types.ModuleType("websocket")
+    module.create_connection = lambda url, timeout=None: (seen.append(url), ws)[1]
+    monkeypatch.setitem(sys.modules, "websocket", module)
+
+    pub = publish.WebSocketPublisher(
+        PublishConfig(target="websocket", base_url="http://localhost:8086"),
+        names,
+        session=session,
+    )
+    pub.publish({names[0]: "INSET"})
+
+    assert seen == ["ws://127.0.0.1:8086/api/v3"]
+    # REST keeps whatever the user configured; only the websocket is rewritten.
+    assert pub.config.base_url == "http://localhost:8086"

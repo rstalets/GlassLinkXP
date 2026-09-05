@@ -120,6 +120,13 @@ def main() -> int:
         print("Nothing is listening. Is X-Plane running, and is the web server enabled?")
         return 1
 
+    if "localhost" in reachable and "127.0.0.1" in reachable:
+        pass
+    elif "127.0.0.1" in reachable and "localhost" not in reachable:
+        print("NOTE: 127.0.0.1 is reachable but 'localhost' is not.")
+        print("      X-Plane binds IPv4 loopback only; set publish.base_url to")
+        print("      http://127.0.0.1:8086 rather than http://localhost:8086.\n")
+
     print("WebSocket handshake (raw, so the real HTTP response is visible):")
     for host in reachable:
         for path in PATH_CANDIDATES:
