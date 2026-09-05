@@ -50,6 +50,11 @@ APTSIGNS
 OFF
 ON
 DCLTR
+# Declutter levels. Keys ignore punctuation, so DCLTR-1, "DCLTR 1" and DCLTR1
+# all match the same entry however the hyphen happens to read.
+DCLTR-1
+DCLTR-2
+DCLTR-3
 TRAFFIC
 TOPO
 TERRAIN
