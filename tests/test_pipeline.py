@@ -182,3 +182,59 @@ def test_apply_screen_leaves_a_confident_cell_alone():
     _pipeline(screens=ScreenLibrary([screen]))._apply_screen(results)
     assert results[0].text == "9"
     assert not results[0].by_screen
+
+
+def test_the_page_is_identified_once_per_strip_not_once_per_cell():
+    """Identification is a property of the strip, so it happens once.
+
+    Doing it per cell would be wasted work, and worse, would let different
+    cells on one strip be filled from different pages.
+    """
+    from g1000_softkey.screens import Screen, ScreenLibrary
+
+    screen = Screen(
+        name="xpdr-code", display="pfd",
+        match={9: "IDENT", 10: "BKSP", 11: "BACK"},
+        labels={1: "0", 2: "1", 3: "2", 4: "3", 5: "4", 6: "5", 7: "6", 8: "7"},
+    )
+
+    class Counting(ScreenLibrary):
+        def __init__(self, screens):
+            super().__init__(screens)
+            self.calls = 0
+
+        def identify(self, *args, **kwargs):
+            self.calls += 1
+            return super().identify(*args, **kwargs)
+
+    live = [
+        (0, "2", 54.0), (1, "1", 30.0), (2, "2", 96.0), (3, "8", 41.0),
+        (4, "4", 22.0), (5, "5", 96.0), (6, "5", 38.0), (7, "1", 29.0),
+        (8, "IDENT", 95.0), (9, "BKSP", 92.0), (10, "BACK", 95.0), (11, "", 0.0),
+    ]
+    results = [
+        CellResult(index=i, text=t, raw=t, confidence=c, match_score=1.0, blank=(t == ""))
+        for i, t, c in live
+    ]
+    library = Counting([screen])
+    _pipeline(screens=library)._apply_screen(results)
+
+    assert library.calls == 1, "one identification for the whole strip"
+    assert [r.text for r in results[:8]] == list("01234567")
+    assert sum(1 for r in results if r.by_screen) == 4
+
+
+def test_a_low_confidence_cell_already_matching_the_page_is_not_touched():
+    """Nothing to correct, so it is not counted as a replacement."""
+    from g1000_softkey.screens import Screen, ScreenLibrary
+
+    screen = Screen(name="x", display="pfd", match={9: "IDENT"}, labels={1: "0"})
+    results = [
+        CellResult(index=0, text="0", raw="0", confidence=25.0, match_score=1.0),
+        CellResult(index=8, text="IDENT", raw="IDENT", confidence=95.0, match_score=1.0),
+    ]
+    outcome = _pipeline(screens=ScreenLibrary([screen]))._apply_screen(results)
+
+    assert results[0].text == "0"
+    assert not results[0].by_screen
+    assert "nothing needed replacing" in outcome
