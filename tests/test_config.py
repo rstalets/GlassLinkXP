@@ -18,7 +18,7 @@ def test_example_config_loads():
     assert config.display("pfd").dataref_prefix == "g1000/softkey/pfd"
     assert config.display("pfd").dataref_names()[0] == "g1000/softkey/pfd/1"
     assert len(config.display("mfd").dataref_names()) == 12
-    assert config.loop_hz == 4.0
+    assert config.loop_hz == 12.0
     assert config.publish.field_width == 16
 
 
