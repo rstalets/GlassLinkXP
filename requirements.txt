@@ -11,10 +11,16 @@ requests>=2.31,<3         # verified with 2.33.1 (X-Plane Web API client)
 
 # --- OCR -------------------------------------------------------------------
 # tesserocr is the production path: a direct C++ binding, so the Tesseract API
-# object is created once and reused. It needs a Tesseract runtime; on Windows
-# use the prebuilt wheels (https://github.com/simonflueckiger/tesserocr-windows_build)
-# or conda-forge, and set TESSDATA_PREFIX to the tessdata directory.
-tesserocr>=2.6,<3         # verified with 2.11.0
+# object is created once and reused.
+#
+# On Windows there is NO wheel on PyPI (never has been), so pip compiles it and
+# needs Tesseract's development headers and .lib files -- which the UB Mannheim
+# installer does not ship. Run scripts/install-windows.ps1, which builds them
+# with vcpkg and sets the LIBPATH/INCLUDE that tesserocr's setup.py reads.
+# See the Windows setup section of README.md for the manual equivalent.
+#
+# Set TESSDATA_PREFIX to a directory containing eng.traineddata.
+tesserocr>=2.6,<3         # verified with 2.11.0; relax to >=2.5.2 for conda-forge win-64
 
 # pytesseract is the fallback adapter (shells out to tesseract.exe per call --
 # correct but roughly an order of magnitude slower). Only needed if tesserocr
@@ -24,6 +30,8 @@ pytesseract>=0.3.10,<0.4  # verified with 0.3.13
 # --- Windows only ----------------------------------------------------------
 # Windows Graphics Capture: captures occluded/background windows, which
 # BitBlt and PrintWindow cannot do for X-Plane's GPU-composited windows.
+# NB: capture.py was written against the 1.x API and has never been run.
+# 2.0 is a major bump -- if capture fails, try pinning to <2.
 windows-capture>=1.3 ; sys_platform == "win32"
 
 # --- tests -----------------------------------------------------------------

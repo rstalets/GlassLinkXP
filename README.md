@@ -39,21 +39,90 @@ tests/          offline tests over the whole pipeline
 
 ## Windows setup
 
-1. **Python 3.11 or 3.12**, 64-bit (`tomllib` needs >= 3.11).
-2. **Tesseract**. Install the UB Mannheim build
-   (<https://github.com/UB-Mannheim/tesseract/wiki>), let it add
-   `C:\Program Files\Tesseract-OCR` to `PATH`, and set
-   `TESSDATA_PREFIX=C:\Program Files\Tesseract-OCR\tessdata` (or point
-   `ocr.tessdata_path` at that directory in the config).
-3. **Python packages**:
+### The short version
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
+```
+
+That script does everything in this section. Read on only if you want to know
+what it is doing, or you would rather do it by hand.
+
+### Why `pip install tesserocr` fails on Windows
+
+**tesserocr has never published a Windows wheel** -- every release on PyPI is
+macOS/manylinux/musllinux only. So pip always falls back to the sdist and
+compiles, and the compile needs Tesseract's *development* files. The UB
+Mannheim installer ships only the runtime (`tesseract.exe` plus DLLs): no
+headers, no `.lib` import libraries.
+
+`PATH` is irrelevant to this. `tesserocr`'s `setup.py` reads two other
+environment variables:
+
+```python
+if sys.platform == "win32":
+    libpaths = os.getenv("LIBPATH", None)     # where the .lib files are
+    ...
+    includepaths = os.getenv("INCLUDE", None) # where the headers are
+```
+
+An unset `LIBPATH` is what produces `Tesseract library not found in LIBPATH: []`.
+
+Three further traps, all handled by the script:
+
+* `setup.py` keeps only `.lib` files whose **path contains the major+minor
+  digits** from `tesseract -v`, and rejects anything ending in `d.lib`.
+  Tesseract's CMake emits `tesseract{MAJOR}{MINOR}.lib`, so 5.5.x needs
+  `tesseract55.lib`; a generic `tesseract.lib` is silently skipped.
+* `pyproject.toml` has **no `[build-system]` table**, so Cython is declared
+  only through the legacy `setup_requires`. Under PEP 517 build isolation it is
+  absent and the build fails -- install the build deps yourself and pass
+  `--no-build-isolation`.
+* Since Python 3.8 `PATH` is not searched for extension-module dependencies, so
+  `tesseract55.dll` and `leptonica-*.dll` must sit beside the installed `.pyd`
+  (or be registered with `os.add_dll_directory`).
+
+### By hand
+
+1. **Visual Studio 2022 Build Tools** with the "Desktop development with C++"
+   workload.
+2. **Tesseract development files** via vcpkg (pulls in Leptonica):
    ```
-   pip install -r requirements.txt
+   git clone https://github.com/microsoft/vcpkg C:\vcpkg
+   C:\vcpkg\bootstrap-vcpkg.bat
+   C:\vcpkg\vcpkg install tesseract:x64-windows
    ```
-   `windows-capture` only installs on Windows; it is the Rust-backed Windows
-   Graphics Capture binding. If `tesserocr` refuses to build, install a
-   prebuilt wheel (tesserocr-windows_build releases / conda-forge) or fall
-   back with `engine = "pytesseract"` in `[ocr]` -- it is roughly an order of
-   magnitude slower per cell because it restarts Tesseract for every call.
+3. From an **"x64 Native Tools Command Prompt for VS 2022"**, *append* to the
+   toolchain's variables -- replacing `INCLUDE` loses `stdio.h`:
+   ```
+   set INCLUDE=%INCLUDE%;C:\vcpkg\installed\x64-windows\include
+   set LIB=%LIB%;C:\vcpkg\installed\x64-windows\lib
+   set LIBPATH=%LIBPATH%;C:\vcpkg\installed\x64-windows\lib
+   ```
+4. **Python packages** (uv or pip; the flags matter more than the tool):
+   ```
+   uv venv --python 3.12
+   uv pip install setuptools wheel "Cython>=3.0.0,<3.2.0" cysignals
+   uv pip install --no-build-isolation tesserocr
+   uv pip install -r requirements.txt
+   ```
+5. Copy `C:\vcpkg\installed\x64-windows\bin\*.dll` next to the installed
+   `tesserocr` package, and set `TESSDATA_PREFIX` to a directory holding
+   `eng.traineddata` (vcpkg does not install language data; the UB Mannheim
+   `tessdata` folder works).
+
+### If you would rather not build anything
+
+`conda install -c conda-forge tesserocr` ships the binding plus Tesseract and
+Leptonica prebuilt. The catch: conda-forge's **win-64 builds stop at tesserocr
+2.5.2, Python 3.8-3.11**. That is fine for this code -- it only uses
+`PyTessBaseAPI`, `SetVariable`, `SetImage`, `GetUTF8Text`, `MeanTextConf` and
+`End`, all present since 2.x -- but loosen the `tesserocr>=2.6` pin in
+`requirements.txt` first.
+
+Last resort: `engine = "pytesseract"` in `[ocr]`, which works with a plain UB
+Mannheim install but restarts Tesseract for every cell (measured ~24x slower
+per frame; same accuracy).
 4. **XPPython3 plugin**: copy `xppython3/PI_G1000SoftkeyLabels.py` into
    `<X-Plane 12>/Resources/plugins/PythonPlugins/` and restart X-Plane. It
    creates 24 writable 16-byte datarefs and does nothing else:
