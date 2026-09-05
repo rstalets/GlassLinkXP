@@ -17,6 +17,10 @@ X-Plane pop-out PFD/MFD windows (may be occluded)
     -> PilotsDeck reads g1000/softkey/pfd/1:s64 and .../1/bg
 ```
 
+There is a window over all of it -- `.\g1000-gui`, or `g1000 gui` -- which is
+where to start if you would rather not type any of the commands below. It runs
+the same commands and shows you what they said; see [The window](#the-window).
+
 See `PLAN.md` for the design rationale. **This is a POC**: it is verified
 offline against synthetic frames (see *Not verified here* at the bottom) and
 has not been run against a live X-Plane.
@@ -25,8 +29,9 @@ has not been run against a live X-Plane.
 
 ```
 g1000_softkey/
-  main.py       CLI: run | list-windows | calibrate | dump-cells | dump-colors
-                     | bench | synth
+  main.py       CLI: run | gui | list-windows | calibrate | dump-cells
+                     | dump-colors | bench | screen-template | learn | tune | synth
+  gui/          the window: one tab per command, over the same CLI (see docs/GUI.md)
   capture.py    WGC backend (Windows) + PNG backend (offline dev/test)
   strip.py      strip crop, 12-cell split, per-cell preprocessing, auto-detect
   ocr.py        persistent Tesseract API, char whitelist, vocabulary snapping
@@ -41,6 +46,10 @@ scripts/
   install-windows.ps1        daemon: vcpkg + MSVC + uv venv + tesserocr wheel
   install-xplane-plugin.ps1  sim: XPPython3 + the dataref plugin, and -VerifyOnly
 g1000.cmd       run any command without activating the venv
+g1000-gui.cmd   open the window (double-click it, or make a shortcut)
+docs/
+  PIPELINE.md   flowcharts of the daemon loop and the per-frame path
+  GUI.md        how the window is put together, and what it is coupled to
 wheels/         the compiled tesserocr wheel (git-ignored, but keep it)
 tests/          offline tests over the whole pipeline
 ```
@@ -185,7 +194,41 @@ X-Plane 12.1.1+ serves the REST API on `http://localhost:8086`. Check
 `http://localhost:8086/api/v1/datarefs` in a browser; if it does not answer,
 enable the web server in Settings -> Network.
 
+## The window
+
+```
+.\g1000-gui
+```
+
+or `g1000 gui`, or `python -m g1000_softkey.gui`. Double-clicking
+`g1000-gui.cmd` works too, and it is a reasonable thing to make a desktop
+shortcut to.
+
+Everything in this README is in there: a walkthrough of the six setup steps, a
+window picker, the calibration overlay with the twelve boxes drawn on the
+captured frame, every cell as Tesseract receives it, the colour measurements,
+a form for every setting with the reasoning beside it, and Start/Stop with a
+live board of the twelve softkeys per display.
+
+It runs no part of the pipeline itself: every button spawns the same CLI and
+shows what it said, with the exact command printed above the output so you can
+paste it into a shell or into a bug report. `docs/GUI.md` has the details and
+the reasons.
+
+If you have no X-Plane to hand, press **Make test frames and use them** on the
+first tab. Every tab then works from saved pictures, and you can see the whole
+thing run before installing anything into the simulator.
+
+The window is plain Tk, which is part of Python's standard library -- there is
+no extra dependency to install. A Python built without Tk support cannot open
+it; `install-windows.ps1` checks for that and says so, and the CLI does
+everything the window does regardless.
+
 ## Calibration workflow
+
+> **All of this is in the GUI**, one tab per step, with the pictures shown in
+> the window instead of written to a folder for you to go and find. This
+> section is the command-line equivalent.
 
 > **Use `g1000.cmd`.** It calls the venv interpreter directly, so there is
 > nothing to activate and PowerShell's execution policy never enters into it
@@ -366,6 +409,9 @@ display).
 | Labels are garbage or empty | Geometry. Run `dump-cells` and look at the `_prep.png` images. |
 | One cell is always wrong | Missing entry in `labels.txt`, or a two-line label (see limitations). |
 | Blank cells produce short nonsense strings | The crop includes something bright above or below the strip; tighten `y`/`h`, or raise `ocr.blank_ink_ratio`. |
+| `g1000-gui.cmd` says this Python has no Tk support | Tk is part of the standard library but a separate build-time component. Reinstall with a Python that includes it -- the python.org installer does. |
+| The GUI opens but a tab reports `exit code 2` | The command it ran failed, and its output is in the pane below the buttons with the exact command above it. Everything the window does can be run by hand from there. |
+| The softkey board on the Run tab stays empty | The daemon only logs a row when something changes, so the board fills in on the first frame and then only on a change. If it never fills in, the log will say `no frames from ...`. |
 
 Run any command with `-v` for debug logging (per-cell raw OCR strings,
 confidences and match scores).
@@ -373,7 +419,9 @@ confidences and match scores).
 ## How it works
 
 `docs/PIPELINE.md` has flowcharts of the daemon loop and of what happens to a
-single frame, plus a key for reading the `-v` output.
+single frame, plus a key for reading the `-v` output. `docs/GUI.md` covers the
+window: what it spawns, and the three places it reads something the daemon
+wrote.
 
 ## Latency
 
@@ -426,7 +474,7 @@ there really are.
 
 On Linux/CPython 3.11, Tesseract 5.3.4 (system) with `tesserocr` 2.11:
 
-* 76 tests pass (`python -m pytest -q`), including the full frame -> labels
+* The tests pass (`python -m pytest -q`), including the full frame -> labels
   pipeline over 5 synthetic softkey menus (60 cells: 49 labels + 11 blanks),
   all read exactly, blanks included, with the highlighted cell read correctly.
 * `bench --image frames/pfd_menu.png -n 50` on this container (1280x800
@@ -447,6 +495,33 @@ On Linux/CPython 3.11, Tesseract 5.3.4 (system) with `tesserocr` 2.11:
 * Vocabulary snapping fixed 1 of 49 labels in the offline corpus
   (`TMRIREF` -> `TMR/REF`), and is unit-tested against the usual confusions
   (`lNSET`, `DCLTP`, `0BS`, `STDBARO`).
+
+### The GUI, offline
+
+On the same container, with Tk 8.6 under Xvfb and the synthetic frames as the
+frame source, the window was driven end to end and every step did what it
+says:
+
+* Every tab builds, and the whole window was clicked through.
+* **Start here** wrote the synthetic frames and pointed the frame source at
+  them; **Run** started the daemon with the console publisher and the softkey
+  board filled in, with the selected cell drawn white; **Stop** ended it
+  cleanly (exit code 0, through the daemon's own SIGINT handler, not a kill).
+* **Calibrate** produced the overlay picture and read the auto-detected
+  geometry back out of the output; applying it and saving wrote the numbers
+  into `config.toml` and they loaded back.
+* **Cells** showed all 24 cell pictures; **Colours** parsed 24 measurements and
+  drew each row in the colour it was classified as; **Pages** captured a
+  `[[screen]]` block; **Tools** ran the benchmark.
+* **Find windows** failed as it must on Linux, and the tab showed the command
+  that failed and the daemon's own explanation of why.
+* The tests cover this without a display too: 160 of them, of which the 34 that
+  need Tk skip themselves when there is no display (`379 passed` with one,
+  `345 passed, 34 skipped` without). Three of them are there to
+  stop the GUI drifting from the daemon -- every argv the GUI can build is
+  parsed by `main.build_parser()`, the softkey board's parser is fed
+  `main._format_row()`'s own output, and the settings form is checked against
+  the config dataclasses field by field.
 
 ## Not verified here
 
@@ -487,3 +562,19 @@ The following code paths are written from the documented APIs but have
   written a bare number to one.
 * **End-to-end latency to a Stream Deck face** and the effect on sim frame
   rate (success criteria 2 and 4 in PLAN.md).
+* **The GUI on Windows.** It is plain Tk and was exercised under Xvfb on
+  Linux, but nothing here has opened it on Windows. Three things in it are
+  Windows-specific and have never run: `pythonw.exe` launching it without a
+  console (`g1000-gui.cmd`), `CREATE_NEW_PROCESS_GROUP` plus
+  `CTRL_BREAK_EVENT` as the way Stop reaches the daemon -- and with it the
+  `SIGBREAK` handler added to `cmd_run` -- and `os.startfile` behind the
+  "Open folder" buttons. If Stop turns out not to be graceful there, the
+  escalation behind it (terminate, then kill) still stops the daemon.
+* **That Tk is present in the venv the installer builds.** `uv` downloads a
+  python-build-standalone CPython, whose Windows builds do ship the tcl/tk
+  files; the reports of tkinter being missing from uv-managed Pythons are
+  macOS and Linux ones. It has not been confirmed on Windows here, so
+  `install-windows.ps1` checks for Tk and warns rather than assuming, and
+  `g1000-gui.cmd` checks again before launching `pythonw.exe` -- a `pythonw`
+  that cannot import tkinter would otherwise fail with no window and no
+  message at all.

@@ -155,3 +155,27 @@ def test_dump_colors_prints_the_measurements(frames, tmp_path, capsys):
     yellow = next(r for r in records if r["display"] == "pfd" and r["cell"] == 5)
     assert yellow["name"] == "yellow" and yellow["background"] == YELLOW
     assert len(yellow["bgr"]) == 3 and len(yellow["hsv"]) == 3
+
+
+def test_gui_opens_the_window(monkeypatch):
+    """The subcommand exists and hands the config path to the GUI."""
+    seen = {}
+
+    def fake_launch(config_path=None):
+        seen["path"] = config_path
+        return 0
+
+    monkeypatch.setattr("g1000_softkey.gui.launch", fake_launch)
+    assert main(["-c", "some/config.toml", "gui"]) == 0
+    assert seen["path"] == "some/config.toml"
+
+
+def test_gui_still_opens_when_the_config_file_is_not_there_yet(monkeypatch, tmp_path):
+    """Making that file is one of the things the GUI is for, so a missing one
+    is not the error it is for every other subcommand."""
+    monkeypatch.setattr("g1000_softkey.gui.launch", lambda config_path=None: 0)
+    assert main(["-c", str(tmp_path / "not-yet.toml"), "gui"]) == 0
+
+
+def test_every_other_command_still_refuses_a_missing_config(tmp_path):
+    assert main(["-c", str(tmp_path / "nope.toml"), "synth", "--out", str(tmp_path)]) == 2

@@ -493,6 +493,21 @@ if not got:
     if ($checkExit -ne 0) { Fail 'tesserocr imported or ran incorrectly. See the error above.' }
     Write-Ok 'tesserocr works'
 
+    # The GUI is Tk, which is part of the standard library but is a separate
+    # build-time component -- the python.org installers and uv's downloaded
+    # builds both include it, but a Python that was built without it fails
+    # only when the window is asked for. Checking here means it is found now,
+    # while the installer is on screen, rather than on a double-click that
+    # appears to do nothing.
+    & $venvPython -c "import tkinter" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn2 'this Python has no Tk support, so g1000-gui.cmd will not open.'
+        Write-Warn2 'Everything works from the command line regardless; for the window,'
+        Write-Warn2 'reinstall with a Python that includes Tk (the python.org installer does).'
+    } else {
+        Write-Ok 'Tk found -- the graphical interface will open'
+    }
+
     Write-Step 'Running the offline test suite'
     & $venvPython -m pytest -q
     if ($LASTEXITCODE -ne 0) { Write-Warn2 'some tests failed -- see output above' } else { Write-Ok 'tests passed' }
@@ -525,13 +540,17 @@ Write-Host @"
 ============================================================
  Done. To use it:
 
+   .\g1000-gui                     <- the window; start here
+
+ or from the command line:
+
    .\g1000 list-windows
    .\g1000 calibrate --display pfd
    .\g1000 run
 
- g1000.cmd calls the venv interpreter directly, so there is no
- venv to activate and no execution policy to argue with. (If you
- prefer, .venv\Scripts\Activate.ps1 still works.)
+ Both .cmd files call the venv interpreter directly, so there is
+ no venv to activate and no execution policy to argue with. (If
+ you prefer, .venv\Scripts\Activate.ps1 still works.)
 
  The compiled tesserocr is cached at:
    $(if ($cached) { Join-Path 'wheels' $cached[0].Name } else { 'wheels\ (not built)' })

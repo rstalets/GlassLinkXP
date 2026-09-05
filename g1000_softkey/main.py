@@ -1,4 +1,5 @@
-"""CLI entry point: run | list-windows | calibrate | dump-cells | dump-colors | bench | synth."""
+"""CLI entry point: run | gui | list-windows | calibrate | dump-cells | dump-colors
+| bench | screen-template | learn | tune | synth."""
 
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ import numpy as np
 from . import synth
 from .capture import CaptureError, FrameSource, ImageCapture, list_windows, sources_for
 from .color import BLACK, background_name, measure_cell
-from .config import AppConfig, ConfigError, DisplayConfig, load_config
+from .config import AppConfig, ConfigError, DisplayConfig, default_config, load_config
 from .ocr import OcrUnavailable, SoftkeyReader
 from .pipeline import DisplayPipeline, DisplayResult
 from .publish import Value, create_publisher
@@ -312,8 +313,15 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
         stopping = True
 
     signal.signal(signal.SIGINT, _stop)
-    if hasattr(signal, "SIGTERM"):
-        signal.signal(signal.SIGTERM, _stop)
+    # SIGBREAK is the Windows one, and it is here for the GUI: a child started
+    # in its own process group ignores Ctrl-C by default, so CTRL_BREAK_EVENT
+    # is the only console signal that can be aimed at this process alone. That
+    # is what the Stop button sends, and handling it here is what makes Stop a
+    # clean shutdown -- through the `finally` below, closing the publisher, the
+    # Tesseract API and the capture sources -- rather than a kill.
+    for name in ("SIGTERM", "SIGBREAK"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), _stop)
 
     period = 1.0 / config.loop_hz
     previous: dict[str, tuple[list[str], list[int]]] = {}
@@ -604,6 +612,19 @@ def cmd_screen_template(args: argparse.Namespace, config: AppConfig) -> int:
     return 0
 
 
+def cmd_gui(args: argparse.Namespace, config: AppConfig) -> int:
+    """Open the graphical interface.
+
+    The GUI does not use the AppConfig loaded here: it edits the config *file*
+    and spawns this same CLI for everything it does, so what it needs is the
+    path. It is the one command that can usefully run without a config file at
+    all -- making one is among the things it is for.
+    """
+    from .gui import launch
+
+    return launch(getattr(args, "config", None))
+
+
 def build_parser() -> argparse.ArgumentParser:
     # -c and -v live on a shared parent so they are accepted both before and
     # after the subcommand: `main -v run` and `main run -v` are equally natural
@@ -643,6 +664,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--publisher", choices=["websocket", "webapi", "file", "console"],
                      help="override publish.target from the config")
     run.set_defaults(func=cmd_run)
+
+    gui = sub.add_parser(
+        "gui", help="open the graphical interface (start here if you are not sure)",
+        parents=[common],
+    )
+    # Alone among the subcommands, this one still runs when -c names a file
+    # that is not there: creating that file is one of the things it does.
+    gui.set_defaults(func=cmd_gui, tolerate_missing_config=True)
 
     windows = sub.add_parser("list-windows", help="list top-level windows (Windows only)", parents=[common])
     windows.add_argument("--filter", help="only show titles containing this substring")
@@ -712,7 +741,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     _setup_logging(getattr(args, "verbose", False))
     try:
-        config = load_config(getattr(args, "config", None))
+        try:
+            config = load_config(getattr(args, "config", None))
+        except ConfigError:
+            if not getattr(args, "tolerate_missing_config", False):
+                raise
+            config = default_config()
         return args.func(args, config)
     except (ConfigError, CaptureError, OcrUnavailable, ValueError) as exc:
         LOG.error("%s", exc)

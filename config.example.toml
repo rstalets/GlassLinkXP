@@ -1,5 +1,11 @@
 # G1000 softkey OCR daemon -- copy to config.toml and edit.
 # Run with:  python -m g1000_softkey.main -c config.toml run
+#
+# Every setting below is also a field in the GUI (`g1000 gui`, Settings tab),
+# with this same explanation beside it. Note that saving from that form
+# rewrites the whole file and does not keep hand-written comments -- it saves
+# the previous version as config.toml.bak, and its Raw file tab writes your
+# own text through unchanged if you keep notes in here.
 
 [app]
 # Capture/OCR rate. 4 Hz is plenty: softkeys change only when you press one,

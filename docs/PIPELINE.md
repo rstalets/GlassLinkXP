@@ -3,6 +3,9 @@
 Two views: what happens once at startup and on every cycle, and what happens to
 a single captured frame.
 
+For the window that drives all of this -- what it spawns, and the places it
+reads what the daemon printed -- see [GUI.md](GUI.md).
+
 > **On naming.** What the config and these diagrams call a *page* or *screen* --
 > `screens.toml`, `screen_confidence` -- is the softkey-page signature idea:
 > the labels that read cleanly identify which page is showing, and the page

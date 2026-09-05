@@ -10,6 +10,8 @@ rem
 rem    g1000 list-windows
 rem    g1000 calibrate --display pfd
 rem    g1000 run
+rem
+rem  For the window over all of it, use g1000-gui.cmd (or `g1000 gui`).
 rem ---------------------------------------------------------------------------
 setlocal
 set "PY=%~dp0.venv\Scripts\python.exe"
