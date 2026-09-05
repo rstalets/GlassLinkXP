@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import logging
 import signal
 import statistics
@@ -300,6 +301,92 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
 # ---------------------------------------------------------------------------
 
 
+def cmd_tune(args: argparse.Namespace, config: AppConfig) -> int:
+    """Search preprocessing settings against a real cell image.
+
+    Every parameter here has been guessed at least once from a description of
+    the pixels rather than the pixels themselves, and the guesses have been
+    wrong more often than right: the glyphs are small, the font is not one we
+    can reproduce, and what reopens a counter on one capture rings on another.
+    This runs the search where the real image is.
+
+    Feed it a cell that reads wrongly and say what it should say:
+
+        g1000 tune --image cells/pfd_01_raw.png --expect 0
+    """
+    import cv2
+
+    from .ocr import LabelVocabulary, TesserocrEngine, normalise
+    from .strip import preprocess_cell
+
+    cell = cv2.imread(args.image, cv2.IMREAD_UNCHANGED)
+    if cell is None:
+        LOG.error("could not read %s", args.image)
+        return 2
+    expected = args.expect.strip().upper()
+    LOG.info("tuning %s (%dx%d) against %r", args.image, cell.shape[1], cell.shape[0], expected)
+
+    vocabulary = LabelVocabulary.from_file(config.ocr.labels_file, config.ocr.fuzzy_cutoff)
+    upscales = (3.0, 4.0, 6.0, 8.0)
+    amounts = (0.0, 0.3, 0.5, 0.8, 1.2, 1.6)
+    radii = (0.8, 1.0, 1.4)
+    psms = (7, 8, 10, 13)
+    methods = ("otsu", "adaptive")
+
+    engines = {}
+    for psm in psms:
+        try:
+            engines[psm] = TesserocrEngine(replace(config.ocr, psm=psm))
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("psm %d unavailable: %s", psm, exc)
+
+    hits, tried = [], 0
+    for psm, engine in engines.items():
+        for method in methods:
+            for upscale in upscales:
+                for amount in amounts:
+                    for radius in (radii if amount else (1.0,)):
+                        try:
+                            image = preprocess_cell(
+                                cell, upscale=upscale, method=method,
+                                sharpen_amount=amount, sharpen_radius=radius,
+                            )
+                            text, confidence = engine.recognize(image)
+                        except Exception:  # noqa: BLE001 - a bad combination is just a miss
+                            continue
+                        tried += 1
+                        snapped, _ = vocabulary.snap(normalise(text, config.ocr.whitelist))
+                        if snapped == expected:
+                            hits.append((confidence, psm, method, upscale, amount, radius))
+    for engine in engines.values():
+        engine.close()
+
+    print(f"\n  tried {tried} combinations, {len(hits)} produced {expected!r}\n")
+    if not hits:
+        print("  Nothing read it. The glyph is probably too small to recover by filtering:")
+        print("  make the pop-out window larger so the strip lands on more pixels, then")
+        print("  re-run calibrate and try again.\n")
+        return 1
+
+    hits.sort(reverse=True)
+    print(f"  {'conf':>5} {'psm':>4} {'method':>9} {'upscale':>8} {'sharpen':>16}")
+    for confidence, psm, method, upscale, amount, radius in hits[:10]:
+        sharpen = "off" if not amount else f"{amount} / {radius}"
+        print(f"  {confidence:>5.0f} {psm:>4} {method:>9} {upscale:>8} {sharpen:>16}")
+
+    best = hits[0]
+    print("\n  Add to config.toml under [ocr]:\n")
+    print(f"  psm = {best[1]}")
+    print(f'  threshold = "{best[2]}"')
+    print(f"  upscale = {best[3]}")
+    if best[4]:
+        print(f"  sharpen_ladder = [[0.0, 0.0], [{best[4]}, {best[5]}]]")
+    else:
+        print("  sharpen_ladder = [[0.0, 0.0]]")
+    print()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     # -c and -v live on a shared parent so they are accepted both before and
     # after the subcommand: `main -v run` and `main run -v` are equally natural
@@ -358,6 +445,14 @@ def build_parser() -> argparse.ArgumentParser:
     add_image(bench)
     bench.add_argument("-n", "--iterations", type=int, default=50)
     bench.set_defaults(func=cmd_bench)
+
+    tune = sub.add_parser(
+        "tune", help="search preprocessing settings against one real cell image",
+        parents=[common],
+    )
+    tune.add_argument("--image", required=True, help="a *_raw.png written by dump-cells")
+    tune.add_argument("--expect", required=True, help="what that cell should read, e.g. 0")
+    tune.set_defaults(func=cmd_tune)
 
     synth_cmd = sub.add_parser("synth", help="write synthetic softkey frames for offline testing", parents=[common])
     synth_cmd.add_argument("--out", default="frames", help="output directory")
