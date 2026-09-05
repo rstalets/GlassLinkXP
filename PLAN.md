@@ -28,7 +28,7 @@ X-Plane pop-out PFD/MFD windows (backgrounded)
         │  X-Plane Web API (REST, base64) PATCH
         ▼
    byte-array datarefs created by a tiny XPPython3 plugin
-        │  PilotsDeck reads `g1000/softkey/pfd/1:s16`
+        │  PilotsDeck reads `g1000/softkey/pfd/1:s64`
         ▼
    Stream Deck button face
 ```
@@ -68,12 +68,12 @@ g1000_softkey/
   publish.py         X-Plane Web API client (base64 PATCH) + JSON-file fallback
   config.example.toml
   labels.txt
-xppython3/PI_G1000SoftkeyLabels.py   creates the 24 datarefs
+xppython3/PI_G1000SoftkeyLabels.py   creates the 48 datarefs (24 labels + 24 colours)
 tests/                               offline pipeline tests on synthetic strips
 ```
 
 Dataref names: `g1000/softkey/pfd/1..12`, `g1000/softkey/mfd/1..12` (16-byte each).
-PilotsDeck address: `g1000/softkey/pfd/1:s16`.
+PilotsDeck address: `g1000/softkey/pfd/1:s64`.
 
 ## Calibration is the real risk
 

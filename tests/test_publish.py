@@ -16,6 +16,7 @@ from g1000_softkey.publish import (
     default_json_path,
     encode_field,
     encode_field_b64,
+    encode_value,
 )
 
 NAMES = [f"g1000/softkey/pfd/{i}" for i in range(1, 13)]
@@ -43,7 +44,7 @@ def test_file_publisher_writes_atomically(tmp_path):
     publisher.publish({NAMES[0]: "INSET", NAMES[1]: ""})
     payload = json.loads(target.read_text())
     assert payload["labels"][NAMES[0]] == "INSET"
-    assert payload["version"] == 1
+    assert payload["version"] == 2
     assert not list(tmp_path.glob("*.tmp"))
 
     before = target.stat().st_mtime_ns
@@ -100,7 +101,7 @@ def test_webapi_resolves_ids_and_patches_base64():
     publisher.publish({NAMES[0]: "INSET"})
     url, body = session.patches[0]
     assert url.endswith("/api/v1/datarefs/100/value")
-    assert base64.b64decode(body["data"]) == encode_field("INSET", 16)
+    assert base64.b64decode(body["data"]) == encode_field("INSET", PublishConfig().field_width)
 
     publisher.publish({NAMES[0]: "INSET"})  # unchanged -> no traffic
     assert len(session.patches) == 1
@@ -170,6 +171,20 @@ class _FakeWs:
 def ws_env(monkeypatch):
     """A stubbed websocket module plus a REST session that resolves ids."""
     names = [f"g1000/softkey/pfd/{i}" for i in range(1, 13)]
+    return _ws_env(monkeypatch, names)
+
+
+@pytest.fixture
+def ws_env_with_colors(monkeypatch):
+    """The same, with the /bg int datarefs interleaved as the daemon sends them."""
+    names = []
+    for i in range(1, 13):
+        names.append(f"g1000/softkey/pfd/{i}")
+        names.append(f"g1000/softkey/pfd/{i}/bg")
+    return _ws_env(monkeypatch, names)
+
+
+def _ws_env(monkeypatch, names):
     ws = _FakeWs()
     module = types.ModuleType("websocket")
     module.create_connection = lambda url, timeout=None: ws
@@ -380,3 +395,103 @@ def test_websocket_uses_the_ipv4_literal_instead_of_localhost(monkeypatch):
     assert seen == ["ws://127.0.0.1:8086/api/v3"]
     # REST keeps whatever the user configured; only the websocket is rewritten.
     assert pub.config.base_url == "http://localhost:8086"
+
+
+# ---------------------------------------------------------------------------
+# Numeric datarefs (the /bg background colour), across all four publishers
+# ---------------------------------------------------------------------------
+
+BG_NAMES = [f"{name}/bg" for name in NAMES]
+
+
+def test_encode_value_splits_strings_from_numbers():
+    """X-Plane types the dataref, so the Python type is the whole signal:
+    a Data dataref takes base64, an Int dataref takes a bare number."""
+    assert encode_value("PFD", 16) == encode_field_b64("PFD", 16)
+    assert encode_value(2) == 2
+    assert encode_value(0) == 0  # not falsy-dropped, and not "0"
+    assert isinstance(encode_value(3), int)
+
+
+def test_file_publisher_separates_labels_from_numbers(tmp_path):
+    target = tmp_path / "labels.json"
+    publisher = FilePublisher(PublishConfig(target="file", json_path=str(target)))
+    publisher.publish({NAMES[0]: "INSET", BG_NAMES[0]: 1})
+    payload = json.loads(target.read_text())
+    assert payload["labels"] == {NAMES[0]: "INSET"}
+    assert payload["numbers"] == {BG_NAMES[0]: 1}
+
+    before = target.stat().st_mtime_ns
+    publisher.publish({NAMES[0]: "INSET", BG_NAMES[0]: 1})
+    assert target.stat().st_mtime_ns == before, "unchanged -> no rewrite"
+
+    # The colour changes while the label does not: still a write.
+    publisher.publish({NAMES[0]: "INSET", BG_NAMES[0]: 2})
+    assert json.loads(target.read_text())["numbers"][BG_NAMES[0]] == 2
+    publisher.close()
+
+
+def test_webapi_patches_a_number_not_base64():
+    session = FakeSession(ids={NAMES[0]: 100, BG_NAMES[0]: 200})
+    publisher = WebApiPublisher(PublishConfig(), [NAMES[0], BG_NAMES[0]], session=session)
+    publisher.publish({NAMES[0]: "INSET", BG_NAMES[0]: 3})
+    bodies = {url.rsplit("/", 2)[-2]: body for url, body in session.patches}
+    assert base64.b64decode(bodies["100"]["data"]) == encode_field("INSET", 64)
+    assert bodies["200"] == {"data": 3}, "an Int dataref is written as a bare number"
+
+
+def test_webapi_republishes_a_colour_change_with_an_unchanged_label():
+    session = FakeSession(ids={NAMES[0]: 100, BG_NAMES[0]: 200})
+    publisher = WebApiPublisher(PublishConfig(), [NAMES[0], BG_NAMES[0]], session=session)
+    publisher.publish({NAMES[0]: "STD BARO", BG_NAMES[0]: 0})
+    assert len(session.patches) == 2
+    publisher.publish({NAMES[0]: "STD BARO", BG_NAMES[0]: 1})
+    assert len(session.patches) == 3
+    assert session.patches[-1][1] == {"data": 1}
+
+
+def test_console_publisher_logs_numbers(caplog):
+    import logging
+
+    caplog.set_level(logging.INFO)
+    publisher = ConsolePublisher()
+    publisher.publish({NAMES[0]: "INSET", BG_NAMES[0]: 2})
+    publisher.publish({NAMES[0]: "INSET", BG_NAMES[0]: 2})
+    assert caplog.text.count("INSET") == 1
+    assert BG_NAMES[0] in caplog.text
+
+
+def test_websocket_batches_labels_and_colours_into_one_message(ws_env_with_colors):
+    """One frame is one message whether or not it carries numbers, and each
+    dataref is encoded for its own type inside that message."""
+    names, ws, session = ws_env_with_colors
+    pub = publish.WebSocketPublisher(PublishConfig(target="websocket"), names, session=session)
+
+    values = {}
+    for index, name in enumerate(names):
+        values[name] = 1 if name.endswith("/bg") else f"KEY{index}"
+    pub.publish(values)
+
+    assert len(ws.sent) == 1
+    datarefs = json.loads(ws.sent[0])["params"]["datarefs"]
+    assert len(datarefs) == 24
+    labels = [d for d in datarefs if isinstance(d["value"], str)]
+    numbers = [d for d in datarefs if not isinstance(d["value"], str)]
+    assert len(labels) == 12 and len(numbers) == 12
+    assert base64.b64decode(labels[0]["value"]).rstrip(b"\x00").decode() == "KEY0"
+    assert numbers[0]["value"] == 1
+
+
+def test_websocket_sends_a_colour_change_with_an_unchanged_label(ws_env_with_colors):
+    names, ws, session = ws_env_with_colors
+    pub = publish.WebSocketPublisher(PublishConfig(target="websocket"), names, session=session)
+    values = {n: (0 if n.endswith("/bg") else "PFD") for n in names}
+    pub.publish(values)
+    ws.sent.clear()
+
+    values["g1000/softkey/pfd/3/bg"] = 1  # softkey 3 became selected
+    pub.publish(values)
+
+    datarefs = json.loads(ws.sent[0])["params"]["datarefs"]
+    assert len(datarefs) == 1
+    assert datarefs[0]["value"] == 1

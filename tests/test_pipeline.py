@@ -3,7 +3,8 @@
 import pytest
 
 from g1000_softkey import synth
-from g1000_softkey.config import AppConfig, DisplayConfig, StripGeometry
+from g1000_softkey.color import BLACK, RED, WHITE, YELLOW
+from g1000_softkey.config import AppConfig, ColorConfig, DisplayConfig, StripGeometry
 from g1000_softkey.ocr import CellResult
 from g1000_softkey.pipeline import DisplayPipeline
 from g1000_softkey.strip import auto_detect_strip
@@ -11,9 +12,12 @@ from g1000_softkey.strip import auto_detect_strip
 MENUS = sorted(synth.MENUS)
 
 
-def make_pipeline(reader, config, geometry=None, gating=True):
+def make_pipeline(reader, config, geometry=None, gating=True, color=None):
     display = DisplayConfig(key="pfd", geometry=geometry or StripGeometry())
-    app = AppConfig(displays=(display,), ocr=config.ocr, change_gating=gating)
+    app = AppConfig(
+        displays=(display,), ocr=config.ocr, change_gating=gating,
+        color=color if color is not None else ColorConfig(),
+    )
     return DisplayPipeline(display, reader, app)
 
 
@@ -64,7 +68,9 @@ def test_gating_can_be_switched_off(reader, config):
 def test_timings_are_reported(reader, config):
     pipeline = make_pipeline(reader, config)
     result = pipeline.process(synth.render_menu("mfd_top"))
-    assert set(result.timings) == {"split_ms", "gate_ms", "preprocess_ms", "ocr_ms", "screen_ms"}
+    assert set(result.timings) == {
+        "split_ms", "gate_ms", "color_ms", "preprocess_ms", "ocr_ms", "screen_ms",
+    }
     assert result.timings["ocr_ms"] > 0
 
 
@@ -351,3 +357,121 @@ def test_a_changed_cell_brings_page_lookup_back():
         assert changed.ocr_calls > 0
     finally:
         reader.close()
+
+
+# ---------------------------------------------------------------------------
+# background colour
+# ---------------------------------------------------------------------------
+
+
+def test_backgrounds_are_reported_per_cell(reader, config):
+    pipeline = make_pipeline(reader, config)
+    result = pipeline.process(synth.render_menu("alerts"))
+    assert result.backgrounds[4] == YELLOW
+    assert result.backgrounds[5] == RED
+    assert result.backgrounds[8] == WHITE
+    assert result.backgrounds[0] == BLACK
+    assert [c.background for c in result.cells] == result.backgrounds
+
+
+def test_a_background_change_alone_is_still_seen_through_the_gate(reader, config):
+    """The case this feature is most likely to get wrong.
+
+    A softkey becoming selected changes the cell's background and nothing
+    else -- the label is identical, character for character. Colour is
+    therefore measured outside the change gate, so this must hold whether or
+    not the gate decides the cell moved.
+    """
+    labels = list(synth.MENUS["pfd_top"])
+    pipeline = make_pipeline(reader, config, gating=True)
+
+    plain = pipeline.process(synth.render_frame(labels))
+    assert plain.backgrounds[2] == BLACK
+    assert plain.cells[2].text == "PFD"
+
+    selected = pipeline.process(synth.render_frame(labels, backgrounds={2: "white"}))
+    assert selected.labels == plain.labels, "the label must not have changed"
+    assert selected.backgrounds[2] == WHITE
+    assert selected.backgrounds != plain.backgrounds
+
+
+def test_a_cached_cell_still_carries_the_current_colour(reader, config):
+    """A cell served from the OCR cache must not carry a stale background."""
+    frame = synth.render_menu("alerts")
+    pipeline = make_pipeline(reader, config, gating=True)
+    first = pipeline.process(frame)
+    second = pipeline.process(frame)
+    assert second.ocr_calls == 0
+    assert all(not cell.ocr_ran for cell in second.cells)
+    assert second.backgrounds == first.backgrounds
+
+
+def test_a_blank_cell_still_reports_its_background(reader, config):
+    """An empty yellow cell is still a yellow button face."""
+    labels = [""] * 12
+    pipeline = make_pipeline(reader, config)
+    result = pipeline.process(synth.render_frame(labels, backgrounds={7: "yellow"}))
+    assert result.cells[7].blank
+    assert result.backgrounds[7] == YELLOW
+
+
+def test_colour_can_be_switched_off(reader, config):
+    pipeline = make_pipeline(reader, config, color=ColorConfig(enabled=False))
+    result = pipeline.process(synth.render_menu("alerts"))
+    assert result.backgrounds == [BLACK] * 12
+    assert result.timings["color_ms"] >= 0.0
+
+
+def test_the_debug_line_carries_the_background(reader, config, caplog):
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="g1000_softkey.pipeline")
+    pipeline = make_pipeline(reader, config)
+    pipeline.process(synth.render_menu("alerts"))
+    lines = {}
+    for record in caplog.records:
+        parts = record.getMessage().split()
+        if len(parts) > 2 and parts[1] == "cell" and parts[2].isdigit():
+            lines[int(parts[2])] = record.getMessage()
+    assert "bg=yellow" in lines[5]
+    assert "bg=red" in lines[6]
+    assert "bg=white" in lines[9]
+    assert "bg=black" in lines[1]
+    assert "bg=black" in lines[4], "a blank cell still has a background"
+
+
+def test_a_colour_only_change_is_logged_even_though_no_cell_was_ocrd(reader, config, caplog):
+    """The frame that would otherwise look completely idle in the log.
+
+    Forced here with a change tolerance nothing can trip, because colour is
+    measured outside the gate and so must be reported outside it too.
+    """
+    import logging
+
+    display = DisplayConfig(key="pfd", geometry=StripGeometry())
+    app = AppConfig(displays=(display,), ocr=config.ocr, change_gating=True,
+                    change_tolerance=255)
+    pipeline = DisplayPipeline(display, reader, app)
+
+    labels = list(synth.MENUS["pfd_top"])
+    pipeline.process(synth.render_frame(labels))
+    caplog.set_level(logging.DEBUG, logger="g1000_softkey.pipeline")
+    result = pipeline.process(synth.render_frame(labels, backgrounds={2: "white"}))
+
+    assert result.ocr_calls == 0, "the gate must have swallowed the pixel change"
+    assert result.backgrounds[2] == WHITE
+    cached = [r.getMessage() for r in caplog.records if "CACHED" in r.getMessage()]
+    assert len(cached) == 1
+    assert "cell 3" in cached[0]
+    assert "bg=white" in cached[0] and "was bg=black" in cached[0]
+
+
+def test_a_quiet_frame_still_logs_nothing(reader, config, caplog):
+    import logging
+
+    frame = synth.render_menu("pfd_top")
+    pipeline = make_pipeline(reader, config, gating=True)
+    pipeline.process(frame)
+    caplog.set_level(logging.DEBUG, logger="g1000_softkey.pipeline")
+    pipeline.process(frame)
+    assert [r.getMessage() for r in caplog.records] == []

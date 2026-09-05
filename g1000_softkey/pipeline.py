@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 
+from .color import BLACK, background_name, classify_cell
 from .config import AppConfig, DisplayConfig
 from .ocr import CellResult, SoftkeyReader
 from .screens import ScreenLibrary
@@ -34,6 +35,10 @@ class DisplayResult:
     @property
     def labels(self) -> list[str]:
         return [cell.text for cell in self.cells]
+
+    @property
+    def backgrounds(self) -> list[int]:
+        return [cell.background for cell in self.cells]
 
 
 class DisplayPipeline:
@@ -150,8 +155,30 @@ class DisplayPipeline:
             changed = [True] * len(cells)
         timings["gate_ms"] = (time.perf_counter() - t0) * 1000.0
 
+        # Colour is measured for every cell on every frame, deliberately
+        # outside the change gate. The gate exists to skip OCR, which is the
+        # expensive stage; a median over a border ring is not. Doing it here
+        # means a cell whose background changes while its label does not -- a
+        # softkey becoming selected, which is the single most common colour
+        # event on the strip -- picks up the new colour even on the path that
+        # serves the text from cache, and does not depend on the grayscale
+        # gate happening to notice the colour change.
+        t0 = time.perf_counter()
+        if self.app.color.enabled:
+            backgrounds = [classify_cell(cell, self.app.color) for cell in cells]
+        else:
+            backgrounds = [BLACK] * len(cells)
+        timings["color_ms"] = (time.perf_counter() - t0) * 1000.0
+
         results: list[CellResult] = []
         diagnostics: dict[int, str] = {}
+
+        def bg_tag(index: int) -> str:
+            """``bg=<name>`` for a debug line, or nothing when colour is off."""
+            if not self.app.color.enabled:
+                return ""
+            return f"bg={background_name(backgrounds[index]):<6} "
+
         preprocess_ms = 0.0
         ocr_ms = 0.0
         ocr_calls = 0
@@ -163,8 +190,20 @@ class DisplayPipeline:
                 else None
             )
             if not changed[index] and previous is not None:
-                cached = CellResult(**{**previous.__dict__, "ocr_ran": False})
+                cached = CellResult(
+                    **{**previous.__dict__, "ocr_ran": False, "background": backgrounds[index]}
+                )
                 results.append(cached)
+                if previous.background != cached.background:
+                    # The gate said these pixels did not move, yet the colour
+                    # did. Worth a line of its own: it is the one case where
+                    # the published datarefs change while OCR never ran, and
+                    # without this the frame looks completely idle in the log.
+                    diagnostics[index] = (
+                        f"CACHED  {bg_tag(index)}was bg="
+                        f"{background_name(previous.background)} "
+                        f"-- colour changed, label unchanged, no OCR"
+                    )
                 continue
 
             t0 = time.perf_counter()
@@ -175,10 +214,13 @@ class DisplayPipeline:
                 # Distinguishing "gated out as empty" from "OCR read nothing" is
                 # the whole question when a short label goes missing, so say which.
                 diagnostics[index] = (
-                    f"BLANK   ink={ink:.4f} < {self.reader.config.blank_ink_ratio:.4f} "
+                    f"BLANK   {bg_tag(index)}ink={ink:.4f} < "
+                    f"{self.reader.config.blank_ink_ratio:.4f} "
                     f"(contrast={self.reader.config.blank_contrast}) -- never reached OCR"
                 )
-                results.append(CellResult(index=index, blank=True))
+                results.append(
+                    CellResult(index=index, blank=True, background=backgrounds[index])
+                )
                 continue
             variants = [
                 preprocess_cell(
@@ -193,15 +235,18 @@ class DisplayPipeline:
             preprocess_ms += (time.perf_counter() - t0) * 1000.0
 
             t0 = time.perf_counter()
-            cell_result = self.reader.read_best(index, variants)
+            cell_result = replace(
+                self.reader.read_best(index, variants), background=backgrounds[index]
+            )
             results.append(cell_result)
             ocr_ms += (time.perf_counter() - t0) * 1000.0
             ocr_calls += 1
             x0, x1 = ink_bounds(cell, self.reader.config.blank_contrast)
             clipped = " CLIPPED?" if (x0 <= 0.02 or x1 >= 0.98) else ""
             diagnostics[index] = (
-                f"ink={ink:.4f} x={x0:.2f}-{x1:.2f} raw={cell_result.raw!r:<12} "
-                f"ocr={cell_result.text!r:<12} conf={cell_result.confidence:5.1f} "
+                f"{bg_tag(index)}ink={ink:.4f} x={x0:.2f}-{x1:.2f} "
+                f"raw={cell_result.raw!r:<12} ocr={cell_result.text!r:<12} "
+                f"conf={cell_result.confidence:5.1f} "
                 f"match={cell_result.match_score:.2f}{clipped}"
             )
 
@@ -223,8 +268,12 @@ class DisplayPipeline:
         # Logged here rather than inside the loop above: page lookup can change
         # a cell after OCR has spoken, and a debug line that stops at the OCR
         # answer disagrees with the dataref that actually gets published.
-        if LOG.isEnabledFor(logging.DEBUG) and ocr_calls:
-            LOG.debug("%s screen lookup: %s", self.display.key, outcome)
+        # Gated on there being a line to print rather than on ocr_calls: a
+        # frame where only a background moved does no OCR at all, and that is
+        # exactly the frame worth seeing.
+        if LOG.isEnabledFor(logging.DEBUG) and diagnostics:
+            if ocr_calls:
+                LOG.debug("%s screen lookup: %s", self.display.key, outcome)
             for result in results:
                 detail = diagnostics.get(result.index)
                 if detail is None:
