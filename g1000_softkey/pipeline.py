@@ -101,7 +101,11 @@ class DisplayPipeline:
                 results.append(CellResult(index=index, blank=True))
                 continue
             image = preprocess_cell(
-                cell, upscale=self.reader.config.upscale, method=self.reader.config.threshold
+                cell,
+                upscale=self.reader.config.upscale,
+                method=self.reader.config.threshold,
+                sharpen_amount=self.reader.config.sharpen_amount,
+                sharpen_radius=self.reader.config.sharpen_radius,
             )
             preprocess_ms += (time.perf_counter() - t0) * 1000.0
 

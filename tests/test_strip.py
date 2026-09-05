@@ -1,9 +1,13 @@
+from pathlib import Path
+
+import cv2
 import numpy as np
 import pytest
 
 from g1000_softkey import synth
 from g1000_softkey.config import StripGeometry
 from g1000_softkey.strip import (
+    sharpen,
     auto_detect_strip,
     cell_rects,
     changed_cells,
@@ -113,3 +117,72 @@ def test_overlay_draws_without_touching_the_original(frame):
     annotated = overlay_geometry(frame, GEOM)
     assert annotated.shape == frame.shape
     assert not np.array_equal(annotated, frame)
+
+
+# ---------------------------------------------------------------------------
+# Small-glyph counters: the 0/6 failure
+# ---------------------------------------------------------------------------
+
+
+def _tiny_digit(text, glyph_px=10, blur=0.8, w=59, h=24):
+    """A cell at the real captured scale: ~10 px glyph, slightly soft."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    for candidate in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    ):
+        if Path(candidate).is_file():
+            font = ImageFont.truetype(candidate, glyph_px)
+            break
+    else:  # pragma: no cover - depends on the host's fonts
+        pytest.skip("no TrueType font available")
+
+    img = Image.new("L", (w, h), 12)
+    draw = ImageDraw.Draw(img)
+    box = draw.textbbox((0, 0), text, font=font)
+    draw.text(((w - box[2]) // 2, (h - box[3]) // 2 - 1), text, fill=230, font=font)
+    array = np.array(img)
+    return cv2.GaussianBlur(array, (0, 0), blur) if blur else array
+
+
+def _counters(binary):
+    """Enclosed background regions -- a surviving counter shows up as one."""
+    ink = (binary < 128).astype(np.uint8)
+    count, _ = cv2.connectedComponents((1 - ink).astype(np.uint8))
+    return count - 2
+
+
+@pytest.mark.parametrize("digit", ["0", "6", "9"])
+def test_sharpening_reopens_small_closed_glyphs(digit):
+    """0/6/9 lose their holes when a soft ~10 px glyph is thresholded.
+
+    A filled counter is not a character, so Tesseract returns an empty string
+    rather than a wrong digit -- which is how this reached us: "0 is missing".
+    """
+    cell = _tiny_digit(digit)
+    assert _counters(preprocess_cell(cell, sharpen_amount=0.0)) == 0, "expected the bug"
+    assert _counters(preprocess_cell(cell)) >= 1, f"{digit} still has no counter"
+
+
+def test_eight_is_still_beyond_recovery_at_ten_pixels():
+    """Documents the limit: two stacked counters in ~10 px do not survive.
+
+    Harmless for the screen this was found on -- transponder codes are octal,
+    so the XPDR keypad only ever shows 0-7 -- but if an 8 shows up elsewhere
+    and reads empty, the strip needs more pixels, not more sharpening.
+    """
+    assert _counters(preprocess_cell(_tiny_digit("8"))) == 0
+
+
+@pytest.mark.parametrize("digit", ["0", "6", "8", "9"])
+def test_sharpening_never_removes_counters(digit):
+    cell = _tiny_digit(digit)
+    assert _counters(preprocess_cell(cell)) >= _counters(
+        preprocess_cell(cell, sharpen_amount=0.0)
+    )
+
+
+def test_sharpen_is_a_no_op_when_disabled():
+    cell = _tiny_digit("0")
+    assert np.array_equal(sharpen(cell, 0.0, 1.4), cell)

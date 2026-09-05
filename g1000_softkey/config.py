@@ -89,7 +89,12 @@ class OcrConfig:
     tessdata_path: str | None = None
     psm: int = 7  # single text line
     whitelist: str = DEFAULT_WHITELIST
-    upscale: float = 3.0
+    upscale: float = 4.0
+    #: Unsharp mask applied before thresholding. The glyphs are ~10 px tall and
+    #: slightly soft from the capture; without this the counters of 0/6/8/9 fill
+    #: in and Tesseract returns nothing at all for them. 0 disables it.
+    sharpen_amount: float = 1.2
+    sharpen_radius: float = 1.4
     threshold: str = "otsu"  # otsu | adaptive
     labels_file: str = str(PACKAGE_DIR / "labels.txt")
     fuzzy_cutoff: float = 0.62

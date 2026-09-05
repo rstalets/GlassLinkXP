@@ -115,11 +115,28 @@ def is_blank(cell: np.ndarray, min_ink_ratio: float = 0.004, contrast: int = 40)
     return ink_ratio(cell, contrast) < min_ink_ratio
 
 
+def sharpen(gray: np.ndarray, amount: float, radius: float) -> np.ndarray:
+    """Unsharp mask, applied at native resolution before any upscaling.
+
+    The softkey glyphs are only ~10 px tall and arrive slightly soft from the
+    capture. Blurring at that size closes the counters of 0, 6, 8 and 9, and a
+    filled counter is not a character at all -- Tesseract returns an empty
+    string rather than a wrong digit, which is exactly how the bug shows up.
+    Restoring the edges before thresholding keeps the holes open.
+    """
+    if amount <= 0:
+        return gray
+    blurred = cv2.GaussianBlur(gray, (0, 0), radius)
+    return cv2.addWeighted(gray, 1.0 + amount, blurred, -amount, 0)
+
+
 def preprocess_cell(
     cell: np.ndarray,
-    upscale: float = 3.0,
+    upscale: float = 4.0,
     method: str = "otsu",
     border: int = 8,
+    sharpen_amount: float = 1.2,
+    sharpen_radius: float = 1.4,
 ) -> np.ndarray:
     """Return a binarised, OCR-ready cell: black text on a white background.
 
@@ -130,6 +147,7 @@ def preprocess_cell(
     minority class, which handles the highlighted cell for free.
     """
     gray = to_gray(cell)
+    gray = sharpen(gray, sharpen_amount, sharpen_radius)
     if upscale and abs(upscale - 1.0) > 1e-6:
         gray = cv2.resize(gray, None, fx=upscale, fy=upscale, interpolation=cv2.INTER_CUBIC)
 
