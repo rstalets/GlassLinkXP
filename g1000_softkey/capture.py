@@ -243,6 +243,7 @@ class WgcCapture:
         cursor_capture: bool = False,
         draw_border: bool = False,
         target_size: tuple[int, int] | None = None,
+        manage_size: bool = False,
     ) -> None:
         if not is_windows():
             raise CaptureError(
@@ -266,7 +267,12 @@ class WgcCapture:
         # Resolve the exact title first so we can give a useful error message
         # rather than whatever the Rust layer raises.
         window = find_window(window_title)  # pragma: no cover
-        if target_size is not None:  # pragma: no cover - Windows only
+        if target_size is not None and not manage_size:  # pragma: no cover
+            LOG.info(
+                "not resizing %r: window_size is set but manage_window_size is off",
+                window.title,
+            )
+        elif target_size is not None:  # pragma: no cover - Windows only
             want_w, want_h = target_size
             if (window.width, window.height) != (want_w, want_h):
                 LOG.info(
@@ -352,6 +358,8 @@ def sources_for(displays: Iterable, image_path: str | Path | None) -> dict[str, 
             sources[display.key] = ImageCapture(per_display if per_display.is_file() else path)
         else:
             sources[display.key] = WgcCapture(
-                display.window_title, target_size=getattr(display, "window_size", None)
+                display.window_title,
+                target_size=getattr(display, "window_size", None),
+                manage_size=getattr(display, "manage_window_size", False),
             )
     return sources

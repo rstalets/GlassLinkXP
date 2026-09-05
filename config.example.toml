@@ -30,7 +30,15 @@ change_tolerance = 6
 window_title = "G1000 PFD"
 enabled = true
 # dataref_prefix = "g1000/softkey/pfd"   # defaults to g1000/softkey/<key>
-# Force the pop-out to this client size at startup, as [width, height].
+# Whether this daemon may resize the pop-out window at all. Off by default,
+# and deliberately: a pop-out may be feeding external avionics hardware -- a
+# RealSimGear G1000 unit, for instance -- where its size and position are part
+# of a physical setup. Breaking somebody's panel to make our OCR marginally
+# easier is not a trade to make silently. Both displays decide independently.
+# manage_window_size = true
+#
+# Client size to force the pop-out to, as [width, height]. Only applied when
+# manage_window_size is true above.
 #
 # The G1000 renders to a 1024x768 texture, so a pop-out whose *display area* is
 # smaller than that discards real detail before capture ever sees it -- and the

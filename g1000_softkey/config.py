@@ -73,7 +73,16 @@ class DisplayConfig:
     geometry: StripGeometry = field(default_factory=StripGeometry)
     dataref_prefix: str = ""
     enabled: bool = True
+    #: Whether this daemon may resize the pop-out window at all.
+    #:
+    #: Off by default, and deliberately so: a pop-out may be feeding external
+    #: avionics hardware -- a RealSimGear G1000 unit, say -- where its size and
+    #: position are part of somebody's physical setup. Resizing that window
+    #: would break their panel to make our OCR marginally easier, which is not
+    #: a trade this daemon gets to make on its own.
+    manage_window_size: bool = False
     #: Client size to force the pop-out window to, as [width, height].
+    #: Only applied when manage_window_size is true.
     #:
     #: The G1000 renders to a 1024x768 texture, so a pop-out whose *display
     #: area* is smaller than that throws away real detail before capture ever
@@ -88,6 +97,12 @@ class DisplayConfig:
     def __post_init__(self) -> None:
         if not self.dataref_prefix:
             object.__setattr__(self, "dataref_prefix", f"g1000/softkey/{self.key}")
+        if self.manage_window_size and self.window_size is None:
+            raise ConfigError(
+                f"display.{self.key}: manage_window_size is on but no window_size is set, "
+                "so there is nothing to resize to. Give a [width, height], or turn "
+                "manage_window_size off."
+            )
 
     def dataref_names(self) -> list[str]:
         return [f"{self.dataref_prefix}/{i + 1}" for i in range(self.geometry.cells)]

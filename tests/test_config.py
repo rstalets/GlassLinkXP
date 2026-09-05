@@ -96,3 +96,50 @@ def test_a_malformed_window_size_is_rejected_with_the_display_named(tmp_path, va
     path.write_text(f"[display.pfd]\nwindow_size = {value}\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="display.pfd.window_size"):
         load_config(path)
+
+
+def test_window_size_alone_does_not_authorise_resizing(tmp_path):
+    """Off by default: a pop-out may be driving external avionics hardware."""
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[display.pfd]\nwindow_title = "G1000 PFD"\nwindow_size = [1400, 1000]\n',
+        encoding="utf-8",
+    )
+    display = load_config(path).display("pfd")
+    assert display.window_size == (1400, 1000)
+    assert display.manage_window_size is False
+
+
+def test_resizing_happens_only_when_explicitly_enabled(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[display.pfd]\nwindow_title = "G1000 PFD"\n'
+        "window_size = [1400, 1000]\nmanage_window_size = true\n",
+        encoding="utf-8",
+    )
+    assert load_config(path).display("pfd").manage_window_size is True
+
+
+def test_managing_the_size_without_a_size_is_rejected(tmp_path):
+    """Otherwise it silently does nothing and looks like a resize that failed."""
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[display.pfd]\nwindow_title = "G1000 PFD"\nmanage_window_size = true\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="no window_size is set"):
+        load_config(path)
+
+
+def test_displays_decide_independently(tmp_path):
+    """One display can drive hardware while the other is ours to resize."""
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[display.pfd]\nwindow_title = "PFD"\n'
+        "window_size = [1400, 1000]\nmanage_window_size = true\n"
+        '[display.mfd]\nwindow_title = "MFD"\n',
+        encoding="utf-8",
+    )
+    config = load_config(path)
+    assert config.display("pfd").manage_window_size is True
+    assert config.display("mfd").manage_window_size is False
