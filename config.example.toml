@@ -137,12 +137,77 @@ blank_contrast = 40
 # labels_file = "g1000_softkey/labels.txt"   # relative paths resolve next to this file
 # tessdata_path = "C:/Program Files/Tesseract-OCR/tessdata"
 
+# --- softkey background colour ---------------------------------------------
+# Each cell's background is classified into one of four colours and published
+# as an int alongside the label:
+#
+#   g1000/softkey/pfd/1        the label string
+#   g1000/softkey/pfd/1/bg     0 black, 1 white, 2 yellow, 3 red
+#
+# The background is measured from the outermost ring of the cell -- labels are
+# centred, so that ring is essentially never glyph, and unlike a whole-cell
+# statistic it needs no assumption about the glyphs being the minority class,
+# so it reads an inverted (selected) cell the same way. The ring is summarised
+# with a per-channel median, so a few pixels of the green softkey outline
+# clipping the edge cannot drag it.
+#
+# WARNING: the thresholds below were set from *plausible* G1000 swatches, not
+# from a capture -- nobody who wrote them has seen an X-Plane frame. Check them
+# against your own display before trusting them:
+#
+#     g1000 -c config.toml dump-colors
+#
+# with one softkey selected. It prints each cell's ring BGR and HSV and how it
+# classified, which is the measurement these numbers should come from.
+[color]
+enabled = true
+# Outermost fraction of each cell, per side, used as the sample ring.
+ring_fraction = 0.15
+# Classification order is V, then S, then hue, and the order is the point:
+# hue and saturation barely move when the display is dimmed (scaling the red
+# and yellow swatches to 35% moves H and S by about a unit while V tracks the
+# scaling), so brightness can only ever push a cell into black and can never
+# turn a yellow into a red.
+#
+#   1. V <= value_max                                 -> black
+#   2. S <= saturation_max                            -> white
+#   3. H <= red_hue_max or H >= red_hue_wrap_min      -> red
+#   4. yellow_hue_min <= H <= yellow_hue_max          -> yellow
+#
+# Hue is OpenCV's 0..179, not 0..359, and red wraps around 0.
+value_max = 60          # a red at 35% brightness sits near V=79; stay under it
+saturation_max = 60     # white measures S=0, the coloured states above S=200
+red_hue_max = 8
+red_hue_wrap_min = 172
+yellow_hue_min = 18
+yellow_hue_max = 40
+
 # --- publishing ------------------------------------------------------------
 [publish]
 target = "websocket"        # websocket | webapi | file | console
 base_url = "http://localhost:8086"
 api_version = "v1"       # v1 works on X-Plane 12.1.1+; v2 from 12.1.4
-field_width = 16         # bytes per dataref -> PilotsDeck address ':s16'
+# Bytes per label dataref -> the PilotsDeck address suffix (':s64').
+#
+# The width is fixed in three places that must agree: FIELD_WIDTH in the
+# XPPython3 plugin (changing it needs an X-Plane restart, because the buffer
+# is allocated when the accessor is registered), this setting, and the ':sNN'
+# on every PilotsDeck button. Raising it later means re-editing every button,
+# so it is set generously once: the longest label is 11 characters and the
+# optional colour prefix adds 9, which 16 bytes would truncate.
+field_width = 64
+# Prefix each label with an inline text colour, e.g. "[[#000000STD BARO".
+#
+# PilotsDeck reads a leading "[[#RRGGBB" as an override of the button's
+# configured text colour, which is what a white, yellow or red softkey needs
+# if you have coloured the button face from the /bg dataref.
+#
+# OFF BY DEFAULT, and check before turning it on: a PilotsDeck build that
+# predates the feature -- or any other Stream Deck plugin -- does not
+# interpret the prefix and will render a literal "[[#000000" on the button,
+# which looks exactly like the daemon has broken. The colour is published as
+# the /bg dataref either way; this only changes the label string.
+embed_text_color = false
 timeout = 1.0
 retry_interval = 5.0     # seconds between reconnect attempts
 # json_path = "C:/Users/you/AppData/Local/Temp/g1000_softkey_labels.json"

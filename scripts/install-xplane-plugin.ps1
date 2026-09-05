@@ -33,7 +33,7 @@
     Reinstall XPPython3 even if it is already present.
 
 .PARAMETER VerifyOnly
-    Skip installing. Ask a RUNNING X-Plane whether the 24 datarefs exist.
+    Skip installing. Ask a RUNNING X-Plane whether the 48 datarefs exist.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\install-xplane-plugin.ps1
@@ -130,8 +130,14 @@ $sourcePlug  = Join-Path $RepoRoot 'xppython3\PI_G1000SoftkeyLabels.py'
 # --------------------------------------------------------------------------
 function Invoke-Verify {
     Write-Step 'Asking X-Plane whether the datarefs exist'
+    # 24 label (byte array) datarefs + 24 /bg (int) background-colour datarefs.
     $names = @()
-    foreach ($d in @('pfd','mfd')) { 1..12 | ForEach-Object { $names += "g1000/softkey/$d/$_" } }
+    foreach ($d in @('pfd','mfd')) {
+        1..12 | ForEach-Object {
+            $names += "g1000/softkey/$d/$_"
+            $names += "g1000/softkey/$d/$_/bg"
+        }
+    }
 
     $ok = $false
     foreach ($v in @('v2','v1')) {
@@ -146,20 +152,27 @@ function Invoke-Verify {
         $got = @($resp.data)
         Write-Ok "web API $v responded"
         if ($got.Count -eq 0) {
-            Write-Warn2 'X-Plane is running but none of the 24 datarefs exist.'
+            Write-Warn2 'X-Plane is running but none of the 48 datarefs exist.'
             Write-Warn2 'The plugin did not load. Check Log.txt and XPPython3.log in the X-Plane root.'
             return $false
         }
-        Write-Ok "$($got.Count)/24 datarefs registered"
+        Write-Ok "$($got.Count)/48 datarefs registered"
         $got | Select-Object -First 3 | ForEach-Object {
             Write-Host "        $($_.name)  id=$($_.id)  type=$($_.value_type)"
         }
-        $wrongType = @($got | Where-Object { $_.value_type -ne 'data' })
-        if ($wrongType) {
-            Write-Warn2 "expected value_type 'data' (byte array); got: $($wrongType[0].value_type)"
+        # A label must be a byte array and a /bg must be an int: the daemon
+        # sends base64 to one and a bare number to the other, so a dataref
+        # registered as the wrong type rejects every write it ever gets.
+        $wrongLabel = @($got | Where-Object { $_.name -notlike '*/bg' -and $_.value_type -ne 'data' })
+        if ($wrongLabel) {
+            Write-Warn2 "expected value_type 'data' (byte array) for $($wrongLabel[0].name); got: $($wrongLabel[0].value_type)"
         }
-        if ($got.Count -lt 24) { Write-Warn2 'fewer than 24 -- the plugin may have failed partway.' }
-        return ($got.Count -eq 24)
+        $wrongBg = @($got | Where-Object { $_.name -like '*/bg' -and $_.value_type -ne 'int' })
+        if ($wrongBg) {
+            Write-Warn2 "expected value_type 'int' for $($wrongBg[0].name); got: $($wrongBg[0].value_type)"
+        }
+        if ($got.Count -lt 48) { Write-Warn2 'fewer than 48 -- the plugin may have failed partway.' }
+        return ($got.Count -eq 48)
     }
     if (-not $ok) {
         Write-Warn2 'No response from http://localhost:8086.'
@@ -171,7 +184,7 @@ function Invoke-Verify {
 
 if ($VerifyOnly) {
     if (Invoke-Verify) {
-        Write-Host "`nAll 24 datarefs are live. PilotsDeck address: g1000/softkey/pfd/1:s16" -ForegroundColor Green
+        Write-Host "`nAll 48 datarefs are live. PilotsDeck address: g1000/softkey/pfd/1:s64" -ForegroundColor Green
         exit 0
     }
     exit 1
@@ -260,7 +273,7 @@ Write-Host @"
 
  Next:
    1. $(if ($running) { 'RESTART X-Plane (it is running now -- plugins load at startup)' } else { 'Start X-Plane 12 and load an aircraft with a G1000' })
-   2. Confirm the 24 datarefs registered:
+   2. Confirm the 48 datarefs registered:
         scripts\install-xplane-plugin.ps1 -VerifyOnly
    3. Pop out the PFD and MFD into their own windows, then:
         .\g1000 list-windows

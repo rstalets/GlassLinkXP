@@ -12,8 +12,9 @@ X-Plane pop-out PFD/MFD windows (may be occluded)
     -> Windows Graphics Capture              capture.py
     -> crop the softkey strip, split into 12 cells, threshold each cell   strip.py
     -> Tesseract (persistent API, PSM 7) + fuzzy snap to labels.txt       ocr.py
-    -> X-Plane Web API PATCH (base64) into plugin-created datarefs        publish.py
-    -> PilotsDeck reads g1000/softkey/pfd/1:s16
+    -> classify each cell's background colour from a border ring          color.py
+    -> X-Plane Web API PATCH into plugin-created datarefs                 publish.py
+    -> PilotsDeck reads g1000/softkey/pfd/1:s64 and .../1/bg
 ```
 
 See `PLAN.md` for the design rationale. **This is a POC**: it is verified
@@ -24,16 +25,18 @@ has not been run against a live X-Plane.
 
 ```
 g1000_softkey/
-  main.py       CLI: run | list-windows | calibrate | dump-cells | bench | synth
+  main.py       CLI: run | list-windows | calibrate | dump-cells | dump-colors
+                     | bench | synth
   capture.py    WGC backend (Windows) + PNG backend (offline dev/test)
   strip.py      strip crop, 12-cell split, per-cell preprocessing, auto-detect
   ocr.py        persistent Tesseract API, char whitelist, vocabulary snapping
-  pipeline.py   frame -> cells -> change gating -> labels
+  color.py      cell background -> black / white / yellow / red, + text colour
+  pipeline.py   frame -> cells -> change gating -> labels + colours
   publish.py    X-Plane Web API client, JSON-file fallback, console output
   synth.py      synthetic G1000 softkey frames for offline work
   config.example.toml
   labels.txt    the softkey vocabulary (edit this)
-xppython3/PI_G1000SoftkeyLabels.py   creates the 24 datarefs
+xppython3/PI_G1000SoftkeyLabels.py   creates the 48 datarefs (24 labels + 24 colours)
 scripts/
   install-windows.ps1        daemon: vcpkg + MSVC + uv venv + tesserocr wheel
   install-xplane-plugin.ps1  sim: XPPython3 + the dataref plugin, and -VerifyOnly
@@ -259,10 +262,58 @@ For PFD softkey 1:
 | Field | Value |
 | --- | --- |
 | Command (press) | `sim/GPS/g1000n1_softkey1` |
-| Display value | `g1000/softkey/pfd/1:s16` |
+| Display value | `g1000/softkey/pfd/1:s64` |
 
-`:s16` is PilotsDeck's string-dataref address syntax: read 16 bytes as a
-NUL-terminated string. The daemon writes exactly 16 bytes, NUL padded.
+`:s64` is PilotsDeck's string-dataref address syntax: read 64 bytes as a
+NUL-terminated string. The daemon writes exactly 64 bytes, NUL padded.
+
+**The width is fixed in three places and they must agree**: `FIELD_WIDTH` in
+`PI_G1000SoftkeyLabels.py` (changing it needs an X-Plane restart -- the buffer
+is allocated when the accessor is registered), `publish.field_width` in the
+config, and the `:sNN` on every button. That is why it is 64 and not a snug
+fit: the longest label is 11 characters, and the optional colour prefix below
+adds 9, so raising it later would mean re-editing every button you had made.
+
+### Softkey colours
+
+Alongside each label the daemon publishes an int dataref naming the colour of
+the cell the label sits on:
+
+| dataref | value |
+| --- | --- |
+| `g1000/softkey/pfd/1/bg` | `0` black, `1` white (selected/inverted), `2` yellow, `3` red |
+
+Use it to pick the button image or background -- a PilotsDeck display value of
+`g1000/softkey/pfd/1/bg` switches on a number, no string parsing needed. The
+implied text colour is white on `0` and black on `1`, `2` and `3`.
+
+That text colour is a *legibility rule* for the Stream Deck face, not a
+measurement of the G1000's own font colour, which the daemon deliberately does
+not try to read. If you want the daemon to apply it for you, set:
+
+```toml
+[publish]
+embed_text_color = true
+```
+
+and each label goes out prefixed with PilotsDeck's inline colour marker --
+`[[#000000STD BARO`, say -- which overrides the button's configured text
+colour for that update. It is **off by default**: a PilotsDeck build that
+predates the feature does not interpret the prefix and renders a literal
+`[[#000000` on the button face, which looks exactly like the daemon has
+broken. Try it on one button before turning it on for a whole profile. The
+`/bg` dataref is published either way.
+
+Check the classification against your own display before relying on it:
+
+```
+g1000 -c config.toml dump-colors
+```
+
+It prints each cell's border-ring BGR and HSV and how those classified, plus
+the thresholds that produced the answer. Move the thresholds in `[color]` to
+fit what you see -- the shipped defaults came from plausible swatches, not
+from a capture.
 
 Softkey N maps to `sim/GPS/g1000n1_softkeyN` (pilot PFD) and
 `sim/GPS/g1000n3_softkeyN` (MFD); `g1000n2` is the copilot PFD and is out of
@@ -276,6 +327,7 @@ synthetic frame generator, so the whole pipeline runs anywhere:
 ```
 python -m g1000_softkey.main synth --out frames
 python -m g1000_softkey.main run --image frames/pfd_top.png --publisher console --once
+python -m g1000_softkey.main dump-colors --image frames/alerts.png
 python -m g1000_softkey.main bench --image frames/pfd_menu.png -n 50
 python -m pytest -q
 ```
@@ -298,6 +350,12 @@ display).
   correction and more risk of snapping to the wrong label.
 * `ocr.blank_ink_ratio` (default 0.004) -- below this fraction of "ink" a cell
   is reported as an empty string instead of being OCR'd.
+* `color.value_max` / `color.saturation_max` / the hue windows -- where the
+  four background colours are cut apart. Set them from `dump-colors` output
+  rather than from the shipped defaults; the order they are applied in (V,
+  then S, then hue) means a wrong `value_max` shows up as coloured cells
+  reading black, and a wrong `saturation_max` as white cells reading
+  coloured.
 * `labels.txt` -- the vocabulary. It is version and aircraft dependent; add
   anything your setup shows that is missing. Unknown strings are passed
   through raw (and logged at debug level) rather than being forced onto a
@@ -312,7 +370,7 @@ display).
 | `could not initialise Tesseract` / `tesseract executable was not found` | `TESSDATA_PREFIX` is unset or wrong. Point `ocr.tessdata_path` at the directory holding `eng.traineddata`. |
 | `X-Plane Web API unreachable` | X-Plane is not running, is older than 12.1.1, or the web server is off. The daemon keeps retrying; it never crashes the loop. |
 | `ModuleNotFoundError: No module named 'numpy'` | The venv is not active, so a system Python is running. `.venv\Scripts\Activate.ps1` (PowerShell), or call `.venv\Scripts\python.exe` directly. |
-| `N of 24 datarefs are not registered in X-Plane` | The XPPython3 plugin is not installed or failed to load. Check `<X-Plane>/Log.txt` and `XPPython3.log`. |
+| `N of 48 datarefs are not registered in X-Plane` | The XPPython3 plugin is not installed or failed to load. Check `<X-Plane>/Log.txt` and `XPPython3.log`. |
 | Labels are garbage or empty | Geometry. Run `dump-cells` and look at the `_prep.png` images. |
 | One cell is always wrong | Missing entry in `labels.txt`, or a two-line label (see limitations). |
 | Blank cells produce short nonsense strings | The crop includes something bright above or below the strip; tighten `y`/`h`, or raise `ocr.blank_ink_ratio`. |
@@ -424,5 +482,21 @@ The following code paths are written from the documented APIs but have
   screenshots. Real-world OCR accuracy, the true default strip fractions in
   `config.example.toml`, and whether X-Plane wraps any label onto two lines
   are all unknown.
+* **The colour thresholds in `[color]`.** The classifier is tested against
+  synthetic swatches at several brightnesses, which shows it separates four
+  backgrounds and that dimming moves V while leaving hue and saturation alone.
+  It does not show that the shipped `value_max`, `saturation_max` and hue
+  windows match X-Plane's actual softkey colours -- those numbers came from
+  plausible swatches, and nothing here has seen a real frame. `dump-colors`
+  exists so the real numbers can replace them without guessing.
+* **PilotsDeck's `[[#RRGGBB` inline text colour.** `publish.embed_text_color`
+  emits the prefix as documented to this project, but the marker is not
+  described in PilotsDeck's public README (which does document the `:sNN`
+  string suffix), and no PilotsDeck build has rendered one of these strings
+  here. That is the other reason the setting is off by default.
+* **The `Type_Int` datarefs.** The plugin registers them with `readInt` /
+  `writeInt` per the XPPython3 documentation and the round trip is tested
+  against the stubbed SDK, but no X-Plane has created one, and no Web API has
+  written a bare number to one.
 * **End-to-end latency to a Stream Deck face** and the effect on sim frame
   rate (success criteria 2 and 4 in PLAN.md).

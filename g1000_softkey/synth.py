@@ -3,8 +3,9 @@
 There is no X-Plane (and no Windows) in CI or on a dev laptop, so the tests,
 the benchmark and the calibration walkthrough all run against generated
 frames: a dark PFD-ish background with a softkey strip along the bottom,
-uppercase labels, empty cells, and one cell drawn in the highlighted
-"selected" state.
+uppercase labels, empty cells, cells drawn in the highlighted "selected"
+state, and -- for the colour classifier -- cells on yellow and red
+backgrounds, optionally dimmed.
 """
 
 from __future__ import annotations
@@ -29,8 +30,29 @@ BAND_COLOR = (10, 10, 10)
 BEZEL_COLOR = (4, 4, 6)
 LABEL_COLOR = (240, 240, 240)
 CYAN_COLOR = (0, 230, 230)
-SELECTED_BG = (200, 200, 200)
 SELECTED_FG = (10, 10, 10)
+
+#: Cell background fills, RGB (the frame is converted to BGR on the way out).
+#:
+#: The G1000 says things with the background of a softkey that it never says
+#: with the glyphs -- selected is inverted, a caution is yellow, a warning is
+#: red -- and the colour classifier needs frames that do that. These are the
+#: same plausible swatches the [color] defaults were set from, and they are
+#: still plausible rather than observed: nothing here has seen X-Plane. What
+#: they are good for is proving the classifier separates four backgrounds and
+#: survives dimming; they cannot tell you the real thresholds.
+CELL_BACKGROUNDS = {
+    "black": BAND_COLOR,
+    # Was SELECTED_BG = (200, 200, 200) before the colour work. Both classify
+    # as white (S is 0 either way); 235 is used now so the four swatches here
+    # and the four in the [color] docs are the same four numbers.
+    "white": (235, 235, 235),
+    "yellow": (240, 230, 40),
+    "red": (225, 40, 40),
+}
+
+#: Anything but black gets dark glyphs, as the sim draws an inverted key.
+DARK_TEXT_BACKGROUNDS = ("white", "yellow", "red")
 
 #: A few real softkey menu levels, blanks included.
 MENUS: dict[str, list[str]] = {
@@ -44,6 +66,10 @@ MENUS: dict[str, list[str]] = {
              "IDENT", "", "", "", "", "BACK"],
     "mfd_top": ["ENGINE", "MAP", "DCLTR", "", "TRAFFIC", "TOPO",
                 "TERRAIN", "NEXRAD", "METAR", "", "CHKLIST", "SHW CHRT"],
+    # Not a real page layout -- a fixture that puts all four backgrounds on
+    # one strip so the colour classifier can be exercised end to end.
+    "alerts": ["ENGINE", "MAP", "DCLTR", "", "CAUTION", "WARNING",
+               "TERRAIN", "", "TRAFFIC", "", "CHKLIST", "ALERTS"],
 }
 
 #: index of the highlighted (selected) softkey per menu
@@ -53,6 +79,20 @@ SELECTED: dict[str, int] = {
 
 #: cells drawn in cyan rather than white
 CYAN: dict[str, tuple[int, ...]] = {"pfd_menu": (10,), "inset": (7,)}
+
+#: Per-menu cell background overrides, ``{cell index: colour name}``. Only
+#: "alerts" carries any: the other menus are the OCR corpus, and repainting
+#: their cells would change what those tests measure.
+BACKGROUNDS: dict[str, dict[int, str]] = {
+    "alerts": {4: "yellow", 5: "red", 8: "white"},
+}
+
+
+def _scale(rgb: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
+    """Scale a colour towards black, as a dimmed display does."""
+    if factor >= 1.0:
+        return rgb
+    return tuple(max(0, min(255, int(round(channel * factor)))) for channel in rgb)
 
 
 def _load_font(size: int) -> ImageFont.FreeTypeFont:
@@ -84,8 +124,18 @@ def render_frame(
     noise: float = 2.5,
     seed: int = 0,
     font_size: int = 16,
+    backgrounds: dict[int, str] | None = None,
+    dim: float = 1.0,
 ) -> np.ndarray:
-    """Render one frame. Returns a BGR uint8 array (OpenCV convention)."""
+    """Render one frame. Returns a BGR uint8 array (OpenCV convention).
+
+    ``backgrounds`` maps a cell index to a key of :data:`CELL_BACKGROUNDS`;
+    ``selected`` is the same thing spelled the old way and means "white".
+    ``dim`` scales the strip's colours the way turning the display brightness
+    down does -- the point of the classifier's HSV ordering is that dimming
+    moves V and leaves the colour name alone, and a test can only show that
+    if it can render the dim case.
+    """
     geom = geom or StripGeometry()
     width, height = size
     image = Image.new("RGB", size, BEZEL_COLOR)
@@ -108,15 +158,21 @@ def render_frame(
     sy = int(round(geom.y * height))
     sw = int(round(geom.w * width))
     sh = int(round(geom.h * height))
-    draw.rectangle([sx, sy, sx + sw, sy + sh], fill=BAND_COLOR)
+    draw.rectangle([sx, sy, sx + sw, sy + sh], fill=_scale(BAND_COLOR, dim))
+
+    fills = dict(backgrounds or {})
+    if selected is not None:
+        fills.setdefault(selected, "white")
 
     cell_w = sw / geom.cells
     for index, label in enumerate(labels[: geom.cells]):
         x0 = sx + int(round(index * cell_w))
         x1 = sx + int(round((index + 1) * cell_w))
-        if index == selected:
+        fill_name = fills.get(index, "black")
+        if fill_name != "black":
             draw.rectangle(
-                [x0 + 4, sy + 3, x1 - 4, sy + sh - 3], fill=SELECTED_BG
+                [x0 + 4, sy + 3, x1 - 4, sy + sh - 3],
+                fill=_scale(CELL_BACKGROUNDS[fill_name], dim),
             )
         if not label:
             continue
@@ -126,13 +182,13 @@ def render_frame(
         text_h = bbox[3] - bbox[1]
         tx = x0 + (x1 - x0 - text_w) / 2
         ty = sy + (sh - text_h) / 2 - bbox[1]
-        if index == selected:
+        if fill_name in DARK_TEXT_BACKGROUNDS:
             color = SELECTED_FG
         elif index in cyan_indices:
             color = CYAN_COLOR
         else:
             color = LABEL_COLOR
-        draw.text((tx, ty), label, font=font, fill=color)
+        draw.text((tx, ty), label, font=font, fill=_scale(color, dim))
 
     frame = np.asarray(image, dtype=np.uint8)
     if noise > 0:
@@ -148,6 +204,7 @@ def render_menu(name: str, **kwargs) -> np.ndarray:
         raise KeyError(f"unknown menu {name!r}; known: {', '.join(sorted(MENUS))}")
     kwargs.setdefault("selected", SELECTED.get(name))
     kwargs.setdefault("cyan_indices", CYAN.get(name, ()))
+    kwargs.setdefault("backgrounds", BACKGROUNDS.get(name))
     return render_frame(MENUS[name], **kwargs)
 
 

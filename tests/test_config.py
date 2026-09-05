@@ -3,6 +3,7 @@ import pytest
 from g1000_softkey.config import (
     AppConfig,
     ConfigError,
+    PublishConfig,
     StripGeometry,
     default_config,
     from_mapping,
@@ -19,7 +20,9 @@ def test_example_config_loads():
     assert config.display("pfd").dataref_names()[0] == "g1000/softkey/pfd/1"
     assert len(config.display("mfd").dataref_names()) == 12
     assert config.loop_hz == 12.0
-    assert config.publish.field_width == 16
+    assert config.publish.field_width == 64
+    assert config.publish.embed_text_color is False, "the PilotsDeck prefix must be opt-in"
+    assert config.color.enabled is True
 
 
 def test_defaults_without_a_file():
@@ -143,3 +146,34 @@ def test_displays_decide_independently(tmp_path):
     config = load_config(path)
     assert config.display("pfd").manage_window_size is True
     assert config.display("mfd").manage_window_size is False
+
+
+def test_the_field_width_agrees_with_the_plugin():
+    """The width is fixed in three places; two of them are in this repo.
+
+    The third is the ':sNN' on the user's PilotsDeck buttons, which nothing
+    here can check -- which is exactly why a silent disagreement between these
+    two would be so unpleasant to debug.
+    """
+    import importlib.util
+    import sys
+    import types
+    from pathlib import Path
+
+    plugin_path = Path(__file__).resolve().parents[1] / "xppython3" / "PI_G1000SoftkeyLabels.py"
+    module = types.ModuleType("XPPython3")
+    module.xp = types.SimpleNamespace(Type_Data=8, Type_Int=1, NO_PLUGIN_ID=-1)
+    saved = sys.modules.get("XPPython3")
+    sys.modules["XPPython3"] = module
+    try:
+        spec = importlib.util.spec_from_file_location("PI_G1000SoftkeyLabels_widthcheck", plugin_path)
+        plugin = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(plugin)
+    finally:
+        if saved is None:
+            del sys.modules["XPPython3"]
+        else:
+            sys.modules["XPPython3"] = saved
+
+    assert plugin.FIELD_WIDTH == PublishConfig().field_width
+    assert plugin.FIELD_WIDTH == load_config(EXAMPLE).publish.field_width

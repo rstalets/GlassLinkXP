@@ -105,7 +105,19 @@ class DisplayConfig:
             )
 
     def dataref_names(self) -> list[str]:
+        """The label (string) datarefs, one per cell."""
         return [f"{self.dataref_prefix}/{i + 1}" for i in range(self.geometry.cells)]
+
+    def background_dataref_names(self) -> list[str]:
+        """The background-colour (int) datarefs, one per cell.
+
+        Suffixed rather than given their own prefix so a cell's two datarefs
+        sort together and read obviously as a pair in DataRefEditor.
+        """
+        return [f"{name}/bg" for name in self.dataref_names()]
+
+    def all_dataref_names(self) -> list[str]:
+        return self.dataref_names() + self.background_dataref_names()
 
 
 @dataclass(frozen=True)
@@ -168,11 +180,84 @@ class OcrConfig:
 
 
 @dataclass(frozen=True)
+class ColorConfig:
+    """Background-colour classification for a softkey cell.
+
+    Thresholds live here rather than in the code because the numbers that
+    matter are the ones on *your* capture. The defaults below come from
+    plausible G1000 swatches, not from a live X-Plane frame -- run
+    ``dump-colors`` against a real capture and move them if they disagree.
+    """
+
+    enabled: bool = True
+    #: Outermost fraction of the cell (each side) used to sample the
+    #: background. Labels are centred, so this ring is essentially never
+    #: glyph; too large a value starts eating into the text.
+    ring_fraction: float = 0.15
+    #: V at or below this is BLACK, whatever the hue. Tested first, so
+    #: brightness can only ever push a cell into black. A red at 35%
+    #: brightness sits near V=79, so this must stay well under that; raise it
+    #: if a black cell reads as coloured, lower it if a dim caution reads as
+    #: black.
+    value_max: int = 60
+    #: S at or below this is achromatic -> WHITE (V has already ruled out
+    #: black). The swatches put white at S=0 and the coloured states above
+    #: S=200, so anything in the middle is a comfortable cut.
+    saturation_max: int = 60
+    #: Hue windows, OpenCV convention (H is 0-179, and red wraps).
+    red_hue_max: int = 8
+    red_hue_wrap_min: int = 172
+    yellow_hue_min: int = 18
+    yellow_hue_max: int = 40
+
+    def validate(self) -> None:
+        if not 0.0 < self.ring_fraction <= 0.5:
+            raise ConfigError(
+                f"color.ring_fraction must be within 0..0.5, got {self.ring_fraction!r}"
+            )
+        for name in ("value_max", "saturation_max"):
+            value = getattr(self, name)
+            if not 0 <= value <= 255:
+                raise ConfigError(f"color.{name} must be within 0..255, got {value!r}")
+        for name in ("red_hue_max", "red_hue_wrap_min", "yellow_hue_min", "yellow_hue_max"):
+            value = getattr(self, name)
+            if not 0 <= value <= 179:
+                raise ConfigError(
+                    f"color.{name} must be within 0..179 (OpenCV hue), got {value!r}"
+                )
+        if self.yellow_hue_min > self.yellow_hue_max:
+            raise ConfigError("color.yellow_hue_min must not exceed color.yellow_hue_max")
+
+
+@dataclass(frozen=True)
 class PublishConfig:
     target: str = "webapi"  # webapi | file | console
     base_url: str = "http://localhost:8086"
     api_version: str = "v1"
-    field_width: int = 16
+    #: Bytes per label dataref -> the PilotsDeck address suffix (':s64').
+    #:
+    #: 64 rather than a snug fit. The width is fixed in three places that have
+    #: to agree -- FIELD_WIDTH in the plugin (an X-Plane restart, since the
+    #: buffer is allocated when the accessor is registered), this setting, and
+    #: every PilotsDeck button address -- so the cost of raising it later is
+    #: paid by the user re-editing buttons. The longest label is 11 characters
+    #: and the optional colour prefix adds 9, so 16 truncates
+    #: "[[#000000FLIGHT PLAN" outright. 64 bytes is ~1.5 KB of plugin memory
+    #: for all 24 fields and noise on the wire.
+    field_width: int = 64
+    #: Prefix each label with an inline text colour for PilotsDeck.
+    #:
+    #: PilotsDeck reads a leading "[[#RRGGBB" in a displayed string as an
+    #: override of the button's configured text colour, so "[[#000000STD BARO"
+    #: draws black text -- which is what a white or yellow softkey needs.
+    #:
+    #: Off by default and deliberately: on a PilotsDeck build that predates
+    #: the feature, or on any other Stream Deck plugin, the prefix is not
+    #: interpreted and renders as literal "[[#000000" on the button face,
+    #: which looks exactly like the daemon has broken. The colour is published
+    #: unconditionally as the /bg dataref either way; this only changes the
+    #: label string.
+    embed_text_color: bool = False
     timeout: float = 1.0
     json_path: str = ""
     #: seconds between reconnect attempts when X-Plane is not answering
@@ -186,6 +271,7 @@ class AppConfig:
     change_tolerance: int = 6
     displays: tuple[DisplayConfig, ...] = ()
     ocr: OcrConfig = field(default_factory=OcrConfig)
+    color: ColorConfig = field(default_factory=ColorConfig)
     publish: PublishConfig = field(default_factory=PublishConfig)
 
     def display(self, key: str) -> DisplayConfig:
@@ -255,6 +341,7 @@ def from_mapping(raw: Mapping[str, Any], base_dir: Path | None = None) -> AppCon
                 "ocr.sharpen_ladder must be a list of [amount, radius] pairs, "
                 f"e.g. [[0.0, 0.0], [0.5, 1.0]] -- got {ocr_data['sharpen_ladder']!r} ({exc})"
             ) from exc
+    color_data = _subsection(raw, "color")
     publish_data = _subsection(raw, "publish")
 
     if base_dir is not None and ocr_data.get("screens_file"):
@@ -293,9 +380,11 @@ def from_mapping(raw: Mapping[str, Any], base_dir: Path | None = None) -> AppCon
     config = AppConfig(
         displays=tuple(displays) if displays else default_displays(),
         ocr=_build(OcrConfig, ocr_data),
+        color=_build(ColorConfig, color_data),
         publish=_build(PublishConfig, publish_data),
         **{k: v for k, v in app_data.items() if k in {"loop_hz", "change_gating", "change_tolerance"}},
     )
     if config.loop_hz <= 0:
         raise ConfigError("app.loop_hz must be > 0")
+    config.color.validate()
     return config

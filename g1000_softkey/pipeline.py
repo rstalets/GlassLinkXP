@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 
+from .color import BLACK, classify_cell
 from .config import AppConfig, DisplayConfig
 from .ocr import CellResult, SoftkeyReader
 from .screens import ScreenLibrary
@@ -34,6 +35,10 @@ class DisplayResult:
     @property
     def labels(self) -> list[str]:
         return [cell.text for cell in self.cells]
+
+    @property
+    def backgrounds(self) -> list[int]:
+        return [cell.background for cell in self.cells]
 
 
 class DisplayPipeline:
@@ -150,6 +155,21 @@ class DisplayPipeline:
             changed = [True] * len(cells)
         timings["gate_ms"] = (time.perf_counter() - t0) * 1000.0
 
+        # Colour is measured for every cell on every frame, deliberately
+        # outside the change gate. The gate exists to skip OCR, which is the
+        # expensive stage; a median over a border ring is not. Doing it here
+        # means a cell whose background changes while its label does not -- a
+        # softkey becoming selected, which is the single most common colour
+        # event on the strip -- picks up the new colour even on the path that
+        # serves the text from cache, and does not depend on the grayscale
+        # gate happening to notice the colour change.
+        t0 = time.perf_counter()
+        if self.app.color.enabled:
+            backgrounds = [classify_cell(cell, self.app.color) for cell in cells]
+        else:
+            backgrounds = [BLACK] * len(cells)
+        timings["color_ms"] = (time.perf_counter() - t0) * 1000.0
+
         results: list[CellResult] = []
         diagnostics: dict[int, str] = {}
         preprocess_ms = 0.0
@@ -163,7 +183,9 @@ class DisplayPipeline:
                 else None
             )
             if not changed[index] and previous is not None:
-                cached = CellResult(**{**previous.__dict__, "ocr_ran": False})
+                cached = CellResult(
+                    **{**previous.__dict__, "ocr_ran": False, "background": backgrounds[index]}
+                )
                 results.append(cached)
                 continue
 
@@ -178,7 +200,9 @@ class DisplayPipeline:
                     f"BLANK   ink={ink:.4f} < {self.reader.config.blank_ink_ratio:.4f} "
                     f"(contrast={self.reader.config.blank_contrast}) -- never reached OCR"
                 )
-                results.append(CellResult(index=index, blank=True))
+                results.append(
+                    CellResult(index=index, blank=True, background=backgrounds[index])
+                )
                 continue
             variants = [
                 preprocess_cell(
@@ -193,7 +217,9 @@ class DisplayPipeline:
             preprocess_ms += (time.perf_counter() - t0) * 1000.0
 
             t0 = time.perf_counter()
-            cell_result = self.reader.read_best(index, variants)
+            cell_result = replace(
+                self.reader.read_best(index, variants), background=backgrounds[index]
+            )
             results.append(cell_result)
             ocr_ms += (time.perf_counter() - t0) * 1000.0
             ocr_calls += 1

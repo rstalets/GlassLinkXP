@@ -20,7 +20,7 @@ flowchart TD
     CFG --> PUB[Build the publisher]
 
     PUB --> RESOLVE{"Resolve dataref names to ids<br/>GET /api/v1/datarefs"}
-    RESOLVE -->|24 of 24| READY[Ready]
+    RESOLVE -->|48 of 48| READY[Ready]
     RESOLVE -->|some missing| WARN["Warn: is PI_G1000SoftkeyLabels.py<br/>installed in PythonPlugins?"]
     WARN --> READY
     RESOLVE -->|X-Plane not reachable| RETRY["Retry every retry_interval"]
@@ -32,7 +32,7 @@ flowchart TD
     READY --> LOOP{{"Every 1 / loop_hz seconds"}}
     LOOP --> GRAB[Grab a frame per display]
     GRAB --> PROC["Process the frame<br/>see below"]
-    PROC --> DIFF{"Any label changed<br/>since last publish?"}
+    PROC --> DIFF{"Any label or background<br/>changed since last publish?"}
     DIFF -->|no| SLEEP
     DIFF -->|yes| SEND["Publish the changed cells"]
     SEND --> SLEEP[Sleep the rest of the cycle]
@@ -46,7 +46,7 @@ one REST write per changed cell:
 
 ```mermaid
 flowchart LR
-    CHANGED["Cells whose label changed"] --> WS{"WebSocket up?"}
+    CHANGED["Datarefs whose value changed<br/>labels as base64, /bg as a number"] --> WS{"WebSocket up?"}
     WS -->|yes| BATCH["One dataref_set_values message<br/>fire and forget"]
     WS -->|"no, backing off"| REST["One PATCH per cell<br/>slower, but the labels still land"]
     BATCH -->|send fails| DROP["Drop the socket,<br/>reconnect next cycle"]
@@ -59,6 +59,7 @@ flowchart LR
 flowchart TD
     FRAME([Captured frame]) --> CROP["Crop the softkey strip<br/>fractional geometry from config"]
     CROP --> SPLIT["Split into 12 cells<br/>minus cell padding"]
+    SPLIT --> RING["Border-ring median BGR per cell<br/>-> HSV -> black / white / yellow / red<br/>every cell, every frame"]
     SPLIT --> GATE{"Cell pixels changed<br/>since last frame?"}
 
     GATE -->|"no (the common case)"| CACHE["Reuse the previous result<br/>no OCR at all"]
@@ -91,8 +92,9 @@ flowchart TD
     AGREE -->|yes| CONF["Mark confirmed<br/>value unchanged"]
     AGREE -->|no| REPL["Replace with the page's value"]
 
-    CONF --> OUT([12 labels])
+    CONF --> OUT([12 labels + 12 backgrounds])
     REPL --> OUT
+    RING --> OUT
 ```
 
 ### Why it is shaped like this
@@ -100,6 +102,24 @@ flowchart TD
 **Change gating first.** Softkeys change rarely, so almost every cycle finds
 nothing new and costs one crop and one array compare. All the expensive work
 below only runs on cells whose pixels actually moved.
+
+**Colour is measured outside the gate.** The gate exists to skip OCR, which
+is the expensive stage; a median over a cell's border ring is not, so it runs
+for all 12 cells on every frame. That is not just tidiness: a softkey becoming
+selected changes the cell's background and leaves the label character for
+character identical, which is the one event this feature most needs to get
+right. Measuring outside the gate means it is caught whether or not the
+grayscale comparison happens to notice.
+
+The colour is taken from the outermost few pixels of the cell, because labels
+are centred and a border ring is therefore essentially never glyph -- and,
+unlike a whole-cell statistic, the ring needs no assumption about the glyphs
+being the minority class, so it behaves the same on an inverted cell. It is
+summarised with a median so a handful of clipped pixels from the green softkey
+outline cannot drag it. Classification then tests V, then S, then hue: hue and
+saturation barely move when the display is dimmed, so brightness can only ever
+push a cell into black and can never turn a yellow into a red. See the
+`dump-colors` subcommand for the measurement the thresholds should come from.
 
 **A ladder rather than one sharpening setting.** The glyphs are around ten
 pixels tall. Thresholding at that size can close the counters of 0, 6, 8 and 9,
