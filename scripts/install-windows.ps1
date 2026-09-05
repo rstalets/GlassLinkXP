@@ -452,9 +452,16 @@ Write-Host @"
 ============================================================
  Done. To use it:
 
-   .venv\Scripts\activate
+   .venv\Scripts\Activate.ps1        <- PowerShell (use activate.bat in cmd)
    python -m g1000_softkey.main list-windows
    python -m g1000_softkey.main calibrate --display pfd
+
+ Every command must run inside the venv -- that is where numpy,
+ opencv and the tesserocr you just built live. If activation is
+ blocked by the execution policy, either run
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+ or skip activation and call the interpreter directly:
+   .venv\Scripts\python.exe -m g1000_softkey.main list-windows
 
 $(if ($simInstalled) {
 "  X-Plane side installed. Start X-Plane, then confirm the

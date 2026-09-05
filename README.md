@@ -123,42 +123,68 @@ Leptonica prebuilt. The catch: conda-forge's **win-64 builds stop at tesserocr
 Last resort: `engine = "pytesseract"` in `[ocr]`, which works with a plain UB
 Mannheim install but restarts Tesseract for every cell (measured ~24x slower
 per frame; same accuracy).
-4. **The X-Plane side** -- XPPython3 plus the dataref plugin:
-   ```
-   powershell -ExecutionPolicy Bypass -File scripts\install-xplane-plugin.ps1
-   ```
-   `scripts\install-windows.ps1` runs this for you unless you pass
-   `-SkipXPlane`. What it does, and why each part is needed:
 
-   * **XPPython3** goes in `<X-Plane 12>/Resources/plugins/XPPython3`. Version 4
-     bundles its own **Python 3.12**, so no system Python is required -- and
-     note the plugin therefore runs in *that* interpreter, not this project's
-     venv. That is why `PI_G1000SoftkeyLabels.py` imports nothing beyond the
-     standard library and the XPPython3 API.
-   * **`Resources/plugins/PythonPlugins/`** is created by XPPython3 on the
-     *first X-Plane run*, so on a fresh install it does not exist yet. The
-     script creates it early, which is harmless and saves a launch cycle.
-   * **`PI_G1000SoftkeyLabels.py`** is copied into that folder (XPPython3 loads
-     plugins by the `PI_` prefix). It creates 24 writable 16-byte datarefs and
-     does nothing else: `g1000/softkey/pfd/1..12` and `g1000/softkey/mfd/1..12`.
+### The X-Plane side
 
-   The Web API can *write* datarefs but cannot *create* them, which is the only
-   reason a plugin exists at all. Everything expensive stays in the standalone
-   daemon so it never touches X-Plane's flight-loop thread.
+XPPython3 plus the dataref plugin:
 
-   Restart X-Plane, then confirm the datarefs actually registered:
-   ```
-   powershell -ExecutionPolicy Bypass -File scripts\install-xplane-plugin.ps1 -VerifyOnly
-   ```
-   That queries a running X-Plane over the web API and reports how many of the
-   24 exist and their `value_type` (expect `data`). If the plugin failed to
-   load, look in `<X-Plane>/Log.txt` and `<X-Plane>/XPPython3.log`.
-5. **X-Plane web server**: 12.1.1+ serves the REST API on
-   `http://localhost:8086`. Check `http://localhost:8086/api/v1/datarefs`
-   in a browser; if it does not answer, enable the web server in
-   Settings -> Network.
+```
+powershell -ExecutionPolicy Bypass -File scripts\install-xplane-plugin.ps1
+```
+
+`scripts\install-windows.ps1` runs this for you unless you pass `-SkipXPlane`.
+What it does, and why each part is needed:
+
+* **XPPython3** goes in `<X-Plane 12>/Resources/plugins/XPPython3`. Version 4
+  bundles its own **Python 3.12**, so no system Python is required -- and note
+  the plugin therefore runs in *that* interpreter, not this project's venv.
+  That is why `PI_G1000SoftkeyLabels.py` imports nothing beyond the standard
+  library and the XPPython3 API.
+* **`Resources/plugins/PythonPlugins/`** is created by XPPython3 on the *first
+  X-Plane run*, so on a fresh install it does not exist yet. The script creates
+  it early, which is harmless and saves a launch cycle.
+* **`PI_G1000SoftkeyLabels.py`** is copied into that folder (XPPython3 loads
+  plugins by the `PI_` prefix). It creates 24 writable 16-byte datarefs and does
+  nothing else: `g1000/softkey/pfd/1..12` and `g1000/softkey/mfd/1..12`.
+
+The Web API can *write* datarefs but cannot *create* them, which is the only
+reason a plugin exists at all. Everything expensive stays in the standalone
+daemon so it never touches X-Plane's flight-loop thread.
+
+Restart X-Plane, then confirm the datarefs actually registered:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\install-xplane-plugin.ps1 -VerifyOnly
+```
+
+That queries a running X-Plane over the web API and reports how many of the 24
+exist and their `value_type` (expect `data`). If the plugin failed to load, look
+in `<X-Plane>/Log.txt` and `<X-Plane>/XPPython3.log`.
+
+### The X-Plane web server
+
+X-Plane 12.1.1+ serves the REST API on `http://localhost:8086`. Check
+`http://localhost:8086/api/v1/datarefs` in a browser; if it does not answer,
+enable the web server in Settings -> Network.
 
 ## Calibration workflow
+
+> **Activate the venv first.** Everything below assumes it -- `numpy`, OpenCV
+> and the `tesserocr` you built all live there. A bare `python` (or `py`) with
+> no venv active picks up a system interpreter and fails with
+> `ModuleNotFoundError: No module named 'numpy'`.
+>
+> ```powershell
+> .venv\Scripts\Activate.ps1     # PowerShell; .venv\Scripts\activate.bat in cmd
+> ```
+>
+> If PowerShell's execution policy blocks that, either run
+> `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` for the session,
+> or skip activation entirely and call `.venv\Scripts\python.exe` directly.
+>
+> The Python Launcher (`py`) does honour an active venv, so `py -m ...` works
+> once activated -- but it silently falls back to a system Python if it is not.
+
 
 The strip geometry depends on the pop-out window size and bezel, so it is
 expressed as *fractions* of the client area and has to be set once per setup.
@@ -268,6 +294,7 @@ display).
 | `list-windows` errors on Linux/macOS | Expected; the capture path is Windows-only. Use `--image`. |
 | `could not initialise Tesseract` / `tesseract executable was not found` | `TESSDATA_PREFIX` is unset or wrong. Point `ocr.tessdata_path` at the directory holding `eng.traineddata`. |
 | `X-Plane Web API unreachable` | X-Plane is not running, is older than 12.1.1, or the web server is off. The daemon keeps retrying; it never crashes the loop. |
+| `ModuleNotFoundError: No module named 'numpy'` | The venv is not active, so a system Python is running. `.venv\Scripts\Activate.ps1` (PowerShell), or call `.venv\Scripts\python.exe` directly. |
 | `N of 24 datarefs are not registered in X-Plane` | The XPPython3 plugin is not installed or failed to load. Check `<X-Plane>/Log.txt` and `XPPython3.log`. |
 | Labels are garbage or empty | Geometry. Run `dump-cells` and look at the `_prep.png` images. |
 | One cell is always wrong | Missing entry in `labels.txt`, or a two-line label (see limitations). |

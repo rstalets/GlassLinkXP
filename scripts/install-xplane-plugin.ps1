@@ -263,7 +263,7 @@ Write-Host @"
    2. Confirm the 24 datarefs registered:
         scripts\install-xplane-plugin.ps1 -VerifyOnly
    3. Pop out the PFD and MFD into their own windows, then:
-        .venv\Scripts\activate
+        .venv\Scripts\Activate.ps1
         python -m g1000_softkey.main list-windows
         python -m g1000_softkey.main calibrate --display pfd
 
