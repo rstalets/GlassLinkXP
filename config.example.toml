@@ -1,0 +1,151 @@
+# G1000 softkey OCR daemon -- copy to config.toml and edit.
+# Run with:  python -m g1000_softkey.main -c config.toml run
+
+[app]
+# Capture/OCR rate. 4 Hz is plenty: softkeys change only when you press one,
+# and with change gating on, unchanged cells cost nothing.
+# 12 Hz keeps the worst-case detection delay under ~85 ms. Change gating makes
+# an unchanged cycle cost a fraction of a millisecond, so a high rate is nearly
+# free; the OCR only runs on cells whose pixels actually moved.
+loop_hz = 12.0
+# Skip OCR for cells whose pixels did not change since the previous frame.
+change_gating = true
+# Per-pixel intensity difference that counts as a change (0..255).
+change_tolerance = 6
+
+# --- displays --------------------------------------------------------------
+# One section per captured window. `key` is the table name and also the
+# dataref prefix: g1000/softkey/<key>/1..12
+#
+# window_title is a case-insensitive SUBSTRING of the pop-out window title.
+# Run `python -m g1000_softkey.main list-windows` on the X-Plane machine to
+# see the real titles, then paste a distinctive part of them here.
+#
+# geometry is expressed as FRACTIONS of the window's client area so it
+# survives a resize. Get a starting point from:
+#   python -m g1000_softkey.main -c config.toml calibrate
+# then check calibration/<key>_overlay.png and nudge the numbers.
+
+[display.pfd]
+window_title = "G1000 PFD"
+enabled = true
+# dataref_prefix = "g1000/softkey/pfd"   # defaults to g1000/softkey/<key>
+# Whether this daemon may resize the pop-out window at all. Off by default,
+# and deliberately: a pop-out may be feeding external avionics hardware -- a
+# RealSimGear G1000 unit, for instance -- where its size and position are part
+# of a physical setup. Breaking somebody's panel to make our OCR marginally
+# easier is not a trade to make silently. Both displays decide independently.
+# manage_window_size = true
+#
+# Client size to force the pop-out to, as [width, height]. Only applied when
+# manage_window_size is true above.
+#
+# The G1000 renders to a 1024x768 texture, so a pop-out whose *display area* is
+# smaller than that discards real detail before capture ever sees it -- and the
+# softkey glyphs are already marginal for OCR at around 10 px tall. The pop-out
+# includes the bezel, so the window has to be larger than 1024x768 for the
+# display area itself to reach it; find the number with one calibrate pass.
+# Growing beyond that only interpolates and will not help.
+#
+# Geometry below is fractional, so resizing does not invalidate calibration.
+# Omit to leave the window alone.
+# window_size = [1400, 1000]
+
+[display.pfd.geometry]
+x = 0.050      # left edge of the softkey strip
+y = 0.915      # top edge
+w = 0.900      # width
+h = 0.055      # height
+cells = 12
+cell_pad_x = 0.10   # fraction of a cell trimmed off each side
+cell_pad_y = 0.12   # fraction of the strip height trimmed top and bottom
+
+[display.mfd]
+window_title = "G1000 MFD"
+enabled = true
+
+[display.mfd.geometry]
+x = 0.050
+y = 0.915
+w = 0.900
+h = 0.055
+cells = 12
+cell_pad_x = 0.10
+cell_pad_y = 0.12
+
+# --- OCR -------------------------------------------------------------------
+[ocr]
+engine = "auto"          # auto | tesserocr | pytesseract  (auto prefers tesserocr)
+lang = "eng"
+psm = 7                  # single text line
+whitelist = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -/"
+# The glyphs are only ~10 px tall in the capture and arrive slightly soft.
+# Thresholding at that size can close the counters of 0, 6, 8 and 9, and a
+# filled counter is not a character -- Tesseract returns an empty string rather
+# than a wrong digit. Sharpening reopens them, but too much rings and grows
+# strokes instead, turning a 0 into a B. The right amount depends on the font
+# and the capture scale, so rather than fix one value we try each (amount,
+# radius) pair in order and keep whichever answer lands on a known label.
+#
+# The first rung is no sharpening, and an exact vocabulary hit stops the ladder
+# there, so this can never overwrite an answer the gentle path got right. The
+# extra OCR calls are spent only on cells that failed, and only when they
+# change.
+upscale = 4.0
+sharpen_ladder = [[0.0, 0.0], [0.5, 1.0], [1.0, 1.4]]
+# Landing on a known label is not proof of being right when the vocabulary
+# holds near-identical members: every digit 0-7 is a valid softkey, so a 0
+# misread as 2 is still an exact match. Only a hit at least this confident ends
+# the ladder early; below it the remaining rungs are tried and the most
+# confident answer wins. 0 disables early stopping entirely.
+accept_confidence = 80.0
+# Below this confidence a cell is a candidate for being filled in from a known
+# softkey page. Recognising a 10-pixel "0" is hard; noticing that IDENT/BKSP/
+# BACK sit in cells 9-11 is easy, and that only happens on the transponder
+# keypad -- whose layout is fixed, so the hard cells can be looked up instead of
+# recognised. Pages live in screens_file; add one with:
+#     g1000 screen-template --display pfd --name my-page
+screen_confidence = 80.0
+# A page is only identified when its match cells all read at least this
+# confidently -- higher on purpose, because an identification made from a guess
+# would propagate that guess into every cell it fills.
+screen_match_confidence = 85.0
+
+# Off by default: page lookup covers the same cells with a stronger signal.
+# Below this confidence, fall back to matching the glyph's shape against
+# signatures.json. Tesseract decides what a glyph *is*, and on a ~10 px digit
+# that decision gets shaky -- but the pixels are stable and the label set is
+# small and closed, so "which known label does this look like?" is an easier
+# question than "what character is this?". Build the file with:
+#     g1000 learn --display pfd --labels "0,1,2,3,4,5,6,7,IDENT,BKSP,BACK,"
+# It is additive, so run it on each screen you care about. 0 disables it.
+#
+# This is not a hash of the raw cell -- that is what brightness breaks.
+# Signatures come from the binarised, size-normalised glyph and are compared by
+# distance, so they survive dimming, highlighting and a window resize.
+signature_confidence = 0.0
+threshold = "otsu"       # otsu | adaptive -- per cell, never global
+fuzzy_cutoff = 0.62      # difflib cutoff for snapping to labels.txt
+blank_ink_ratio = 0.004  # below this fraction of "ink" a cell is reported as ""
+# How far a pixel must sit from the cell's dominant tone to count as ink. The
+# G1000 dims unavailable softkeys rather than hiding them, so too high a value
+# turns a dim-but-present label into an empty cell. Short labels break first --
+# a lone digit carries much less evidence than a word, so a missing "0" on the
+# XPDR code screen while longer labels still read is the signature. Lower it to
+# ~20 if dim labels are being dropped.
+blank_contrast = 40
+# labels_file = "g1000_softkey/labels.txt"   # relative paths resolve next to this file
+# tessdata_path = "C:/Program Files/Tesseract-OCR/tessdata"
+
+# --- publishing ------------------------------------------------------------
+[publish]
+target = "websocket"        # websocket | webapi | file | console
+base_url = "http://localhost:8086"
+api_version = "v1"       # v1 works on X-Plane 12.1.1+; v2 from 12.1.4
+field_width = 16         # bytes per dataref -> PilotsDeck address ':s16'
+timeout = 1.0
+retry_interval = 5.0     # seconds between reconnect attempts
+# json_path = "C:/Users/you/AppData/Local/Temp/g1000_softkey_labels.json"
+# (empty -> <system temp>/g1000_softkey_labels.json, the same default the
+#  XPPython3 plugin uses; override both sides with the G1000_SOFTKEY_JSON
+#  environment variable)

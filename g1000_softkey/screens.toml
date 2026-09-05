@@ -1,0 +1,21 @@
+# Softkey page definitions.
+#
+# When the confident labels on a strip identify the page, the cells OCR could
+# not read can simply be looked up instead of recognised. Recognising a 10-pixel
+# "0" is hard; noticing that IDENT / BKSP / BACK sit in cells 9-11 is easy, and
+# that only happens on the transponder keypad.
+#
+#   match   cells that must all read exactly this, and read confidently
+#   labels  what the page should show; applied only to low-confidence cells
+#
+# Cells are numbered from 1. A page is applied only when every match cell agrees
+# above ocr.screen_confidence, so a page is never identified from a guess.
+#
+# `g1000 screen-template --display pfd` prints a starting block from whatever is
+# on screen right now.
+
+[[screen]]
+name = "xpdr-code"
+display = "pfd"
+match = { 9 = "IDENT", 10 = "BKSP", 11 = "BACK" }
+labels = { 1 = "0", 2 = "1", 3 = "2", 4 = "3", 5 = "4", 6 = "5", 7 = "6", 8 = "7" }
