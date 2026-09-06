@@ -147,3 +147,78 @@ def test_managing_one_display_leaves_the_other_alone(recorded):
 
     assert recorded[0] == ("G1000 PFD", {})
     assert recorded[1] == ("G1000 MFD", {"target_size": (1400, 1000), "manage_size": True})
+
+
+# -- the frame slot, and the window that goes away --------------------------
+#
+# WgcCapture itself needs Windows, but the slot it shares with the capture
+# thread does not, and the slot is where the rule lives: a frame from a window
+# that has closed is not a current frame. Without that rule the slot kept
+# handing back the last frame of a closed pop-out for as long as the daemon
+# ran -- the Stream Deck froze on whatever the labels were when the window
+# went, nothing reported a problem because frames were still arriving, and the
+# code that reopens a closed pop-out was never reached.
+
+
+def _slot():
+    from g1000_softkey.capture import _LatestFrame
+
+    return _LatestFrame()
+
+
+def test_an_empty_slot_has_nothing_to_give():
+    assert _slot().take() is None
+
+
+def test_the_newest_frame_is_what_comes_out():
+    slot = _slot()
+    slot.put(np.zeros((2, 2, 3), dtype=np.uint8))
+    slot.put(np.ones((2, 2, 3), dtype=np.uint8))
+    assert np.array_equal(slot.take(), np.ones((2, 2, 3), dtype=np.uint8))
+
+
+def test_what_comes_out_is_a_copy():
+    """The capture thread owns its buffer and will write to it again."""
+    slot = _slot()
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+    slot.put(frame)
+    taken = slot.take()
+    taken[0, 0, 0] = 255
+    assert slot.take()[0, 0, 0] == 0
+
+
+def test_a_closed_window_has_no_frame_even_though_one_was_captured():
+    slot = _slot()
+    slot.put(np.zeros((2, 2, 3), dtype=np.uint8))
+    assert slot.take() is not None
+
+    slot.lose()
+    assert slot.lost is True
+    assert slot.take() is None, (
+        "the last frame of a window that no longer exists is not a picture of "
+        "anything current, and serving it hides the closure completely"
+    )
+
+
+def test_losing_the_window_is_permanent():
+    """A WGC session does not outlive its window; the way back is a new source."""
+    slot = _slot()
+    slot.lose()
+    slot.put(np.zeros((2, 2, 3), dtype=np.uint8))
+    assert slot.take() is None
+
+
+def test_stopping_is_not_losing_the_window():
+    """Shutdown and a closed window are different states that both stop frames."""
+    slot = _slot()
+    slot.put(np.zeros((2, 2, 3), dtype=np.uint8))
+    slot.stop()
+    assert slot.stopping is True
+    assert slot.lost is False
+    assert slot.take() is not None, "a clean shutdown does not invalidate the last frame"
+
+
+def test_a_source_with_no_window_to_lose_never_reports_one_lost(frames_dir):
+    from g1000_softkey import capture
+
+    assert capture.window_lost(ImageCapture(frames_dir)) is False

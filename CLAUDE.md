@@ -150,6 +150,15 @@ displays -- `manage_windows()` returns the keys it handled and
 is one more than can be true at once, and which won would come down to which
 ran last. `tests/test_capture.py` pins it.
 
+**A frame from a closed window is not a frame.** `_LatestFrame` goes empty for
+good once the capture reports `on_closed`, and `run` treats that as "reopen the
+pop-out and build a new source" -- a WGC session does not outlive its window,
+so there is nothing to reconnect. It shipped without that rule and the bug hid
+itself completely: the slot kept serving the last frame of a closed pop-out, so
+the labels froze where they were, the starved-display warning never fired
+because frames were still arriving, and the recovery never ran. If you are
+tempted to serve a cached frame when a source has nothing, this is why not.
+
 **A window's size and its position are measured from different rectangles.**
 `WindowInfo.width/height` is the *client* area, because that is what capture
 sees; `WindowInfo.x/y` is the *window* origin, because that is the corner

@@ -446,6 +446,8 @@ Settings tab shows beside each field.
 | `... was accepted but no window titled like 'G1000 PFD' appeared` | The pop-out opened under a title `window_title` does not match. Run `list-windows --all` and copy the real one. |
 | Window management does nothing, and says X-Plane is not running | It looks for a window of class `X-System`. If the sim is up and this still says otherwise, `list-windows --all` will show what class its windows actually carry. |
 | A pop-out ends up smaller than `size` | X-Plane enforces a minimum on pop-out windows; the log says what it settled at. Re-check the strip geometry against that size. |
+| Labels froze and stopped following the sim | The pop-out was closed. With `[window_management]` on it is reopened within a cycle and the log says so; with it off, `no frames from ... after 3s` is the warning to look for. |
+| A pop-out you closed on purpose keeps coming back | That is window management doing its job. Set `enabled = false` under `[display.mfd]` to leave that display out of it, or turn `[window_management]` off entirely. |
 | `could not initialise Tesseract` / `tesseract executable was not found` | `TESSDATA_PREFIX` is unset or wrong. Point `ocr.tessdata_path` at the directory holding `eng.traineddata`. |
 | `X-Plane Web API unreachable` | X-Plane is not running, is older than 12.1.1, or the web server is off. The daemon keeps retrying; it never crashes the loop. |
 | `ModuleNotFoundError: No module named 'numpy'` | The venv is not active, so a system Python is running. `.venv\Scripts\Activate.ps1` (PowerShell), or call `.venv\Scripts\python.exe` directly. |
@@ -550,6 +552,15 @@ On Linux/CPython 3.11, Tesseract 5.3.4 (system) with `tesserocr` 2.11:
   not match exactly, which is what stops an X-Plane too old for `filter[name]`
   -- it answers with the *whole* command list -- from having an arbitrary
   command fired in somebody's cockpit.
+* The frame slot the capture thread writes into (`tests/test_capture.py`): the
+  newest frame wins, what comes out is a copy, and a slot whose window has
+  closed has no frame to give even though one was captured -- permanently,
+  because a WGC session does not outlive its window. Shutting down is kept
+  distinct from losing the window: both stop frames, only one invalidates the
+  last one. Plus the reopen decision itself (`tests/test_main.py`): a lost
+  capture is replaced whether management reopened the window or found it
+  already back, nothing is rebuilt when the window could not be brought back,
+  and neither `--image` nor window management switched off reopens anything.
 * Vocabulary snapping fixed 1 of 49 labels in the offline corpus
   (`TMRIREF` -> `TMR/REF`), and is unit-tested against the usual confusions
   (`lNSET`, `DCLTP`, `0BS`, `STDBARO`).
@@ -660,6 +671,12 @@ The following code paths are written from the documented APIs but have
     it.** The premise -- that an occluding taskbar breaks the capture -- is
     the user's observation, and the fix follows from it rather than from
     anything measured here.
+  * **The reopen path end to end.** That a closed pop-out is noticed is no
+    longer in doubt: `windows-capture` was seen calling `on_closed` on a real
+    run, which is the signal the whole recovery hangs off. What has not been
+    seen is the rest of it -- the pop-out command going out, the window coming
+    back, and a new capture attaching to it. The decision to rebuild, and every
+    way it can decline to, are covered in `tests/test_main.py`.
 * **The details of the X-Plane API clients.** Whether X-Plane accepts a write
   to a plugin-created Data dataref was PLAN.md's open question, and it is
   answered: both the WebSocket and the REST publisher have been seen updating

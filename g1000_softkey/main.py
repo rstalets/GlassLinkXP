@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from . import capture as capture_module
 from . import synth, windowmgr
 from .capture import (
     XPLANE_WINDOW_CLASS,
@@ -65,7 +66,32 @@ def _open_sources(
     return sources_for(config.active_displays, image, managed=managed)
 
 
-def _manage_windows(config: AppConfig, image: str | None) -> windowmgr.Report:
+def _log_report(report: windowmgr.Report, routine: bool) -> None:
+    """Say what a management pass did, at a volume that suits how often it runs.
+
+    The pass made on the way up is worth a line per display: it is the record
+    of what the daemon did to somebody's screen before it started. A pass made
+    later, to put a closed window back, is ``routine`` -- there the displays it
+    found already correct are the ones it did not come for, and saying so at
+    INFO buries the label lines the log is actually for. Anything that
+    *changed*, or failed, is worth a line whenever it happens.
+    """
+    if report.skipped or not report.xplane_running:
+        for line in report.lines():
+            (LOG.debug if routine else LOG.info)("window management: %s", line)
+        return
+    for outcome in report.outcomes:
+        if not outcome.ok:
+            LOG.warning("window management: %s", outcome)
+        elif routine and outcome.action == "already":
+            LOG.debug("window management: %s", outcome)
+        else:
+            LOG.info("window management: %s", outcome)
+
+
+def _manage_windows(
+    config: AppConfig, image: str | None, routine: bool = False
+) -> windowmgr.Report:
     """Open, size and place the pop-outs before anything tries to capture them.
 
     A no-op when reading PNGs: there is no window behind an ``--image`` run, so
@@ -75,53 +101,51 @@ def _manage_windows(config: AppConfig, image: str | None) -> windowmgr.Report:
     if image is not None:
         return windowmgr.Report(skipped="reading from --image, so no window is managed.")
     report = windowmgr.manage_windows(config)
-    for line in report.lines():
-        LOG.info("window management: %s", line)
+    _log_report(report, routine)
     return report
 
 
-#: How often a display that is delivering no frames may trigger a fresh
-#: window-management pass. A pop-out the user closed mid-flight is worth
-#: reopening; looking every cycle would fire pop-out commands at X-Plane a
-#: dozen times a second.
-RECOVERY_INTERVAL = 10.0
+#: How long to wait before trying a closed window again, when reopening it did
+#: not work. Nothing polls on this: a closed window is acted on the moment the
+#: capture reports it. The interval only stops a *failed* reopen -- X-Plane
+#: shut down, say -- from enumerating the desktop and firing pop-out commands
+#: on every cycle of the loop for as long as the daemon runs.
+REOPEN_RETRY_INTERVAL = 5.0
 
 
-def _recover(
+def _reopen_closed(
     config: AppConfig,
     image: str | None,
     display: DisplayConfig,
     sources: dict[str, FrameSource],
 ) -> None:
-    """Try to put a display that has stopped delivering frames back on screen.
+    """Put back a pop-out that has been closed, and capture it again.
 
-    Only acts when window management actually had to *open* the window. A
-    window that was already there is not delivering frames for some other
-    reason -- minimised, or a capture session that died -- and rebuilding the
-    capture around the same window would be a guess at a cause nobody has
-    measured. Reopening a window that had been closed is the one case where the
-    old capture is known to be attached to something that no longer exists.
+    Reached only when the capture backend has said the window went away, which
+    it reports through ``on_closed``. A WGC session does not survive its
+    window, so there is no reconnecting the existing source: the window has to
+    exist again and a new source be built on it.
+
+    The window is rebuilt whether this pass reopened it or found it already
+    back -- a user who closes a pop-out and immediately reopens it themselves
+    leaves a window that needs no managing and a capture that is dead anyway.
     """
-    # The enabled check is here as well as inside manage_windows, which would
-    # only report that it is off: this runs every RECOVERY_INTERVAL for as long
-    # as a display is starved, and "window management is off in the config"
-    # every ten seconds is not news the second time.
-    if not config.window_management.enabled:
+    if image is not None or not config.window_management.enabled:
         return
-    report = _manage_windows(config, image)
-    if not report.opened(display.key):
-        return
+    report = _manage_windows(config, image, routine=True)
+    if display.key not in report.managed:
+        return  # no window to attach to yet; the retry interval applies
     try:
         rebuilt = sources_for([display], None, managed=report.managed)[display.key]
     except CaptureError as exc:
-        LOG.warning("reopened %s, but could not start capturing it: %s", display.key, exc)
+        LOG.warning("%s is open again, but could not be captured: %s", display.key, exc)
         return
     try:
         sources[display.key].close()
     except Exception as exc:  # noqa: BLE001 - the old one is being discarded anyway
         LOG.debug("ignoring error closing the old %s capture: %s", display.key, exc)
     sources[display.key] = rebuilt
-    LOG.info("%s was reopened and is being captured again", display.key)
+    LOG.info("%s was closed and has been reopened; capturing it again", display.key)
 
 
 def _grab(source: FrameSource, retries: int = 25, delay: float = 0.2) -> np.ndarray:
@@ -438,7 +462,7 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
     previous: dict[str, tuple[list[str], list[int]]] = {}
     starved: dict[str, float] = {}
     warned_starved: set[str] = set()
-    next_recovery: dict[str, float] = {}
+    next_reopen: dict[str, float] = {}
     LOG.info(
         "running at %.1f Hz, gating=%s, publisher=%s",
         config.loop_hz, config.change_gating, publisher.name,
@@ -450,6 +474,14 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
             last_results = {}
             changed_this_cycle = False
             for display in config.active_displays:
+                # The capture backend says when its window has gone, so acting
+                # on that is immediate and needs nothing to poll: a pop-out
+                # closed mid-flight is back within a cycle. The interval only
+                # paces a reopen that did not work.
+                if (capture_module.window_lost(sources[display.key])
+                        and time.monotonic() >= next_reopen.get(display.key, 0.0)):
+                    next_reopen[display.key] = time.monotonic() + REOPEN_RETRY_INTERVAL
+                    _reopen_closed(config, args.image, display, sources)
                 frame = sources[display.key].grab()
                 if frame is None:
                     # A display that never delivers is a setup problem, not a
@@ -466,9 +498,6 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
                             "is open.",
                             display.key, waited, display.window_title,
                         )
-                    if waited > 3.0 and time.monotonic() >= next_recovery.get(display.key, 0.0):
-                        next_recovery[display.key] = time.monotonic() + RECOVERY_INTERVAL
-                        _recover(config, args.image, display, sources)
                     continue
                 if display.key in starved:
                     del starved[display.key]

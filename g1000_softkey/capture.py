@@ -355,6 +355,61 @@ def _monitor_bounds(hwnd: int) -> tuple[int, int, int, int]:  # pragma: no cover
     return rect.left, rect.top, rect.right, rect.bottom
 
 
+class _LatestFrame:
+    """The one frame slot the capture thread and :meth:`WgcCapture.grab` share.
+
+    Split out of :class:`WgcCapture` because it is the only part of that class
+    that can be exercised anywhere but Windows, and because it holds the rule
+    that the rest of the daemon depends on: **once the captured window is gone,
+    there is no current frame, and the last one is not a substitute.**
+
+    That rule was missing, and it hid the failure it was most needed for. The
+    slot kept handing back the final frame from a window the user had closed,
+    so the daemon read a frozen picture forever: the labels on the Stream Deck
+    stayed as they were at the moment the window went away, the "no frames
+    from %s" warning never fired because frames were still arriving, and the
+    recovery that reopens a closed pop-out was never reached. A stale frame is
+    worse than no frame -- no frame is a condition the daemon can act on.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._frame: Frame | None = None
+        self._lost = False
+        self._stopping = False
+
+    def put(self, frame: Frame) -> None:
+        with self._lock:
+            self._frame = frame
+
+    def take(self) -> Frame | None:
+        """The newest frame, or None -- including when the window has gone."""
+        with self._lock:
+            if self._lost or self._frame is None:
+                return None
+            return self._frame.copy()
+
+    def lose(self) -> None:
+        """The captured window closed. Permanent: the session cannot come back."""
+        with self._lock:
+            self._lost = True
+
+    @property
+    def lost(self) -> bool:
+        with self._lock:
+            return self._lost
+
+    def stop(self) -> None:
+        """We are shutting down; the capture thread should stop at its next frame."""
+        with self._lock:
+            self._stopping = True
+
+    @property
+    def stopping(self) -> bool:
+        with self._lock:
+            return self._stopping
+
+
 class WgcCapture:
     """Windows Graphics Capture backend (``windows-capture`` PyPI package).
 
@@ -386,9 +441,7 @@ class WgcCapture:
 
         self.window_title = window_title
         self.name = f"wgc:{window_title}"
-        self._lock = threading.Lock()
-        self._frame: Frame | None = None
-        self._closed = False
+        self._buffer = _LatestFrame()
         self._error: str | None = None
 
         # Resolve the exact title first so we can give a useful error message
@@ -435,31 +488,52 @@ class WgcCapture:
             except Exception as exc:  # noqa: BLE001 - never kill the capture thread
                 self._error = f"frame conversion failed: {exc}"
                 return
-            with self._lock:
-                self._frame = bgr
-                if self._closed:
-                    capture_control.stop()
+            self._buffer.put(bgr)
+            if self._buffer.stopping:
+                capture_control.stop()
 
         @capture.event  # pragma: no cover - Windows only
         def on_closed():  # type: ignore[no-untyped-def]
             LOG.warning("capture target window closed: %s", window_title)
             self._error = "capture window closed"
+            # Not just a message: this is what stops grab() serving the last
+            # frame of a window that no longer exists, and so what lets the
+            # daemon notice and reopen it.
+            self._buffer.lose()
 
         self._control = capture.start_free_threaded()  # pragma: no cover
+
+    @property
+    def window_closed(self) -> bool:
+        """Whether the captured window has gone. This source is then finished.
+
+        A WGC session does not survive its window, so the way back is a new
+        source built on a new window -- see ``main._reopen_closed``.
+        """
+        return self._buffer.lost
 
     def grab(self) -> Frame | None:  # pragma: no cover - Windows only
         if self._error:
             LOG.debug("capture backend reported: %s", self._error)
-        with self._lock:
-            return None if self._frame is None else self._frame.copy()
+        return self._buffer.take()
 
     def close(self) -> None:  # pragma: no cover - Windows only
-        with self._lock:
-            self._closed = True
+        self._buffer.stop()
         try:
             self._control.stop()
         except Exception as exc:  # noqa: BLE001
             LOG.debug("ignoring error while stopping capture: %s", exc)
+
+
+def window_lost(source: FrameSource) -> bool:
+    """Whether ``source`` has lost the window it was capturing.
+
+    Asked of any source, answered only by :class:`WgcCapture` -- a PNG on disk
+    has no window to lose. Read through ``getattr`` rather than added to the
+    :class:`FrameSource` protocol so that a source which cannot lose a window
+    does not have to carry a method saying so.
+    """
+    return bool(getattr(source, "window_closed", False))
 
 
 def create_source(spec: str) -> FrameSource:

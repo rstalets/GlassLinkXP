@@ -30,14 +30,14 @@ flowchart TD
     RDR --> READY
 
     READY --> LOOP{{"Every 1 / loop_hz seconds"}}
-    LOOP --> GRAB[Grab a frame per display]
+    LOOP --> LOST{"Has the capture said its<br/>window closed?"}
+    LOST -->|"yes, and management is on"| REOPEN["Reopen the pop-out and build<br/>a new capture on it"]
+    LOST -->|no| GRAB
+    REOPEN --> GRAB[Grab a frame per display]
     GRAB --> GOT{"Did a frame arrive?"}
     GOT -->|yes| PROC["Process the frame<br/>see below"]
-    GOT -->|"no, for over 3 s"| STARVED["Warn once, and re-run window<br/>management at most every 10 s"]
-    STARVED --> REOPEN{"Did it have to<br/>*open* the window?"}
-    REOPEN -->|"yes -- the old capture<br/>is attached to nothing"| REBUILD[Rebuild that display's capture]
-    REOPEN -->|no| SLEEP
-    REBUILD --> SLEEP
+    GOT -->|"no, for over 3 s"| STARVED["Warn once: the window has to<br/>exist and be rendering"]
+    STARVED --> SLEEP
     PROC --> DIFF{"Any label or background<br/>changed since last publish?"}
     DIFF -->|no| SLEEP
     DIFF -->|yes| SEND["Publish the changed cells"]
@@ -62,7 +62,7 @@ flowchart LR
 ## Managing the pop-out windows
 
 On unless you turn it off. One pass runs before the capture sources are opened,
-and again whenever a display has gone quiet for more than three seconds. It is
+and another whenever a capture reports that its window has closed. It is
 idempotent: over a pair of windows that are already right it enumerates the
 desktop once and touches nothing.
 
@@ -129,6 +129,22 @@ thing that sizes the windows it manages -- `capture.sources_for` is told which
 displays those are and does not apply the per-display `window_size` to them.
 Two settings that both fix one window's size is one more than can be true at
 once, and which of them won would come down to which happened to run last.
+
+**A closed window is a signal, not something to poll for.** Windows Graphics
+Capture calls `on_closed` when the window it was capturing goes away, so the
+daemon reopens the pop-out on the next cycle -- within about 80 ms at 12 Hz --
+rather than on a timer. Nothing reconnects: a WGC session does not outlive its
+window, so the source is replaced rather than repaired. The only interval
+involved paces a reopen that *failed*, so that a sim which has shut down does
+not have pop-out commands fired at it twelve times a second.
+
+That signal is also why the frame slot has to go empty when the window closes.
+It did not, and the bug it hid is the one this recovery exists for: the slot
+kept serving the last frame of the closed pop-out, so the labels froze at
+whatever they were when the window went, the "no frames" warning never fired
+because frames were still arriving, and none of the above was ever reached.
+A stale frame is worse than no frame, because no frame is a condition the
+daemon can act on.
 
 **`_popout`, not `_popup`.** The two commands differ by two characters and do
 visibly similar things. The popup opens the panel *inside* the X-Plane window,
