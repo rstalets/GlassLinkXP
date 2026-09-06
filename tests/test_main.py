@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from g1000_softkey import main as main_module
 from g1000_softkey import synth
 from g1000_softkey.color import BLACK, RED, WHITE, YELLOW
 from g1000_softkey.config import DisplayConfig, PublishConfig
@@ -19,19 +20,47 @@ def frames(tmp_path_factory):
     return path
 
 
+class RecordingPublisher:
+    """Everything one pass of ``run`` hands to a publisher, kept for inspection.
+
+    These tests used to read the JSON file the file publisher wrote, because
+    it was the one target that could be observed without X-Plane. What they
+    are about, though, is what a full ``run --once`` produces -- capture,
+    OCR, colour, naming -- not how it is transmitted, so with that target gone
+    they watch the values at the publisher boundary instead.
+    """
+
+    name = "recording"
+
+    def __init__(self) -> None:
+        self.values: dict[str, object] = {}
+        self.closed = False
+
+    def publish(self, values) -> None:
+        self.values.update(values)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture
+def published(monkeypatch):
+    recorder = RecordingPublisher()
+    monkeypatch.setattr(main_module, "create_publisher", lambda *a, **k: recorder)
+    return recorder
+
+
 def test_synth_writes_frames(tmp_path):
     assert main(["synth", "--out", str(tmp_path)]) == 0
     assert len(list(tmp_path.glob("*.png"))) == len(synth.MENUS)
 
 
-def test_run_once_with_the_file_publisher(frames, tmp_path, monkeypatch):
-    target = tmp_path / "labels.json"
-    monkeypatch.setenv("G1000_SOFTKEY_JSON", str(target))
-    assert main(["run", "--image", str(frames / "pfd_top.png"), "--publisher", "file", "--once"]) == 0
-    labels = json.loads(target.read_text())["labels"]
-    assert labels["g1000/softkey/pfd/1"] == "INSET"
-    assert labels["g1000/softkey/mfd/12"] == "ALERTS"
-    assert labels["g1000/softkey/pfd/2"] == ""
+def test_run_once_publishes_the_labels_it_read(frames, published):
+    assert main(["run", "--image", str(frames / "pfd_top.png"), "--once"]) == 0
+    assert published.values["g1000/softkey/pfd/1"] == "INSET"
+    assert published.values["g1000/softkey/mfd/12"] == "ALERTS"
+    assert published.values["g1000/softkey/pfd/2"] == ""
+    assert published.closed, "run must close the publisher on the way out"
 
 
 def test_run_with_console_publisher(frames):
@@ -130,17 +159,13 @@ def test_the_longest_label_fits_the_default_field_width():
     assert encode_field(longest, width).rstrip(b"\x00").decode() == longest
 
 
-def test_run_publishes_colours_through_the_file_publisher(frames, tmp_path, monkeypatch):
-    target = tmp_path / "labels.json"
-    monkeypatch.setenv("G1000_SOFTKEY_JSON", str(target))
-    assert main(["run", "--image", str(frames / "alerts.png"),
-                 "--publisher", "file", "--once"]) == 0
-    payload = json.loads(target.read_text())
-    assert payload["numbers"]["g1000/softkey/pfd/5/bg"] == YELLOW
-    assert payload["numbers"]["g1000/softkey/pfd/6/bg"] == RED
-    assert payload["numbers"]["g1000/softkey/pfd/9/bg"] == WHITE
-    assert payload["numbers"]["g1000/softkey/pfd/1/bg"] == BLACK
-    assert payload["labels"]["g1000/softkey/pfd/5"] == "CAUTION"
+def test_run_publishes_the_cell_colours_alongside_the_labels(frames, published):
+    assert main(["run", "--image", str(frames / "alerts.png"), "--once"]) == 0
+    assert published.values["g1000/softkey/pfd/5/bg"] == YELLOW
+    assert published.values["g1000/softkey/pfd/6/bg"] == RED
+    assert published.values["g1000/softkey/pfd/9/bg"] == WHITE
+    assert published.values["g1000/softkey/pfd/1/bg"] == BLACK
+    assert published.values["g1000/softkey/pfd/5"] == "CAUTION"
 
 
 def test_dump_colors_prints_the_measurements(frames, tmp_path, capsys):

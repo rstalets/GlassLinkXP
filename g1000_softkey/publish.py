@@ -2,16 +2,19 @@
 
 Three targets:
 
+``websocket`` One ``dataref_set_values`` message per cycle over X-Plane's
+            WebSocket API. The normal path: a changed cell costs part of a
+            frame that was going to be sent anyway.
 ``webapi``  PATCH the plugin-created datarefs through X-Plane's built-in REST
             API (12.1.1+). Data (byte array) datarefs are base64 in both
             directions; the Int datarefs carrying the background colour are
             written as bare numbers. Dataref ids are session-scoped, so names
             are resolved to ids at startup and re-resolved whenever a write
             404s.
-``file``    Atomically write a small JSON file that the XPPython3 plugin
-            polls at 5 Hz. Fallback for the case where the Web API refuses to
-            write a plugin-created dataref.
 ``console`` Log the labels; for development only.
+
+Both X-Plane paths write the datarefs the XPPython3 plugin creates, and both
+have been confirmed doing so against a running X-Plane.
 """
 
 from __future__ import annotations
@@ -19,30 +22,12 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import os
-import tempfile
 import time
-from pathlib import Path
 from typing import Mapping, Protocol, Sequence
 
 from .config import PublishConfig
 
 LOG = logging.getLogger(__name__)
-
-JSON_ENV_VAR = "G1000_SOFTKEY_JSON"
-JSON_BASENAME = "g1000_softkey_labels.json"
-
-
-def default_json_path() -> Path:
-    """Shared default location of the JSON fallback file.
-
-    The XPPython3 plugin resolves it exactly the same way, so the two sides
-    agree without any configuration.
-    """
-    override = os.environ.get(JSON_ENV_VAR)
-    if override:
-        return Path(override)
-    return Path(tempfile.gettempdir()) / JSON_BASENAME
 
 
 def encode_field(text: str, width: int = 16) -> bytes:
@@ -98,45 +83,6 @@ class ConsolePublisher:
         self._last.update(values)
         for name in sorted(changed):
             LOG.info("%-24s = %r", name, changed[name])
-
-    def close(self) -> None:
-        return None
-
-
-class FilePublisher:
-    """Atomic JSON writer polled by the plugin."""
-
-    name = "file"
-
-    def __init__(self, config: PublishConfig) -> None:
-        self.path = Path(config.json_path) if config.json_path else default_json_path()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._last: dict[str, Value] = {}
-        LOG.info("publishing labels to %s", self.path)
-
-    def publish(self, values: Mapping[str, Value]) -> None:
-        if dict(values) == self._last:
-            return
-        # Strings and numbers go in separate tables rather than one mixed one:
-        # the plugin has a byte buffer for the first and a plain int for the
-        # second, and a JSON number and a JSON string are the only signal it
-        # would otherwise have to tell them apart. A v1 file (labels only) is
-        # still a valid v2 file with no numbers, so the plugin reads both.
-        payload = {
-            "version": 2,
-            "updated": time.time(),
-            "labels": {k: v for k, v in values.items() if isinstance(v, str)},
-            "numbers": {k: v for k, v in values.items() if not isinstance(v, str)},
-        }
-        tmp = self.path.with_suffix(f".{os.getpid()}.tmp")
-        try:
-            tmp.write_text(json.dumps(payload, indent=1), encoding="utf-8")
-            os.replace(tmp, self.path)  # atomic within a filesystem
-        except OSError as exc:
-            LOG.warning("could not write %s: %s", self.path, exc)
-            tmp.unlink(missing_ok=True)
-            return
-        self._last = dict(values)
 
     def close(self) -> None:
         return None
@@ -454,12 +400,10 @@ class WebSocketPublisher(WebApiPublisher):
 def create_publisher(config: PublishConfig, dataref_names: Sequence[str]) -> Publisher:
     if config.target == "console":
         return ConsolePublisher(config)
-    if config.target == "file":
-        return FilePublisher(config)
     if config.target == "webapi":
         return WebApiPublisher(config, dataref_names)
     if config.target == "websocket":
         return WebSocketPublisher(config, dataref_names)
     raise ValueError(
-        f"unknown publish target {config.target!r} (websocket | webapi | file | console)"
+        f"unknown publish target {config.target!r} (websocket | webapi | console)"
     )

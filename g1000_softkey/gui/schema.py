@@ -240,10 +240,9 @@ PUBLISH = Group(
     (
         Setting("target", "choice", "Publish to",
                 "websocket is the normal path: one message per cycle. webapi sends an "
-                "HTTP request per changed cell. file writes a JSON file the plugin polls, "
-                "which is the fallback if X-Plane will not accept the writes. console just "
-                "prints.",
-                choices=("websocket", "webapi", "file", "console")),
+                "HTTP request per changed cell; both write the same datarefs. console "
+                "just prints.",
+                choices=("websocket", "webapi", "console")),
         Setting("base_url", "text", "X-Plane web address",
                 "Where X-Plane serves its web API. Enable it in Settings -> Network if it "
                 "does not answer."),
@@ -258,9 +257,6 @@ PUBLISH = Group(
         Setting("timeout", "float", "Timeout (s)", "How long to wait for X-Plane to answer."),
         Setting("retry_interval", "float", "Retry every (s)",
                 "How long to wait between reconnection attempts when X-Plane is not answering."),
-        Setting("json_path", "path", "JSON file",
-                "Where the 'file' publisher writes. Empty means a file in the system "
-                "temp folder, which is also where the plugin looks.", optional=True),
     ),
 )
 

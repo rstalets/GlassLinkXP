@@ -183,7 +183,7 @@ yellow_hue_max = 40
 
 # --- publishing ------------------------------------------------------------
 [publish]
-target = "websocket"        # websocket | webapi | file | console
+target = "websocket"        # websocket | webapi | console
 base_url = "http://localhost:8086"
 api_version = "v1"       # v1 works on X-Plane 12.1.1+; v2 from 12.1.4
 # Bytes per label dataref -> the PilotsDeck address suffix (':s64').
@@ -199,7 +199,3 @@ api_version = "v1"       # v1 works on X-Plane 12.1.1+; v2 from 12.1.4
 field_width = 64
 timeout = 1.0
 retry_interval = 5.0     # seconds between reconnect attempts
-# json_path = "C:/Users/you/AppData/Local/Temp/g1000_softkey_labels.json"
-# (empty -> <system temp>/g1000_softkey_labels.json, the same default the
-#  XPPython3 plugin uses; override both sides with the G1000_SOFTKEY_JSON
-#  environment variable)

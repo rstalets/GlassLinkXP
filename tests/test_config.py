@@ -56,13 +56,13 @@ def test_from_mapping_overrides_and_disabled_displays():
             "pfd": {"window_title": "PFD", "geometry": {"y": 0.8, "h": 0.1}},
             "mfd": {"enabled": False},
         },
-        "publish": {"target": "file"},
+        "publish": {"target": "console"},
     })
     assert isinstance(config, AppConfig)
     assert config.loop_hz == 10.0 and config.change_gating is False
     assert config.display("pfd").geometry.y == 0.8
     assert [d.key for d in config.active_displays] == ["pfd"]
-    assert config.publish.target == "file"
+    assert config.publish.target == "console"
 
 
 def test_bad_loop_rate():

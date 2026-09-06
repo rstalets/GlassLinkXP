@@ -37,7 +37,7 @@ g1000_softkey/
   ocr.py        persistent Tesseract API, char whitelist, vocabulary snapping
   color.py      cell background -> black / white / yellow / red, + text colour
   pipeline.py   frame -> cells -> change gating -> labels + colours
-  publish.py    X-Plane Web API client, JSON-file fallback, console output
+  publish.py    X-Plane WebSocket and REST clients, console output
   synth.py      synthetic G1000 softkey frames for offline work
   config.example.toml
   labels.txt    the softkey vocabulary (edit this)
@@ -312,11 +312,9 @@ expressed as *fractions* of the client area and has to be set once per setup.
    .\g1000 -c config.toml run
    ```
 
-If the Web API refuses to write the plugin's datarefs, use the fallback --
-`--publisher file` -- which atomically writes
-`%TEMP%\g1000_softkey_labels.json`; the plugin polls that file at 5 Hz and
-copies the strings into the same datarefs. Both sides honour the
-`G1000_SOFTKEY_JSON` environment variable if you want the file elsewhere.
+Both X-Plane targets write the same datarefs, and both have been confirmed
+doing so against a running X-Plane: `websocket` sends one message per cycle
+and is the normal path, `webapi` sends an HTTP request per changed cell.
 
 ## Wiring a PilotsDeck button
 
@@ -565,16 +563,16 @@ The following code paths are written from the documented APIs but have
   vs 11, and capture of an occluded X-Plane pop-out are all unexercised.
 * **`list_windows()` / `find_window()`** (ctypes `user32` enumeration). The
   non-Windows error path is tested; the Windows path is not.
-* **The X-Plane Web API writes.** The client is tested against a stub session
-  (id resolution, base64 body, re-resolve on 404, X-Plane-not-running), not
-  against X-Plane. In particular, PLAN.md's open question stands: it is
-  **unknown whether the Web API will accept a PATCH to a plugin-created Data
-  dataref**. That is exactly why `--publisher file` exists.
-* **The XPPython3 plugin inside X-Plane.** Its buffer handling and JSON poll
-  are tested against a stubbed `XPPython3` module, so the logic is exercised,
-  but `registerDataAccessor` argument names, the `Type_Data` read/write
-  callback contract, and flight-loop registration have not been validated
-  against a real XPPython3 runtime.
+* **The details of the X-Plane API clients.** Whether X-Plane accepts a write
+  to a plugin-created Data dataref was PLAN.md's open question, and it is
+  answered: both the WebSocket and the REST publisher have been seen updating
+  the plugin's datarefs against a running X-Plane. What is still only tested
+  against a stub session is the behaviour around that -- id resolution,
+  re-resolving on a 404, and the X-Plane-not-running paths.
+* **The XPPython3 plugin inside X-Plane.** Its buffer handling is tested
+  against a stubbed `XPPython3` module, so the logic is exercised, but
+  `registerDataAccessor` argument names and the `Type_Data` read/write
+  callback contract have not been validated against a real XPPython3 runtime.
 * **Real G1000 geometry, fonts and colours.** All accuracy numbers above come
   from synthetic frames rendered with Liberation Sans, not from X-Plane
   screenshots. Real-world OCR accuracy, the true default strip fractions in

@@ -283,9 +283,9 @@ Where the labels are sent. Watch them with 'console' first; switch to websocket 
 
 ### `target`
 
-*Publish to* — one of `websocket`, `webapi`, `file`, `console`. Default: `'webapi'`.
+*Publish to* — one of `websocket`, `webapi`, `console`. Default: `'webapi'`.
 
-websocket is the normal path: one message per cycle. webapi sends an HTTP request per changed cell. file writes a JSON file the plugin polls, which is the fallback if X-Plane will not accept the writes. console just prints.
+websocket is the normal path: one message per cycle. webapi sends an HTTP request per changed cell; both write the same datarefs. console just prints.
 
 ### `base_url`
 
@@ -316,9 +316,3 @@ How long to wait for X-Plane to answer.
 *Retry every (s)* — a number. Default: `5.0`.
 
 How long to wait between reconnection attempts when X-Plane is not answering.
-
-### `json_path`
-
-*JSON file* — text (a path or a name). Default: `''`. Leave it out to leave it unset.
-
-Where the 'file' publisher writes. Empty means a file in the system temp folder, which is also where the plugin looks.

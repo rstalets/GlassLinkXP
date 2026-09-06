@@ -10,10 +10,8 @@ from g1000_softkey import publish
 from g1000_softkey.config import PublishConfig
 from g1000_softkey.publish import (
     ConsolePublisher,
-    FilePublisher,
     WebApiPublisher,
     create_publisher,
-    default_json_path,
     encode_field,
     encode_field_b64,
     encode_value,
@@ -29,31 +27,6 @@ def test_encode_field_pads_and_truncates():
     assert len(long) == 16 and long.endswith(b"\x00")
     assert encode_field("") == b"\x00" * 16
     assert base64.b64decode(encode_field_b64("OBS")) == encode_field("OBS")
-
-
-def test_default_json_path_honours_the_env_var(monkeypatch, tmp_path):
-    monkeypatch.setenv("G1000_SOFTKEY_JSON", str(tmp_path / "labels.json"))
-    assert default_json_path() == tmp_path / "labels.json"
-    monkeypatch.delenv("G1000_SOFTKEY_JSON")
-    assert default_json_path().name == "g1000_softkey_labels.json"
-
-
-def test_file_publisher_writes_atomically(tmp_path):
-    target = tmp_path / "labels.json"
-    publisher = FilePublisher(PublishConfig(target="file", json_path=str(target)))
-    publisher.publish({NAMES[0]: "INSET", NAMES[1]: ""})
-    payload = json.loads(target.read_text())
-    assert payload["labels"][NAMES[0]] == "INSET"
-    assert payload["version"] == 2
-    assert not list(tmp_path.glob("*.tmp"))
-
-    before = target.stat().st_mtime_ns
-    publisher.publish({NAMES[0]: "INSET", NAMES[1]: ""})  # unchanged -> no rewrite
-    assert target.stat().st_mtime_ns == before
-
-    publisher.publish({NAMES[0]: "PFD", NAMES[1]: ""})
-    assert json.loads(target.read_text())["labels"][NAMES[0]] == "PFD"
-    publisher.close()
 
 
 class FakeResponse:
@@ -411,24 +384,6 @@ def test_encode_value_splits_strings_from_numbers():
     assert encode_value(2) == 2
     assert encode_value(0) == 0  # not falsy-dropped, and not "0"
     assert isinstance(encode_value(3), int)
-
-
-def test_file_publisher_separates_labels_from_numbers(tmp_path):
-    target = tmp_path / "labels.json"
-    publisher = FilePublisher(PublishConfig(target="file", json_path=str(target)))
-    publisher.publish({NAMES[0]: "INSET", BG_NAMES[0]: 1})
-    payload = json.loads(target.read_text())
-    assert payload["labels"] == {NAMES[0]: "INSET"}
-    assert payload["numbers"] == {BG_NAMES[0]: 1}
-
-    before = target.stat().st_mtime_ns
-    publisher.publish({NAMES[0]: "INSET", BG_NAMES[0]: 1})
-    assert target.stat().st_mtime_ns == before, "unchanged -> no rewrite"
-
-    # The colour changes while the label does not: still a write.
-    publisher.publish({NAMES[0]: "INSET", BG_NAMES[0]: 2})
-    assert json.loads(target.read_text())["numbers"][BG_NAMES[0]] == 2
-    publisher.close()
 
 
 def test_webapi_patches_a_number_not_base64():

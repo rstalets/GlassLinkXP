@@ -62,7 +62,7 @@ def test_choices_match_what_the_daemon_accepts():
     assert set(schema.setting("ocr", "engine").choices) == {"auto", "tesserocr", "pytesseract"}
     assert set(schema.setting("ocr", "threshold").choices) == {"otsu", "adaptive"}
     assert set(schema.setting("publish", "target").choices) == \
-        {"websocket", "webapi", "file", "console"}
+        {"websocket", "webapi", "console"}
 
 
 def test_the_publish_targets_are_the_ones_create_publisher_knows():

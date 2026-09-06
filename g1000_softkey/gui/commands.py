@@ -96,7 +96,7 @@ RUN = CommandSpec(
     options=(
         IMAGE,
         Option("publisher", "--publisher", label="Publish to",
-               choices=("websocket", "webapi", "file", "console"),
+               choices=("websocket", "webapi", "console"),
                help="Where the labels go. 'console' just prints them, which is the safe "
                     "thing to watch first; 'websocket' is the normal X-Plane path."),
         Option("hz", "--hz", label="Rate (Hz)",

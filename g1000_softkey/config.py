@@ -227,7 +227,7 @@ class ColorConfig:
 
 @dataclass(frozen=True)
 class PublishConfig:
-    target: str = "webapi"  # webapi | file | console
+    target: str = "webapi"  # websocket | webapi | console
     base_url: str = "http://localhost:8086"
     api_version: str = "v1"
     #: Bytes per label dataref -> the PilotsDeck address suffix (':s64').
@@ -244,7 +244,6 @@ class PublishConfig:
     #: set generously once instead of tuned.
     field_width: int = 64
     timeout: float = 1.0
-    json_path: str = ""
     #: seconds between reconnect attempts when X-Plane is not answering
     retry_interval: float = 5.0
 

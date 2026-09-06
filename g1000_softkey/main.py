@@ -598,7 +598,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="override app.loop_hz for this run (handy for A/B timing)")
     run.add_argument("--timing", action="store_true",
                      help="log a per-stage latency breakdown whenever labels change")
-    run.add_argument("--publisher", choices=["websocket", "webapi", "file", "console"],
+    run.add_argument("--publisher", choices=["websocket", "webapi", "console"],
                      help="override publish.target from the config")
     run.set_defaults(func=cmd_run)
 
