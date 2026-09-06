@@ -14,10 +14,8 @@ from .ocr import CellResult, SoftkeyReader
 from .screens import ScreenLibrary
 from .strip import (
     changed_cells,
-    clipped_edges,
-    ink_bounds,
-    ink_ratio,
     is_blank,
+    measure_ink,
     preprocess_cell,
     snapshot_cells,
     split_cells,
@@ -208,14 +206,18 @@ class DisplayPipeline:
                 continue
 
             t0 = time.perf_counter()
-            ink = ink_ratio(cell, self.reader.config.blank_contrast)
-            blank = ink < self.reader.config.blank_ink_ratio
+            # One pass over the cell's pixels for all three questions asked of
+            # it below -- how much ink, where it reaches, whether it touches an
+            # edge. Asked separately they each re-derived the same grayscale
+            # and the same median.
+            ink = measure_ink(cell, self.reader.config.blank_contrast)
+            blank = ink.ratio < self.reader.config.blank_ink_ratio
             if blank:
                 preprocess_ms += (time.perf_counter() - t0) * 1000.0
                 # Distinguishing "gated out as empty" from "OCR read nothing" is
                 # the whole question when a short label goes missing, so say which.
                 diagnostics[index] = (
-                    f"BLANK   {bg_tag(index)}ink={ink:.4f} < "
+                    f"BLANK   {bg_tag(index)}ink={ink.ratio:.4f} < "
                     f"{self.reader.config.blank_ink_ratio:.4f} "
                     f"(contrast={self.reader.config.blank_contrast}) -- never reached OCR"
                 )
@@ -242,14 +244,14 @@ class DisplayPipeline:
             results.append(cell_result)
             ocr_ms += (time.perf_counter() - t0) * 1000.0
             ocr_calls += 1
-            x0, x1 = ink_bounds(cell, self.reader.config.blank_contrast)
+            x0, x1 = ink.bounds
             # Named edges rather than a bare marker: which side is being cut
             # is the whole of what to do about it, and the calibration editor
-            # warns from this same function so the two always agree.
-            touching = clipped_edges(cell, self.reader.config.blank_contrast)
+            # measures the same way so the two always agree.
+            touching = ink.clipped_edges()
             clipped = f" CLIPPED? {','.join(touching)}" if touching else ""
             diagnostics[index] = (
-                f"{bg_tag(index)}ink={ink:.4f} x={x0:.2f}-{x1:.2f} "
+                f"{bg_tag(index)}ink={ink.ratio:.4f} x={x0:.2f}-{x1:.2f} "
                 f"raw={cell_result.raw!r:<12} ocr={cell_result.text!r:<12} "
                 f"conf={cell_result.confidence:5.1f} "
                 f"match={cell_result.match_score:.2f}{clipped}"
