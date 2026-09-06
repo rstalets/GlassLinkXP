@@ -142,6 +142,35 @@ def test_the_users_own_blank_threshold_is_used(frame):
     assert checks.check_cells(frame, StripGeometry(cell_pad_x=0.3), strict) == []
 
 
+def test_a_frame_is_read_exactly_as_the_capture_path_reads_it(tmp_path):
+    """The docstring says "byte for byte the one the capture path produces",
+    and the flag underneath it said otherwise: IMREAD_UNCHANGED keeps whatever
+    the file has, so a PNG with an alpha channel arrived with four channels
+    where the reader would have three. Asked of ImageCapture rather than
+    asserted about channel counts."""
+    import cv2
+
+    from g1000_softkey.capture import ImageCapture
+
+    with_alpha = np.zeros((30, 60, 4), dtype=np.uint8)
+    with_alpha[..., :3] = 200
+    with_alpha[..., 3] = 128
+    path = tmp_path / "frame.png"
+    cv2.imwrite(str(path), with_alpha)
+
+    source = ImageCapture(path)
+    try:
+        theirs = source.grab()
+    finally:
+        source.close()
+    ours = checks.load_frame(path)
+
+    assert ours is not None and theirs is not None
+    assert ours.shape == theirs.shape
+    assert ours.dtype == theirs.dtype
+    assert np.array_equal(ours, theirs)
+
+
 def test_a_missing_picture_is_not_an_error(tmp_path):
     assert checks.load_frame(tmp_path / "nope.png") is None
     assert checks.check_cells(None, StripGeometry()) == []

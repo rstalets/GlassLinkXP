@@ -45,13 +45,19 @@ def load_frame(path: str | Path):
     Read with OpenCV rather than converted from the editor's own PIL image, so
     the array handed to ``split_cells`` is byte for byte the one the capture
     path produces -- same channel order, same depth.
+
+    Which means the same flag ``capture.ImageCapture.grab`` uses, and that is
+    the point of the sentence above: ``IMREAD_UNCHANGED`` keeps whatever the
+    file happens to have, so a PNG with an alpha channel arrived here with
+    four channels and reached the daemon's own crop with three. The clipping
+    warning would then be measuring something the reader never sees.
     """
     import cv2  # noqa: PLC0415 - heavy; not wanted at import time
 
     p = Path(path)
     if not p.is_file():
         return None
-    return cv2.imread(str(p), cv2.IMREAD_UNCHANGED)
+    return cv2.imread(str(p), cv2.IMREAD_COLOR)
 
 
 def check_cells(frame, geometry: StripGeometry, ocr: OcrConfig | None = None) -> list[CellClip]:
