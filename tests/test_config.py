@@ -3,6 +3,7 @@ import pytest
 from g1000_softkey.config import (
     AppConfig,
     ConfigError,
+    ConfigNotFound,
     PublishConfig,
     StripGeometry,
     default_config,
@@ -33,6 +34,28 @@ def test_defaults_without_a_file():
 def test_missing_file_is_a_clean_error():
     with pytest.raises(ConfigError):
         load_config("/nonexistent/config.toml")
+
+
+def test_a_missing_file_is_distinguishable_from_a_broken_one(tmp_path):
+    """Absent and invalid are different failures, and one caller acts on that.
+
+    ``gui`` carries on without a config file, because making one is part of
+    what it does. It must not carry on over a file that is there and wrong.
+    """
+    with pytest.raises(ConfigNotFound):
+        load_config(tmp_path / "not-there.toml")
+
+    broken = tmp_path / "broken.toml"
+    broken.write_text("[color]\nvalue_max = 300\n", encoding="utf-8")
+    with pytest.raises(ConfigError) as exc:
+        load_config(broken)
+    assert not isinstance(exc.value, ConfigNotFound)
+
+    unparseable = tmp_path / "unparseable.toml"
+    unparseable.write_text("[app\nloop_hz =", encoding="utf-8")
+    with pytest.raises(ConfigError) as exc:
+        load_config(unparseable)
+    assert not isinstance(exc.value, ConfigNotFound)
 
 
 def test_unknown_display_lookup():

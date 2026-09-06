@@ -202,5 +202,29 @@ def test_gui_still_opens_when_the_config_file_is_not_there_yet(monkeypatch, tmp_
     assert main(["-c", str(tmp_path / "not-yet.toml"), "gui"]) == 0
 
 
+def test_gui_refuses_a_config_file_that_is_broken_rather_than_absent(monkeypatch, tmp_path):
+    """A file that exists and is wrong must not be treated as one that is not there.
+
+    The tolerance above was written as `except ConfigError`, which is also
+    raised for a TOML syntax error and for every validation failure. So
+    `gui -c config.toml` on a file with one bad value opened the window on the
+    built-in defaults, said nothing, and the first Save wrote those defaults
+    over a file that only needed one number corrected.
+    """
+    opened = []
+    monkeypatch.setattr("g1000_softkey.gui.launch",
+                        lambda config_path=None: opened.append(config_path) or 0)
+
+    broken = tmp_path / "broken.toml"
+    broken.write_text("[color]\nvalue_max = 300\n", encoding="utf-8")
+    assert main(["-c", str(broken), "gui"]) == 2
+
+    unparseable = tmp_path / "unparseable.toml"
+    unparseable.write_text("[app\nloop_hz =", encoding="utf-8")
+    assert main(["-c", str(unparseable), "gui"]) == 2
+
+    assert not opened, "the window must not open on defaults over a real file"
+
+
 def test_every_other_command_still_refuses_a_missing_config(tmp_path):
     assert main(["-c", str(tmp_path / "nope.toml"), "synth", "--out", str(tmp_path)]) == 2

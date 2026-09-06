@@ -17,11 +17,22 @@ LOG = logging.getLogger(__name__)
 PACKAGE_DIR = Path(__file__).resolve().parent
 
 DEFAULT_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -/"
-DEFAULT_JSON_FALLBACK = "g1000_softkey_labels.json"
 
 
 class ConfigError(Exception):
     """Raised for a malformed configuration file."""
+
+
+class ConfigNotFound(ConfigError):
+    """The named configuration file does not exist.
+
+    Split out from :class:`ConfigError` because it is the one failure that is
+    *not* a broken file: there is nothing to lose by carrying on without it,
+    which is what the GUI does when asked to open a config that has yet to be
+    written. Every other ConfigError -- a TOML syntax error, a value out of
+    range -- means a file that exists and would be destroyed by treating it as
+    absent, so the two must not be caught together.
+    """
 
 
 @dataclass(frozen=True)
@@ -306,7 +317,7 @@ def load_config(path: str | Path | None) -> AppConfig:
         return default_config()
     p = Path(path)
     if not p.is_file():
-        raise ConfigError(f"config file not found: {p}")
+        raise ConfigNotFound(f"config file not found: {p}")
     try:
         raw = tomllib.loads(p.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:  # pragma: no cover - depends on user file

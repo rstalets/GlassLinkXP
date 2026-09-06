@@ -17,7 +17,14 @@ import numpy as np
 from . import synth
 from .capture import CaptureError, FrameSource, ImageCapture, list_windows, sources_for
 from .color import BLACK, background_name, measure_cell
-from .config import AppConfig, ConfigError, DisplayConfig, default_config, load_config
+from .config import (
+    AppConfig,
+    ConfigError,
+    ConfigNotFound,
+    DisplayConfig,
+    default_config,
+    load_config,
+)
 from .ocr import OcrUnavailable, SoftkeyReader
 from .pipeline import DisplayPipeline, DisplayResult
 from .publish import Value, create_publisher
@@ -607,7 +614,9 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[common],
     )
     # Alone among the subcommands, this one still runs when -c names a file
-    # that is not there: creating that file is one of the things it does.
+    # that is not there: creating that file is one of the things it does. It
+    # gets no more licence than that -- a file that exists and is broken is an
+    # error for `gui` exactly as for the rest.
     gui.set_defaults(func=cmd_gui, tolerate_missing_config=True)
 
     windows = sub.add_parser("list-windows", help="list top-level windows (Windows only)", parents=[common])
@@ -668,7 +677,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         try:
             config = load_config(getattr(args, "config", None))
-        except ConfigError:
+        except ConfigNotFound:
+            # Only a file that is *not there* is tolerated, and only for `gui`.
+            # A file that exists but does not parse or does not validate is
+            # still an error here: opening the window on the built-in defaults
+            # would hide the mistake and then overwrite the file with the
+            # defaults on the first Save.
             if not getattr(args, "tolerate_missing_config", False):
                 raise
             config = default_config()
