@@ -18,7 +18,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Iterable, Protocol, Sequence
 
 import numpy as np
 
@@ -277,7 +277,7 @@ class SoftkeyReader:
             index=index, text=snapped, raw=raw, confidence=confidence, match_score=score
         )
 
-    def read_best(self, index: int, images: Sequence[np.ndarray]) -> CellResult:
+    def read_best(self, index: int, images: Iterable[np.ndarray]) -> CellResult:
         """OCR each preprocessing variant and keep the most trustworthy answer.
 
         Ranked by: landing exactly on a known softkey label, then Tesseract's
@@ -291,6 +291,12 @@ class SoftkeyReader:
         early on a hit that is *also* confident; a shaky one is left to compete
         with the remaining rungs on confidence. In the common case the first
         rung is both, and this costs a single OCR call.
+
+        ``images`` is pulled one at a time and never re-read, so a caller can
+        hand over a generator and pay for a variant only when the search
+        actually reaches it -- which is what the pipeline does, the ladder's
+        preprocessing being about as expensive per rung as the early exit was
+        saving on OCR.
         """
         best: CellResult | None = None
         for image in images:

@@ -62,7 +62,7 @@ flowchart TD
     GATE -->|yes| INK{"ink ratio >= blank_ink_ratio?"}
 
     INK -->|no| BLANK["Empty cell<br/>never reaches OCR"]
-    INK -->|yes| LADDER["Preprocess once per sharpen_ladder rung:<br/>unsharp mask, upscale, threshold,<br/>normalise polarity, crop to content"]
+    INK -->|yes| LADDER["Preprocess the next sharpen_ladder rung:<br/>unsharp mask, upscale, threshold,<br/>normalise polarity, crop to content"]
 
     LADDER --> OCR["Tesseract reads each variant"]
     OCR --> SNAP["Normalise, then snap to the<br/>nearest label in labels.txt"]
@@ -128,6 +128,15 @@ vocabulary agrees with wins. The first rung is no sharpening at all.
 **Confidence gates the early exit.** Landing on a known label is not proof:
 every digit 0-7 is a valid softkey, so a 0 misread as 2 still matches exactly.
 Only a hit that is also confident ends the search.
+
+**And the rungs are built one at a time.** The exit above stops the OCR calls,
+but the rungs used to be preprocessed up front, all of them, before the reader
+had looked at any -- so the search saved a Tesseract call and paid for an
+unsharp mask, a 4x resize and a threshold it never used. They are now produced
+as they are asked for. Across the offline corpus that is 63 preprocessing
+passes instead of 174 for the same 58 cells, and 9.8 ms per frame down to
+4.4 ms. The ladder itself is unchanged -- same rungs, same order, same
+answers; only the work nobody was going to look at is skipped.
 
 **Page lookup runs only when something needs it.** The stage exists to serve
 cells OCR was unsure about, so the first question is whether any exist. When
