@@ -240,6 +240,16 @@ class ColorConfig:
 class PublishConfig:
     target: str = "webapi"  # websocket | webapi | console
     base_url: str = "http://localhost:8086"
+    #: Which version of X-Plane's Web API to talk -- a *floor*, used only when
+    #: the sim does not say. Both publishers ask the unversioned
+    #: /api/capabilities endpoint first and take the highest version it
+    #: advertises, so this value is what is left when that endpoint cannot be
+    #: reached at all.
+    #:
+    #: "v1" because an X-Plane that does not answer /api/capabilities is an
+    #: old one, and v1 is the version every release with a Web API has served.
+    #: Raising the floor could only affect a sim too old to have been asked,
+    #: which is exactly the sim that would not understand a newer version.
     api_version: str = "v1"
     #: Bytes per label dataref -> the PilotsDeck address suffix (':s64').
     #:

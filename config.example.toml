@@ -185,7 +185,12 @@ yellow_hue_max = 40
 [publish]
 target = "websocket"        # websocket | webapi | console
 base_url = "http://localhost:8086"
-api_version = "v1"       # v1 works on X-Plane 12.1.1+; v2 from 12.1.4
+# A floor, not a choice: both publishers read the unversioned
+# /api/capabilities endpoint and use the highest version X-Plane advertises
+# (v1, v2 and v3 have all shipped). This value is only used when that endpoint
+# cannot be reached, which means a sim too old to have been asked -- so leave
+# it at the oldest version, v1.
+api_version = "v1"
 # Bytes per label dataref -> the PilotsDeck address suffix (':s64').
 #
 # The width is fixed in three places that must agree: FIELD_WIDTH in the

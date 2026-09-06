@@ -295,9 +295,9 @@ Where X-Plane serves its web API. Enable it in Settings -> Network if it does no
 
 ### `api_version`
 
-*API version* — one of `v1`, `v2`. Default: `'v1'`.
+*API version* — one of `v1`, `v2`, `v3`. Default: `'v1'`.
 
-v1 works on X-Plane 12.1.1 and later; v2 from 12.1.4.
+Only a fallback. The daemon asks X-Plane which API versions it serves and uses the newest one; this is what it falls back to when that question goes unanswered, which means a sim too old to answer it. Leave it at v1.
 
 ### `field_width`
 

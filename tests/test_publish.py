@@ -39,17 +39,31 @@ class FakeResponse:
 
 
 class FakeSession:
-    """Stand-in for requests.Session recording what the client would send."""
+    """Stand-in for requests.Session recording what the client would send.
 
-    def __init__(self, ids=None, patch_status=200, fail=False):
+    It answers /api/capabilities the way a current X-Plane does, because the
+    publisher asks that question before every id resolution and the answer
+    decides which /api/vN the rest of the traffic goes to. The two GETs are
+    counted separately so a test about re-resolution is not also counting
+    version negotiation.
+    """
+
+    def __init__(self, ids=None, patch_status=200, fail=False, versions=("v1", "v2", "v3")):
         self.ids = ids if ids is not None else {name: 100 + i for i, name in enumerate(NAMES)}
         self.patch_status = patch_status
         self.fail = fail
+        self.versions = versions
         self.patches = []
         self.list_calls = 0
+        self.capability_calls = 0
         self.closed = False
 
     def get(self, url, timeout=None):
+        if url.endswith("/api/capabilities"):
+            self.capability_calls += 1
+            if self.fail:
+                raise ConnectionError("connection refused")
+            return FakeResponse(200, {"api": {"versions": list(self.versions)}})
         self.list_calls += 1
         if self.fail:
             raise ConnectionError("connection refused")
@@ -73,7 +87,8 @@ def test_webapi_resolves_ids_and_patches_base64():
     assert session.list_calls == 1
     publisher.publish({NAMES[0]: "INSET"})
     url, body = session.patches[0]
-    assert url.endswith("/api/v1/datarefs/100/value")
+    # v3, not the configured v1: the version comes from /api/capabilities.
+    assert url.endswith("/api/v3/datarefs/100/value")
     assert base64.b64decode(body["data"]) == encode_field("INSET", PublishConfig().field_width)
 
     publisher.publish({NAMES[0]: "INSET"})  # unchanged -> no traffic
@@ -102,6 +117,74 @@ def test_webapi_warns_about_missing_datarefs(caplog):
     session = FakeSession(ids={NAMES[0]: 42})
     WebApiPublisher(PublishConfig(), NAMES, session=session)
     assert "not registered" in caplog.text
+
+
+def test_webapi_negotiates_the_highest_advertised_api_version():
+    """REST resolves the version the same way the websocket does.
+
+    It used to interpolate publish.api_version verbatim, so the websocket
+    auto-upgraded while REST stayed on whatever the config file said -- v1 by
+    default, two versions behind what X-Plane 12 now serves.
+    """
+    session = FakeSession(versions=("v1", "v2", "v3"))
+    publisher = WebApiPublisher(PublishConfig(api_version="v1"), NAMES, session=session)
+    publisher.publish({NAMES[0]: "INSET"})
+    assert publisher._root.endswith("/api/v3")
+    assert session.patches[0][0].endswith("/api/v3/datarefs/100/value")
+
+
+def test_api_version_falls_back_to_the_floor_when_capabilities_is_unreachable():
+    """The configured version is a floor, used only when the sim does not say.
+
+    An X-Plane that does not answer /api/capabilities is an old one, so the
+    floor has to stay at the oldest version rather than track the newest.
+    """
+
+    class NoCapabilities(FakeSession):
+        def get(self, url, timeout=None):
+            if url.endswith("/api/capabilities"):
+                self.capability_calls += 1
+                raise ConnectionError("404 not found")
+            return super().get(url, timeout=timeout)
+
+    session = NoCapabilities()
+    publisher = WebApiPublisher(PublishConfig(api_version="v1"), NAMES, session=session)
+    publisher.publish({NAMES[0]: "INSET"})
+    assert publisher._root.endswith("/api/v1")
+    assert session.patches[0][0].endswith("/api/v1/datarefs/100/value"), "writes still land"
+
+
+def test_capabilities_is_asked_once_and_then_cached():
+    """Not per publish, and not per write: X-Plane cannot change its answer
+    without a restart, which invalidates the dataref ids anyway."""
+    session = FakeSession()
+    publisher = WebApiPublisher(PublishConfig(), NAMES, session=session)
+    assert session.capability_calls == 1
+    for label in ("INSET", "PFD", "OBS", "CDI"):
+        publisher.publish({NAMES[0]: label, NAMES[1]: label})
+    assert len(session.patches) == 8
+    assert session.capability_calls == 1
+
+
+def test_a_failed_negotiation_is_retried_on_the_next_resolve():
+    """The floor is not cached: a daemon started before X-Plane must pick up
+    the real answer once the sim is up, not stay on v1 for the session."""
+
+    class LateStart(FakeSession):
+        answering = False
+
+        def get(self, url, timeout=None):
+            if url.endswith("/api/capabilities") and not self.answering:
+                self.capability_calls += 1
+                raise ConnectionError("connection refused")
+            return super().get(url, timeout=timeout)
+
+    session = LateStart(patch_status=404)
+    publisher = WebApiPublisher(PublishConfig(retry_interval=0.0), NAMES, session=session)
+    assert publisher._root.endswith("/api/v1")
+    session.answering = True
+    publisher.publish({NAMES[0]: "INSET"})  # the 404 forces a re-resolve
+    assert publisher._root.endswith("/api/v3")
 
 
 def test_console_publisher_only_logs_changes(caplog):

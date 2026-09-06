@@ -266,8 +266,10 @@ PUBLISH = Group(
                 "Where X-Plane serves its web API. Enable it in Settings -> Network if it "
                 "does not answer."),
         Setting("api_version", "choice", "API version",
-                "v1 works on X-Plane 12.1.1 and later; v2 from 12.1.4.",
-                choices=("v1", "v2")),
+                "Only a fallback. The daemon asks X-Plane which API versions it serves and "
+                "uses the newest one; this is what it falls back to when that question goes "
+                "unanswered, which means a sim too old to answer it. Leave it at v1.",
+                choices=("v1", "v2", "v3")),
         Setting("field_width", "int", "Label field width",
                 "Bytes per label dataref. THIS IS FIXED IN THREE PLACES THAT MUST AGREE: "
                 "here, FIELD_WIDTH in the X-Plane plugin (which needs a sim restart), and "
