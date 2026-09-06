@@ -197,13 +197,13 @@ A page is only recognised when its identifying cells all read at least this conf
 
 *Pages file* — text (a path or a name). Default: `'/home/user/g1000-softkey/g1000_softkey/screens.toml'`. Leave it out to use the copy that comes with the package -- the default above is a path into this install, so writing it into your config file would tie the file to it.
 
-The known softkey pages. Add one with the Screen template tab. Leave it empty to use the file that ships with the package, which is what the hint beside the box names -- set it only to point at a file of your own.
+The known softkey pages. Add one with the Screen template tab. Set this only to point at a file of your own.
 
 ### `labels_file`
 
 *Vocabulary file* — text (a path or a name). Default: `'/home/user/g1000-softkey/g1000_softkey/labels.txt'`. Leave it out to use the copy that comes with the package -- the default above is a path into this install, so writing it into your config file would tie the file to it.
 
-The list of labels a reading is snapped to. Edit it in the Vocabulary tab; it is aircraft and version dependent. Leave it empty to use the file that ships with the package.
+The list of labels a reading is snapped to. Edit it in the Vocabulary tab; it is aircraft and version dependent.
 
 ### `fuzzy_cutoff`
 

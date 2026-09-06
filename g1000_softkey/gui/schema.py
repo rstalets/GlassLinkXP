@@ -199,14 +199,12 @@ OCR = Group(
                 "identification made from a guess would spread that guess into every cell "
                 "it fills."),
         Setting("screens_file", "path", "Pages file",
-                "The known softkey pages. Add one with the Screen template tab. Leave it "
-                "empty to use the file that ships with the package, which is what the hint "
-                "beside the box names -- set it only to point at a file of your own.",
+                "The known softkey pages. Add one with the Screen template tab. Set this "
+                "only to point at a file of your own.",
                 optional=True, package_default=True),
         Setting("labels_file", "path", "Vocabulary file",
                 "The list of labels a reading is snapped to. Edit it in the Vocabulary tab; "
-                "it is aircraft and version dependent. Leave it empty to use the file that "
-                "ships with the package.",
+                "it is aircraft and version dependent.",
                 optional=True, package_default=True),
         Setting("fuzzy_cutoff", "float", "Snap cutoff",
                 "How close a raw reading has to be to a known label before it is corrected "
