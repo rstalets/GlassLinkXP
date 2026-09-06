@@ -13,7 +13,9 @@ surprise a GUI is supposed to remove.
 
 from __future__ import annotations
 
+import sys
 import tkinter as tk
+import traceback
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable
@@ -52,9 +54,22 @@ class GuiApp:
         self._task_lines: list[str] = []
         self._task_done: Callable[[int, list[str]], None] | None = None
         self._daemon_sink: Callable[[Event], None] | None = None
+        #: How many times an event handler has raised inside the poll loop,
+        #: and the last traceback. Kept because the loop deliberately carries
+        #: on afterwards: without a count, "the log went strange for a moment"
+        #: leaves nothing behind to ask about.
+        self.poll_failures = 0
+        self.last_poll_error = ""
 
         self.image_source = tk.StringVar(value=str(self.prefs.get("image_source") or ""))
         self.verbose = tk.BooleanVar(value=bool(self.prefs.get("verbose")))
+        #: Which publisher the Run tab starts the daemon with. Held here, like
+        #: the frame source and the debug flag, because it is remembered
+        #: between sessions and on_close is what writes the preferences: it was
+        #: read at startup and never written back, so the choice was forgotten
+        #: every time -- and "console" is a deliberate choice somebody makes
+        #: while they are still checking the readings.
+        self.publisher = tk.StringVar(value=str(self.prefs.get("publisher") or ""))
         self.config_display = tk.StringVar(value="")
 
         self._build()
@@ -203,12 +218,28 @@ class GuiApp:
         return str(self.config_path.resolve()) if self.config_path else None
 
     def validate_document(self) -> str:
-        """An empty string if the current document is usable, else why not."""
+        """An empty string if the current document is usable, else why not.
+
+        Every failure is a message to show, which is what the Settings tab's
+        three call sites of ``configio.validate`` already say for themselves.
+        This one used to catch ``ConfigError`` and ``ValueError`` only, and a
+        document can raise neither: a config file holding ``loop_hz = "12"``
+        -- a string where a number belongs, which the Raw file tab writes
+        through untouched -- reaches a comparison inside the daemon's own
+        validation and comes back out as a ``TypeError``. That escaped, Tk
+        caught it, and Start did nothing at all with no dialog to say why.
+
+        A ``ConfigError`` is a sentence written for the user, so it is shown
+        as it is. Anything else is a bug or a mistyped value, and its class is
+        worth having in front of whoever is reading the message.
+        """
         try:
             base = self.config_path.parent if self.config_path else None
             configio.validate(self.document, base_dir=base)
-        except (ConfigError, ValueError) as exc:
+        except ConfigError as exc:
             return str(exc)
+        except Exception as exc:  # noqa: BLE001 - every failure is a message to show
+            return f"{type(exc).__name__}: {exc}"
         return ""
 
     def display_keys(self) -> list[str]:
@@ -300,12 +331,73 @@ class GuiApp:
         self.daemon.stop()
 
     def _poll(self) -> None:
+        """Drain both children, then ask to be called again -- whatever happened.
+
+        The reschedule is in a ``finally`` rather than on the last line, and
+        that is the whole point of this method. Tkinter *catches* an exception
+        raised inside an ``after`` callback: it reports it and returns, so the
+        callback simply does not finish. A reschedule written at the bottom is
+        therefore skipped by any failure above it, and the polling stops for
+        good -- while the window carries on looking perfectly healthy. No more
+        log lines, no more board, no Finished event to put the buttons back,
+        and Stop never learns the daemon has gone. Under ``pythonw.exe``,
+        which is how this is started on Windows, the traceback goes to a
+        stderr nobody can see, so there is not even a clue.
+
+        One bad line of output reaching one tab's handler is enough to trigger
+        it, which makes the failure both easy to hit and impossible to
+        diagnose. The loop is kept alive here instead, and the failure is
+        said out loud in :meth:`_poll_failed`.
+        """
+        try:
+            self.drain_children()
+        except Exception as exc:  # noqa: BLE001 - a handler must not kill the loop
+            self._poll_failed(exc)
+        finally:
+            self.root.after(POLL_MS, self._poll)
+
+    def drain_children(self) -> None:
+        """One pass over both children's queues, dispatching what they said.
+
+        Split out from :meth:`_poll` so the polling above contains nothing but
+        the keeping-alive, and so a test can drive a drain without waiting on
+        the event loop.
+        """
         for event in self.daemon.drain():
             if self._daemon_sink is not None:
                 self._daemon_sink(event)
         for event in self.task.drain():
             self._task_event(event)
-        self.root.after(POLL_MS, self._poll)
+
+    def _poll_failed(self, exc: BaseException) -> None:
+        """Report a handler that raised, rather than swallowing it.
+
+        Kept alive is not the same as kept quiet: a tab that raises on every
+        line would otherwise drop output silently, which is the bug this is
+        here to prevent, one layer down. The traceback goes to stderr for
+        anyone running from a console, and the status bar says so for
+        everybody else -- which is the only surface there is under
+        ``pythonw.exe``.
+
+        Defensive to the last: this runs from an exception handler, and
+        anything it raised itself would land back in Tk's reporter. The
+        reschedule would still happen -- it is in the ``finally`` -- but the
+        message would be lost as well as the failure.
+        """
+        self.poll_failures += 1
+        self.last_poll_error = traceback.format_exc()
+        try:
+            sys.stderr.write(self.last_poll_error)
+        except Exception:  # noqa: BLE001 - pythonw.exe has no stderr to write to
+            pass
+        try:
+            self.set_status(
+                f"Something in the window failed while reading the output: {exc!r}. "
+                "Some of it may be missing; the window is still running.",
+                "error",
+            )
+        except Exception:  # noqa: BLE001 - the status bar is not worth a second failure
+            pass
 
     def _task_event(self, event: Event) -> None:
         if isinstance(event, Line):
@@ -349,6 +441,7 @@ class GuiApp:
             "config_path": str(self.config_path) if self.config_path else "",
             "image_source": self.image_source.get(),
             "verbose": bool(self.verbose.get()),
+            "publisher": self.publisher.get(),
             "window": self.root.winfo_geometry(),
             "tab": self.notebook.index("current") if self.notebook.tabs() else 0,
         })

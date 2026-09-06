@@ -14,6 +14,8 @@ from g1000_softkey.strip import (
     crop_strip,
     ink_ratio,
     is_blank,
+    measure_ink,
+    to_gray,
     overlay_geometry,
     preprocess_cell,
     snapshot_cells,
@@ -58,6 +60,63 @@ def test_blank_cells_are_detected(frame):
 def test_ink_ratio_orders_blank_below_labelled(frame):
     cells = split_cells(frame, GEOM)
     assert ink_ratio(cells[5]) < ink_ratio(cells[1])  # blank vs 'DFLTS'
+
+
+def _three_separate_passes(cell, contrast=40):
+    """The ink measurements as they were written before they shared a pass.
+
+    Copied here on purpose. The point of the refactor was that one grayscale
+    conversion and one median can answer all three questions instead of
+    three; the point of this copy is that "instead of" has to mean the same
+    answers, and a test that called the shipped code twice could not tell.
+    """
+    gray = to_gray(cell).astype(np.int16)
+    dominant = float(np.median(gray))
+    ratio = float(np.mean(np.abs(gray - dominant) > contrast))
+
+    mask = np.abs(to_gray(cell).astype(np.int16) - np.median(to_gray(cell))) > contrast
+    columns = np.flatnonzero(mask.any(axis=0))
+    rows = np.flatnonzero(mask.any(axis=1))
+    if columns.size == 0 or rows.size == 0:
+        return ratio, (0.0, 0.0), ()
+    width = max(1, mask.shape[1] - 1)
+    height = max(1, mask.shape[0] - 1)
+    bounds = (float(columns[0]) / width, float(columns[-1]) / width)
+    edges = []
+    if columns[0] <= 0:
+        edges.append("left")
+    if columns[-1] >= mask.shape[1] - 1:
+        edges.append("right")
+    if rows[0] <= 0:
+        edges.append("top")
+    if rows[-1] >= mask.shape[0] - 1:
+        edges.append("bottom")
+    return ratio, bounds, tuple(edges)
+
+
+@pytest.mark.parametrize("menu", sorted(synth.MENUS))
+@pytest.mark.parametrize("contrast", [20, 40, 80])
+def test_the_shared_pass_answers_what_the_three_passes_did(menu, contrast):
+    """Every cell of every synthetic frame, at three contrasts."""
+    for cell in split_cells(synth.render_menu(menu), GEOM):
+        expected = _three_separate_passes(cell, contrast)
+        ink = measure_ink(cell, contrast)
+        assert (ink.ratio, ink.bounds, ink.clipped_edges()) == expected
+
+
+def test_the_shared_pass_measures_the_cell_once(monkeypatch):
+    """Not an optimisation that can quietly stop being one: three calls to
+    to_gray per cell is what this replaced."""
+    import g1000_softkey.strip as strip_module
+
+    calls = []
+    real = strip_module.to_gray
+    monkeypatch.setattr(strip_module, "to_gray", lambda img: (calls.append(1), real(img))[1])
+
+    cell = split_cells(synth.render_menu("pfd_menu"), GEOM)[1]
+    ink = measure_ink(cell)
+    assert (ink.ratio, ink.bounds, ink.clipped_edges()) == _three_separate_passes(cell)
+    assert len(calls) == 1, "one grayscale conversion for all three answers"
 
 
 def test_preprocess_gives_dark_text_on_light_paper(frame):

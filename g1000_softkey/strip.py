@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from functools import cached_property
 
 import cv2
 import numpy as np
@@ -82,61 +83,6 @@ def split_cells(frame: np.ndarray, geom: StripGeometry) -> list[np.ndarray]:
 # ---------------------------------------------------------------------------
 
 
-def ink_ratio(cell: np.ndarray, contrast: int = 40) -> float:
-    """Fraction of pixels that deviate from the cell's dominant brightness.
-
-    Works for both a normal (light text on near-black) and a highlighted
-    (dark text on a light box) cell, unlike a plain "count bright pixels".
-    """
-    gray = to_gray(cell).astype(np.int16)
-    dominant = float(np.median(gray))
-    return float(np.mean(np.abs(gray - dominant) > contrast))
-
-
-def ink_mask(cell: np.ndarray, contrast: int = 40) -> np.ndarray:
-    """Which pixels deviate from the cell's dominant tone.
-
-    Note what this cannot see: a cell of one uniform tone has no deviation
-    from itself, so a crop that has landed entirely on a solid region reports
-    no ink at all rather than reporting a problem.
-    """
-    gray = to_gray(cell)
-    dominant = np.median(gray)
-    return np.abs(gray.astype(np.int16) - dominant) > contrast
-
-
-def ink_extent(cell: np.ndarray, contrast: int = 40) -> tuple[float, float, float, float] | None:
-    """Where the ink reaches, as fractions of the cell: (left, right, top, bottom).
-
-    None when the cell holds no ink at all, which is a different thing from
-    ink at the edges and must not be confused with it -- an empty softkey is
-    not a clipped one.
-    """
-    mask = ink_mask(cell, contrast)
-    columns = np.flatnonzero(mask.any(axis=0))
-    rows = np.flatnonzero(mask.any(axis=1))
-    if columns.size == 0 or rows.size == 0:
-        return None
-    width = max(1, mask.shape[1] - 1)
-    height = max(1, mask.shape[0] - 1)
-    return (
-        float(columns[0]) / width, float(columns[-1]) / width,
-        float(rows[0]) / height, float(rows[-1]) / height,
-    )
-
-
-def ink_bounds(cell: np.ndarray, contrast: int = 40) -> tuple[float, float]:
-    """Horizontal extent of the ink, as fractions of the cell width.
-
-    A glyph centred in its cell reports something like (0.3, 0.7). Ink hard
-    against 0.0 or 1.0 means the crop is cutting the label off, which starves
-    Tesseract of the shape it needs -- a half "0" is not a character, and comes
-    back as an empty string rather than a wrong one.
-    """
-    extent = ink_extent(cell, contrast)
-    return (0.0, 0.0) if extent is None else (extent[0], extent[1])
-
-
 #: How many pixels in from the boundary still counts as touching it.
 #:
 #: Zero, and that is a definition rather than a tuned value: ink in the
@@ -150,43 +96,154 @@ def ink_bounds(cell: np.ndarray, contrast: int = 40) -> tuple[float, float]:
 CLIP_MARGIN = 0
 
 
+@dataclass(frozen=True)
+class CellInk:
+    """Everything asked about one cell's ink, from a single pass over it.
+
+    The pipeline asks three questions of every cell it OCRs -- how much ink
+    there is, where it reaches, and whether it touches an edge -- and each
+    used to start over from the same two operations, a grayscale conversion
+    and a median. Three passes for three answers, twelve cells a frame,
+    twelve frames a second, on the CPU Tesseract is already competing for.
+    Measured, not assumed. On a real 12-cell capture, median of 200 runs:
+    0.643 + 0.692 + 0.684 = 2.019 ms per frame separately, against 0.532 ms
+    for the shared pass. Repeated offline on a synthetic frame -- a slower
+    machine, so the absolute numbers are not comparable, but the same shape:
+    0.95 + 1.20 + 1.17 = 3.31 ms against 1.21 ms. At the default loop_hz of
+    12 that is CPU handed back to Tesseract, which has no GPU path and is
+    competing with X-Plane for it.
+
+    The mask and the ratio are computed on construction because the ratio is
+    what every caller starts with. The extent is derived on demand, so a
+    blank cell -- discarded on the ratio alone, and the G1000 leaves plenty
+    of softkeys blank -- does not pay for an answer nobody reads.
+    """
+
+    #: Which pixels deviate from the cell's dominant tone.
+    #:
+    #: Note what this cannot see: a cell of one uniform tone has no deviation
+    #: from itself, so a crop that has landed entirely on a solid region reports
+    #: no ink at all rather than reporting a problem.
+    mask: np.ndarray
+    #: Fraction of the cell's pixels that are ink.
+    #:
+    #: Works for both a normal (light text on near-black) and a highlighted
+    #: (dark text on a light box) cell, unlike a plain "count bright pixels".
+    ratio: float
+
+    @cached_property
+    def _columns(self) -> np.ndarray:
+        return np.flatnonzero(self.mask.any(axis=0))
+
+    @cached_property
+    def _rows(self) -> np.ndarray:
+        return np.flatnonzero(self.mask.any(axis=1))
+
+    @property
+    def extent(self) -> tuple[float, float, float, float] | None:
+        """Where the ink reaches, as fractions of the cell: (left, right, top, bottom).
+
+        None when the cell holds no ink at all, which is a different thing from
+        ink at the edges and must not be confused with it -- an empty softkey is
+        not a clipped one.
+        """
+        if self._columns.size == 0 or self._rows.size == 0:
+            return None
+        width = max(1, self.mask.shape[1] - 1)
+        height = max(1, self.mask.shape[0] - 1)
+        return (
+            float(self._columns[0]) / width, float(self._columns[-1]) / width,
+            float(self._rows[0]) / height, float(self._rows[-1]) / height,
+        )
+
+    @property
+    def bounds(self) -> tuple[float, float]:
+        """Horizontal extent of the ink, as fractions of the cell width.
+
+        A glyph centred in its cell reports something like (0.3, 0.7). Ink hard
+        against 0.0 or 1.0 means the crop is cutting the label off, which starves
+        Tesseract of the shape it needs -- a half "0" is not a character, and comes
+        back as an empty string rather than a wrong one.
+        """
+        extent = self.extent
+        return (0.0, 0.0) if extent is None else (extent[0], extent[1])
+
+    def clipped_edges(self, margin: int = CLIP_MARGIN) -> tuple[str, ...]:
+        """Which edges of the crop have ink in their outermost pixels, if any.
+
+        Vertical as well as horizontal, because ``cell_pad_y`` can cut the tops
+        off capitals just as easily as ``cell_pad_x`` can cut the ends off a word,
+        and a caller looking only sideways would pass a crop that loses a row of
+        every glyph.
+
+        This is a hint and not a measurement of correctness. It has both kinds of
+        error: a label drawn hard against the edge of its own cell reports a
+        clipping that is really the sim's layout, and a crop that has slipped
+        wholesale onto a separator bar or a solid background reports nothing at
+        all. It says "look at this one", which is worth having and is not the same
+        as saying the calibration is wrong.
+        """
+        if self._columns.size == 0 or self._rows.size == 0:
+            return ()
+        height, width = self.mask.shape[:2]
+        edges = []
+        if self._columns[0] <= margin:
+            edges.append("left")
+        if self._columns[-1] >= width - 1 - margin:
+            edges.append("right")
+        if self._rows[0] <= margin:
+            edges.append("top")
+        if self._rows[-1] >= height - 1 - margin:
+            edges.append("bottom")
+        return tuple(edges)
+
+
+def measure_ink(cell: np.ndarray, contrast: int = 40) -> CellInk:
+    """One grayscale conversion and one median, for all of :class:`CellInk`.
+
+    Prefer this to the single-question helpers below whenever more than one
+    of the answers is wanted from the same cell.
+    """
+    gray = to_gray(cell)
+    dominant = np.median(gray)
+    mask = np.abs(gray.astype(np.int16) - dominant) > contrast
+    return CellInk(mask=mask, ratio=float(np.mean(mask)))
+
+
+# The single-question forms. Each is one measure_ink away from the object
+# above and is kept for callers that genuinely want one answer -- asking for
+# two of them about the same cell measures it twice.
+
+
+def ink_ratio(cell: np.ndarray, contrast: int = 40) -> float:
+    """Fraction of pixels that deviate from the cell's dominant brightness."""
+    return measure_ink(cell, contrast).ratio
+
+
+def ink_mask(cell: np.ndarray, contrast: int = 40) -> np.ndarray:
+    """Which pixels deviate from the cell's dominant tone."""
+    return measure_ink(cell, contrast).mask
+
+
+def ink_extent(cell: np.ndarray, contrast: int = 40) -> tuple[float, float, float, float] | None:
+    """Where the ink reaches, as fractions of the cell, or None if there is none."""
+    return measure_ink(cell, contrast).extent
+
+
+def ink_bounds(cell: np.ndarray, contrast: int = 40) -> tuple[float, float]:
+    """Horizontal extent of the ink, as fractions of the cell width."""
+    return measure_ink(cell, contrast).bounds
+
+
 def clipped_edges(
     cell: np.ndarray, contrast: int = 40, margin: int = CLIP_MARGIN
 ) -> tuple[str, ...]:
-    """Which edges of the crop have ink in their outermost pixels, if any.
-
-    Vertical as well as horizontal, because ``cell_pad_y`` can cut the tops
-    off capitals just as easily as ``cell_pad_x`` can cut the ends off a word,
-    and a caller looking only sideways would pass a crop that loses a row of
-    every glyph.
-
-    This is a hint and not a measurement of correctness. It has both kinds of
-    error: a label drawn hard against the edge of its own cell reports a
-    clipping that is really the sim's layout, and a crop that has slipped
-    wholesale onto a separator bar or a solid background reports nothing at
-    all. It says "look at this one", which is worth having and is not the same
-    as saying the calibration is wrong.
-    """
-    mask = ink_mask(cell, contrast)
-    columns = np.flatnonzero(mask.any(axis=0))
-    rows = np.flatnonzero(mask.any(axis=1))
-    if columns.size == 0 or rows.size == 0:
-        return ()
-    height, width = mask.shape[:2]
-    edges = []
-    if columns[0] <= margin:
-        edges.append("left")
-    if columns[-1] >= width - 1 - margin:
-        edges.append("right")
-    if rows[0] <= margin:
-        edges.append("top")
-    if rows[-1] >= height - 1 - margin:
-        edges.append("bottom")
-    return tuple(edges)
+    """Which edges of the crop have ink in their outermost pixels, if any."""
+    return measure_ink(cell, contrast).clipped_edges(margin)
 
 
 def is_blank(cell: np.ndarray, min_ink_ratio: float = 0.004, contrast: int = 40) -> bool:
-    return ink_ratio(cell, contrast) < min_ink_ratio
+    return measure_ink(cell, contrast).ratio < min_ink_ratio
 
 
 def sharpen(gray: np.ndarray, amount: float, radius: float) -> np.ndarray:

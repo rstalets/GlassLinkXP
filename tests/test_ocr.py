@@ -126,6 +126,31 @@ def test_read_best_stops_at_the_first_exact_vocabulary_hit():
     assert reader.engine.calls == 1, "must not run the later variants"
 
 
+def test_read_best_only_pulls_the_variants_it_reads():
+    """The early exit has to save the preprocessing too, not just the OCR.
+
+    The pipeline hands over a generator, so anything read_best does not reach
+    is never built. If it ever materialises its argument -- list(images), a
+    len(), a second pass -- the rung it stopped before gets preprocessed
+    anyway and the saving quietly disappears.
+    """
+    built = []
+
+    def variants(n):
+        for i in range(n):
+            built.append(i)
+            yield object()
+
+    reader = _reader([("INSET", 90.0), ("GARBAGE", 99.0), ("WORSE", 99.0)])
+    assert reader.read_best(0, variants(3)).text == "INSET"
+    assert built == [0], "the rungs after an exact, confident hit are never built"
+
+    built.clear()
+    reader = _reader([("", 0.0), ("", 0.0), ("", 0.0)])
+    reader.read_best(0, variants(3))
+    assert built == [0, 1, 2], "and every rung is still built when none of them answers"
+
+
 def test_read_best_recovers_a_cell_the_gentle_rung_could_not_read():
     """A filled counter returns nothing; a sharpened variant recovers it."""
     reader = _reader([("", 0.0), ("0", 88.0)])

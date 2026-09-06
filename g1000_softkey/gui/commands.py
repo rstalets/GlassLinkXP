@@ -67,7 +67,10 @@ class CommandSpec:
     #: True where the command talks to Windows APIs and cannot work elsewhere
     #: without --image. The GUI says so rather than letting it fail obscurely.
     needs_windows: bool = False
-    #: Directory-producing commands: the GUI offers to show what was written.
+    #: Directory-producing commands: the key of the option naming the folder
+    #: they write into, so the GUI can offer to show what was written without
+    #: each tab knowing which of its own fields that is. Read by
+    #: :func:`output_folder`.
     output_option: str = ""
 
     def option(self, key: str) -> Option:
@@ -75,6 +78,10 @@ class CommandSpec:
             if option.key == key:
                 return option
         raise KeyError(f"{self.name} has no option {key!r}")
+
+    def __post_init__(self) -> None:
+        if self.output_option:
+            self.option(self.output_option)  # KeyError here beats a dead button
 
 
 # The --image option appears on most commands and always means the same thing.
@@ -96,7 +103,7 @@ RUN = CommandSpec(
     options=(
         IMAGE,
         Option("publisher", "--publisher", label="Publish to",
-               choices=("websocket", "webapi", "file", "console"),
+               choices=("websocket", "webapi", "console"),
                help="Where the labels go. 'console' just prints them, which is the safe "
                     "thing to watch first; 'websocket' is the normal X-Plane path."),
         Option("hz", "--hz", label="Rate (Hz)",
@@ -183,21 +190,6 @@ SCREEN_TEMPLATE = CommandSpec(
     ),
 )
 
-LEARN = CommandSpec(
-    name="learn",
-    title="Learn shapes",
-    summary="Record the glyph shapes of a screen whose labels you can read yourself.",
-    needs_windows=True,
-    options=(
-        IMAGE,
-        Option("display", "--display", label="Display", default="pfd",
-               help="Which display to learn from."),
-        Option("labels", "--labels", label="Labels", required=True,
-               help='One per cell, comma separated, empty for a blank key: '
-                    '"0,1,2,3,4,5,6,7,IDENT,BKSP,BACK,"'),
-    ),
-)
-
 TUNE = CommandSpec(
     name="tune",
     title="Tune a cell",
@@ -223,10 +215,26 @@ SYNTH = CommandSpec(
 
 COMMANDS: tuple[CommandSpec, ...] = (
     RUN, LIST_WINDOWS, CALIBRATE, DUMP_CELLS, DUMP_COLORS,
-    BENCH, SCREEN_TEMPLATE, LEARN, TUNE, SYNTH,
+    BENCH, SCREEN_TEMPLATE, TUNE, SYNTH,
 )
 
 BY_NAME: dict[str, CommandSpec] = {spec.name: spec for spec in COMMANDS}
+
+
+def output_folder(spec: CommandSpec, values: Mapping[str, Any] | None = None) -> str:
+    """The folder ``spec`` writes into, given what the tab has in its fields.
+
+    Falls back to the option's own default, which is what the child would use
+    if the field were left empty, so the "Open folder" button and the command
+    cannot end up looking in different places. "" for a command that writes no
+    folder -- there is nothing to show, and the caller should not offer to.
+    """
+    if not spec.output_option:
+        return ""
+    option = spec.option(spec.output_option)
+    raw = (values or {}).get(option.key)
+    text = "" if raw is None else str(raw).strip()
+    return text or ("" if option.default is None else str(option.default))
 
 
 class MissingOption(ValueError):

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import copy
 import os
-import re
 import subprocess
 import sys
 import tkinter as tk
@@ -25,13 +24,22 @@ from dataclasses import replace
 from ..color import BACKGROUND_NAMES, BLACK
 from ..config import StripGeometry
 from . import checks, commands, configio, geometry, schema
-from .logparse import classify, parse_health, parse_row
+from .logparse import (
+    classify,
+    parse_calibration,
+    parse_colors,
+    parse_health,
+    parse_row,
+    parse_screen_block,
+    parse_window,
+)
 from .runner import Event, Failed, Finished, Line, Started
 from .widgets import (
     CELL_COLORS,
     HELP_COLOR,
     WARN_COLOR,
     GeometryCanvas,
+    HintEntry,
     ImageView,
     LabelBoard,
     OutputPane,
@@ -68,6 +76,23 @@ class Tab(ttk.Frame):
 
     def refresh(self) -> None:
         """Called when the configuration document changes."""
+
+    def show_output_folder(self, spec: commands.CommandSpec, values: dict[str, Any],
+                           nothing_yet: str) -> None:
+        """Open the folder ``spec`` writes into, in the file manager.
+
+        Which folder that is comes from ``spec.output_option`` rather than
+        from each tab knowing which of its own boxes holds it -- the tabs had
+        a copy of this each, and the declared option was read nowhere.
+        """
+        where = commands.output_folder(spec, values)
+        folder = Path(where) if where else None
+        if folder is None or not folder.is_dir():
+            self.app.set_status(nothing_yet, "warning")
+            return
+        error = open_folder(folder)
+        if error:
+            self.app.set_status(error, "error")
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +210,11 @@ class RunTab(Tab):
 
     def __init__(self, app) -> None:
         super().__init__(app)
-        self.publisher = tk.StringVar(value=str(app.prefs.get("publisher") or ""))
+        # The app's own variable, not a copy: it is what gets written back to
+        # the preferences when the window closes, and two variables that could
+        # disagree about one setting would be worse than none -- the same
+        # reasoning as the two debug-output checkboxes below.
+        self.publisher = app.publisher
         self.hz = tk.StringVar(value="")
         self.once = tk.BooleanVar(value=False)
         self.timing = tk.BooleanVar(value=False)
@@ -377,14 +406,6 @@ class RunTab(Tab):
 # ---------------------------------------------------------------------------
 
 
-#: A line of `list-windows` output:
-#:   hwnd=0x00010F42 pid=1234   1288x832 class='X-Plane' title='G1000 PFD'
-_WINDOW_LINE = re.compile(
-    r"hwnd=(?P<hwnd>\S+)\s+pid=(?P<pid>\d+)\s+(?P<size>\d+x\d+)\s+"
-    r"class='(?P<cls>.*?)'\s+title='(?P<title>.*)'\s*$"
-)
-
-
 class WindowsTab(Tab):
     """List the open windows and put one into the config as a display."""
 
@@ -453,13 +474,12 @@ class WindowsTab(Tab):
             return
         found = 0
         for line in lines:
-            match = _WINDOW_LINE.search(line)
-            if match is None:
+            window = parse_window(line)
+            if window is None:
                 continue
             found += 1
             self.tree.insert("", "end", values=(
-                match.group("title"), match.group("size"),
-                match.group("cls"), match.group("pid"),
+                window.title, window.size, window.class_name, window.pid,
             ))
         self.app.set_status(
             f"{found} window(s) listed. Select one and apply it to a display."
@@ -499,12 +519,6 @@ class WindowsTab(Tab):
 # ---------------------------------------------------------------------------
 # Calibrate
 # ---------------------------------------------------------------------------
-
-
-_FRAME_HEADER = re.compile(r"\[(?P<display>[A-Za-z0-9_.-]+)\]\s+frame\s+(?P<size>\d+x\d+)")
-_AUTO_DETECT = re.compile(
-    r"auto-detect:\s*x=(?P<x>[\d.]+)\s+y=(?P<y>[\d.]+)\s+w=(?P<w>[\d.]+)\s+h=(?P<h>[\d.]+)"
-)
 
 
 GEOMETRY_KEYS = ("x", "y", "w", "h", "cell_pad_x", "cell_pad_y")
@@ -1068,15 +1082,7 @@ class CalibrateTab(Tab):
         )
 
     def _parse(self, code: int, lines: list[str]) -> None:
-        current = ""
-        for line in lines:
-            header = _FRAME_HEADER.search(line)
-            if header:
-                current = header.group("display")
-                continue
-            auto = _AUTO_DETECT.search(line)
-            if auto and current:
-                self._suggested[current] = {k: float(auto.group(k)) for k in ("x", "y", "w", "h")}
+        self._suggested = parse_calibration(lines)
         self._load_picture()
         self.auto_button.configure(
             state="normal" if self.display.get() in self._suggested else "disabled"
@@ -1174,13 +1180,10 @@ class CalibrateTab(Tab):
         ))
 
     def _open_folder(self) -> None:
-        folder = Path(self.out.get())
-        if not folder.is_dir():
-            self.app.set_status("There is nothing there yet -- take a picture first.", "warning")
-            return
-        error = open_folder(folder)
-        if error:
-            self.app.set_status(error, "error")
+        self.show_output_folder(
+            commands.CALIBRATE, {"out": self.out.get()},
+            "There is nothing there yet -- take a picture first.",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1292,26 +1295,15 @@ class CellsTab(Tab):
         )
 
     def _open_folder(self) -> None:
-        folder = Path(self.out.get())
-        if not folder.is_dir():
-            self.app.set_status("There is nothing there yet -- read the cells first.", "warning")
-            return
-        error = open_folder(folder)
-        if error:
-            self.app.set_status(error, "error")
+        self.show_output_folder(
+            commands.DUMP_CELLS, {"out": self.out.get()},
+            "There is nothing there yet -- read the cells first.",
+        )
 
 
 # ---------------------------------------------------------------------------
 # Colours
 # ---------------------------------------------------------------------------
-
-
-#: A row of `dump-colors` output:  " 4   250 250 250    0   0 250   white     1"
-_COLOR_ROW = re.compile(
-    r"^\s*(?P<cell>\d+)\s+(?P<b>\d+)\s+(?P<g>\d+)\s+(?P<r>\d+)\s+"
-    r"(?P<h>\d+)\s+(?P<s>\d+)\s+(?P<v>\d+)\s+(?P<name>\S+)\s+(?P<bg>\d+)\s*$"
-)
-_COLOR_HEADER = re.compile(r"^\[(?P<display>[A-Za-z0-9_.-]+)\]\s+ring")
 
 
 class ColorsTab(Tab):
@@ -1363,22 +1355,14 @@ class ColorsTab(Tab):
     def _parse(self, code: int, lines: list[str]) -> None:
         if code != 0:
             return
-        display = ""
-        rows = 0
-        for line in lines:
-            header = _COLOR_HEADER.search(line)
-            if header:
-                display = header.group("display")
-                continue
-            match = _COLOR_ROW.match(line)
-            if match is None:
-                continue
-            rows += 1
-            self.tree.insert("", "end", tags=(match.group("name"),), values=(
-                display, match.group("cell"),
-                f"{match.group('b')} / {match.group('g')} / {match.group('r')}",
-                f"{match.group('h')} / {match.group('s')} / {match.group('v')}",
-                match.group("name"),
+        measured = parse_colors(lines)
+        rows = len(measured)
+        for row in measured:
+            self.tree.insert("", "end", tags=(row.name,), values=(
+                row.display, row.cell,
+                " / ".join(str(v) for v in row.bgr),
+                " / ".join(str(v) for v in row.hsv),
+                row.name,
             ))
         self.app.set_status(
             f"{rows} cell(s) measured. A cell named wrongly means a threshold to move, "
@@ -1419,7 +1403,7 @@ def config_path_setting(app, key: str) -> Path:
 
 
 class PagesTab(Tab):
-    """Teach the daemon which softkey pages exist, and what the glyphs look like."""
+    """Teach the daemon which softkey pages exist."""
 
     tab_title = "Pages"
 
@@ -1427,15 +1411,14 @@ class PagesTab(Tab):
         super().__init__(app)
         self.display = tk.StringVar(value="")
         self.page_name = tk.StringVar(value="")
-        self.labels = tk.StringVar(value="")
         self._block: list[str] = []
 
         help_label(
             self,
             "Reading a ten-pixel digit is hard. Recognising which softkey page is showing, "
             "from the labels that did read cleanly, is easy -- and once the page is known, "
-            "the hard cells can simply be looked up instead of guessed at. These two tools "
-            "build that knowledge from your own display.",
+            "the hard cells can simply be looked up instead of guessed at. This tool "
+            "builds that knowledge from your own display.",
             width=900,
         ).pack(anchor="w", pady=(0, 10))
 
@@ -1460,26 +1443,6 @@ class PagesTab(Tab):
             "anything read below the confidence floor is listed for you to correct first. "
             "Check the block before adding it -- a wrong label recorded here would be "
             "filled into every later frame that matches this page.",
-            width=880,
-        ).pack(anchor="w", pady=(6, 0))
-
-        # -- learn ------------------------------------------------------------
-        learn = ttk.LabelFrame(self, text="  Learn the glyph shapes  ", padding=PAD)
-        learn.pack(fill="x", pady=(10, 0))
-        row = ttk.Frame(learn)
-        row.pack(fill="x")
-        ttk.Label(row, text="This page reads").pack(side="left")
-        ttk.Entry(row, textvariable=self.labels).pack(side="left", fill="x", expand=True, padx=4)
-        ttk.Button(row, text="Learn it", width=10, command=self.learn).pack(side="left")
-        help_label(
-            learn,
-            "One label per cell, separated by commas, with nothing between the commas for "
-            "a blank key -- for example  0,1,2,3,4,5,6,7,IDENT,BKSP,BACK,  which is the "
-            "transponder keypad. The binarised, size-normalised shape of each glyph is "
-            "stored and compared by distance later, so it survives dimming, highlighting "
-            "and a window resize. This is additive: run it on each page you care about. "
-            "It is off until you raise 'Shape fallback below' in the settings, because "
-            "page lookup above covers the same cells with a stronger signal.",
             width=880,
         ).pack(anchor="w", pady=(6, 0))
 
@@ -1509,16 +1472,7 @@ class PagesTab(Tab):
     def _captured(self, code: int, lines: list[str]) -> None:
         if code != 0:
             return
-        block: list[str] = []
-        for line in lines:
-            if line.strip().startswith("[[screen]]"):
-                block = [line.rstrip()]
-            elif block:
-                block.append(line.rstrip())
-        # Trailing blank lines only; the command prints the check-these notes
-        # after the block and they are worth keeping as a comment in the file.
-        while block and not block[-1].strip():
-            block.pop()
+        block = parse_screen_block(lines)
         self._block = block
         if block:
             self.append_button.configure(state="normal")
@@ -1546,15 +1500,6 @@ class PagesTab(Tab):
             return
         self.append_button.configure(state="disabled")
         self.app.set_status(f"Added to {path.name}.")
-
-    def learn(self) -> None:
-        text = self.labels.get().strip()
-        if not text:
-            self.app.set_status("Type what the page says first, one label per cell.", "warning")
-            return
-        self.app.run_task(
-            commands.LEARN, {"display": self.display.get(), "labels": text}, self.output
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -1610,7 +1555,9 @@ class VocabularyTab(Tab):
         self.text.delete("1.0", "end")
         try:
             self.text.insert("1.0", path.read_text(encoding="utf-8"))
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
+            # ValueError covers UnicodeDecodeError: a file that is not UTF-8
+            # is a thing to say in the pane, not an exception into Tk.
             self.text.insert("1.0", f"# could not read {path}: {exc}\n")
         self.text.edit_reset()
 
@@ -1733,11 +1680,12 @@ class SettingsTab(Tab):
         fields.columnconfigure(1, weight=1)
         row = 0
         for setting in group.settings:
-            row = self._add_field(fields, row, setting, (*path, setting.key))
+            row = self._add_field(fields, row, setting, (*path, setting.key),
+                                  section=group.section)
         return None
 
     def _add_field(self, parent: tk.Misc, row: int, setting: schema.Setting,
-                   path: tuple[str, ...]) -> int:
+                   path: tuple[str, ...], section: str = "") -> int:
         value = configio.get_in(self.app.document, path)
         if value is None and not setting.optional:
             value = self._default_for(path, setting)
@@ -1754,17 +1702,38 @@ class SettingsTab(Tab):
                                   state="readonly", width=16)
         else:
             variable = tk.StringVar(value=configio.format_field(setting, value))
-            widget = ttk.Entry(parent, textvariable=variable)
+            # The hint is drawn beside an empty box, never typed into it: a
+            # box holding the package's own path is a box whose contents get
+            # written into config.toml on the next Save, which pins the
+            # configuration to this install. An empty box means "whatever the
+            # package ships with", and it has to stay reachable.
+            widget = HintEntry(parent, textvariable=variable,
+                               hint=self._hint_for(setting, section))
         widget.grid(row=row, column=1, sticky="ew", pady=(2, 0))
         self._fields.append((path, setting, variable))
         row += 1
         if setting.help:
             note = setting.help
-            if setting.optional:
+            if setting.package_default:
+                note += "  (leave empty to use the file that comes with the package)"
+            elif setting.optional:
                 note += "  (leave empty to leave it unset)"
             help_label(parent, note, width=640).grid(row=row, column=1, sticky="w", pady=(0, 6))
             row += 1
         return row
+
+    def _hint_for(self, setting: schema.Setting, section: str) -> str:
+        """What an empty box will actually use, for the hint drawn inside it.
+
+        Only for the settings whose default is a file inside the installed
+        package. Those are the ones where an empty box does something
+        specific and invisible, and where showing the answer as a *value*
+        would write this checkout's path into the user's config file.
+        """
+        if not (section and setting.package_default):
+            return ""
+        default = schema.default_value(section, setting)
+        return f"{default}  (the one that comes with the package)" if default else ""
 
     def _default_for(self, path: tuple[str, ...], setting: schema.Setting) -> Any:
         """The built-in default, so an absent key shows what it will actually be."""
@@ -1856,7 +1825,7 @@ class SettingsTab(Tab):
             return
         try:
             self._raw_loaded = self.app.config_path.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, ValueError) as exc:  # ValueError: not UTF-8 text
             self._raw_loaded = ""
             self.raw.insert("1.0", f"# could not read {self.app.config_path}: {exc}\n")
             return

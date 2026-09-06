@@ -17,11 +17,22 @@ LOG = logging.getLogger(__name__)
 PACKAGE_DIR = Path(__file__).resolve().parent
 
 DEFAULT_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -/"
-DEFAULT_JSON_FALLBACK = "g1000_softkey_labels.json"
 
 
 class ConfigError(Exception):
     """Raised for a malformed configuration file."""
+
+
+class ConfigNotFound(ConfigError):
+    """The named configuration file does not exist.
+
+    Split out from :class:`ConfigError` because it is the one failure that is
+    *not* a broken file: there is nothing to lose by carrying on without it,
+    which is what the GUI does when asked to open a config that has yet to be
+    written. Every other ConfigError -- a TOML syntax error, a value out of
+    range -- means a file that exists and would be destroyed by treating it as
+    absent, so the two must not be caught together.
+    """
 
 
 @dataclass(frozen=True)
@@ -157,10 +168,6 @@ class OcrConfig:
     #: made from a guess would propagate that guess into every cell it fills.
     screen_match_confidence: float = 85.0
     screens_file: str = str(PACKAGE_DIR / "screens.toml")
-    #: Shape-signature fallback (see signatures.py). Off by default: page
-    #: lookup covers the same cells with a stronger signal.
-    signature_confidence: float = 0.0
-    signatures_file: str = str(PACKAGE_DIR / "signatures.json")
     sharpen_ladder: tuple[tuple[float, float], ...] = (
         (0.0, 0.0),
         (0.5, 1.0),
@@ -231,8 +238,18 @@ class ColorConfig:
 
 @dataclass(frozen=True)
 class PublishConfig:
-    target: str = "webapi"  # webapi | file | console
+    target: str = "webapi"  # websocket | webapi | console
     base_url: str = "http://localhost:8086"
+    #: Which version of X-Plane's Web API to talk -- a *floor*, used only when
+    #: the sim does not say. Both publishers ask the unversioned
+    #: /api/capabilities endpoint first and take the highest version it
+    #: advertises, so this value is what is left when that endpoint cannot be
+    #: reached at all.
+    #:
+    #: "v1" because an X-Plane that does not answer /api/capabilities is an
+    #: old one, and v1 is the version every release with a Web API has served.
+    #: Raising the floor could only affect a sim too old to have been asked,
+    #: which is exactly the sim that would not understand a newer version.
     api_version: str = "v1"
     #: Bytes per label dataref -> the PilotsDeck address suffix (':s64').
     #:
@@ -248,7 +265,6 @@ class PublishConfig:
     #: set generously once instead of tuned.
     field_width: int = 64
     timeout: float = 1.0
-    json_path: str = ""
     #: seconds between reconnect attempts when X-Plane is not answering
     retry_interval: float = 5.0
 
@@ -311,7 +327,7 @@ def load_config(path: str | Path | None) -> AppConfig:
         return default_config()
     p = Path(path)
     if not p.is_file():
-        raise ConfigError(f"config file not found: {p}")
+        raise ConfigNotFound(f"config file not found: {p}")
     try:
         raw = tomllib.loads(p.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:  # pragma: no cover - depends on user file
@@ -337,10 +353,6 @@ def from_mapping(raw: Mapping[str, Any], base_dir: Path | None = None) -> AppCon
         screens = Path(ocr_data["screens_file"])
         if not screens.is_absolute():
             ocr_data["screens_file"] = str((base_dir / screens).resolve())
-    if base_dir is not None and ocr_data.get("signatures_file"):
-        signatures = Path(ocr_data["signatures_file"])
-        if not signatures.is_absolute():
-            ocr_data["signatures_file"] = str((base_dir / signatures).resolve())
     if base_dir is not None and ocr_data.get("labels_file"):
         labels = Path(ocr_data["labels_file"])
         if not labels.is_absolute():

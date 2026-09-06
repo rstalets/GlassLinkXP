@@ -119,20 +119,6 @@ screen_confidence = 80.0
 # confidently -- higher on purpose, because an identification made from a guess
 # would propagate that guess into every cell it fills.
 screen_match_confidence = 85.0
-
-# Off by default: page lookup covers the same cells with a stronger signal.
-# Below this confidence, fall back to matching the glyph's shape against
-# signatures.json. Tesseract decides what a glyph *is*, and on a ~10 px digit
-# that decision gets shaky -- but the pixels are stable and the label set is
-# small and closed, so "which known label does this look like?" is an easier
-# question than "what character is this?". Build the file with:
-#     g1000 learn --display pfd --labels "0,1,2,3,4,5,6,7,IDENT,BKSP,BACK,"
-# It is additive, so run it on each screen you care about. 0 disables it.
-#
-# This is not a hash of the raw cell -- that is what brightness breaks.
-# Signatures come from the binarised, size-normalised glyph and are compared by
-# distance, so they survive dimming, highlighting and a window resize.
-signature_confidence = 0.0
 threshold = "otsu"       # otsu | adaptive -- per cell, never global
 fuzzy_cutoff = 0.62      # difflib cutoff for snapping to labels.txt
 blank_ink_ratio = 0.004  # below this fraction of "ink" a cell is reported as ""
@@ -197,9 +183,14 @@ yellow_hue_max = 40
 
 # --- publishing ------------------------------------------------------------
 [publish]
-target = "websocket"        # websocket | webapi | file | console
+target = "websocket"        # websocket | webapi | console
 base_url = "http://localhost:8086"
-api_version = "v1"       # v1 works on X-Plane 12.1.1+; v2 from 12.1.4
+# A floor, not a choice: both publishers read the unversioned
+# /api/capabilities endpoint and use the highest version X-Plane advertises
+# (v1, v2 and v3 have all shipped). This value is only used when that endpoint
+# cannot be reached, which means a sim too old to have been asked -- so leave
+# it at the oldest version, v1.
+api_version = "v1"
 # Bytes per label dataref -> the PilotsDeck address suffix (':s64').
 #
 # The width is fixed in three places that must agree: FIELD_WIDTH in the
@@ -213,7 +204,3 @@ api_version = "v1"       # v1 works on X-Plane 12.1.1+; v2 from 12.1.4
 field_width = 64
 timeout = 1.0
 retry_interval = 5.0     # seconds between reconnect attempts
-# json_path = "C:/Users/you/AppData/Local/Temp/g1000_softkey_labels.json"
-# (empty -> <system temp>/g1000_softkey_labels.json, the same default the
-#  XPPython3 plugin uses; override both sides with the G1000_SOFTKEY_JSON
-#  environment variable)
