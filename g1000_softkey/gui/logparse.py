@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..color import BACKGROUND_NAMES, BLACK
@@ -177,6 +178,123 @@ def parse_window(line: str) -> WindowLine | None:
         class_name=class_name,
         title=title,
     )
+
+
+# ---------------------------------------------------------------------------
+# `calibrate`
+# ---------------------------------------------------------------------------
+
+#: "[pfd] frame 1288x832 source=image:..." and the auto-detected geometry
+#: printed under it, both from ``cmd_calibrate``. The header is what says
+#: which display the numbers below belong to.
+_FRAME_HEADER = re.compile(
+    r"\[(?P<display>[A-Za-z0-9_.-]+)\]\s+frame\s+(?P<width>\d+)x(?P<height>\d+)"
+)
+_AUTO_DETECT = re.compile(
+    r"auto-detect:\s*x=(?P<x>[\d.]+)\s+y=(?P<y>[\d.]+)\s+w=(?P<w>[\d.]+)\s+h=(?P<h>[\d.]+)"
+)
+
+#: The geometry keys ``calibrate`` suggests. Not the whole of StripGeometry:
+#: auto-detect finds the band, not the trim inside each cell.
+DETECTED_KEYS = ("x", "y", "w", "h")
+
+
+def parse_calibration(lines: Iterable[str]) -> dict[str, dict[str, float]]:
+    """The geometry ``calibrate`` suggested, per display.
+
+    A display only appears if its auto-detect succeeded -- the command prints
+    a sentence instead of numbers when it finds no dark softkey band, and a
+    button offering to apply nothing is worse than a button that stays off.
+    """
+    found: dict[str, dict[str, float]] = {}
+    current = ""
+    for line in lines:
+        header = _FRAME_HEADER.search(line)
+        if header:
+            current = header.group("display")
+            continue
+        detected = _AUTO_DETECT.search(line)
+        if detected and current:
+            found[current] = {key: float(detected.group(key)) for key in DETECTED_KEYS}
+    return found
+
+
+# ---------------------------------------------------------------------------
+# `dump-colors`
+# ---------------------------------------------------------------------------
+
+#: A row of the table ``cmd_dump_colors`` prints, under a "[pfd]  ring = ..."
+#: header that says which display it belongs to:
+#:
+#:      4   250 250 250      0   0 250   white     1
+_COLOR_HEADER = re.compile(r"^\[(?P<display>[A-Za-z0-9_.-]+)\]\s+ring")
+_COLOR_ROW = re.compile(
+    r"^\s*(?P<cell>\d+)\s+(?P<b>\d+)\s+(?P<g>\d+)\s+(?P<r>\d+)\s+"
+    r"(?P<h>\d+)\s+(?P<s>\d+)\s+(?P<v>\d+)\s+(?P<name>\S+)\s+(?P<bg>\d+)\s*$"
+)
+
+
+@dataclass(frozen=True)
+class ColorRow:
+    """One cell's measured background, as ``dump-colors`` printed it."""
+
+    display: str
+    cell: int
+    bgr: tuple[int, int, int]
+    hsv: tuple[int, int, int]
+    name: str
+    background: int
+
+
+def parse_colors(lines: Iterable[str]) -> list[ColorRow]:
+    """Every measured cell in ``dump-colors`` output, in the order printed."""
+    rows: list[ColorRow] = []
+    display = ""
+    for line in lines:
+        header = _COLOR_HEADER.search(line)
+        if header:
+            display = header.group("display")
+            continue
+        match = _COLOR_ROW.match(line)
+        if match is None:
+            continue
+        rows.append(ColorRow(
+            display=display,
+            cell=int(match.group("cell")),
+            bgr=tuple(int(match.group(k)) for k in ("b", "g", "r")),  # type: ignore[arg-type]
+            hsv=tuple(int(match.group(k)) for k in ("h", "s", "v")),  # type: ignore[arg-type]
+            name=match.group("name"),
+            background=int(match.group("bg")),
+        ))
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# `screen-template`
+# ---------------------------------------------------------------------------
+
+#: What ``cmd_screen_template`` prints the block with. Everything from here to
+#: the end is meant to be appended to screens.toml -- including the commented
+#: "CHECK THESE" notes after it, which are worth keeping in the file.
+SCREEN_MARKER = "[[screen]]"
+
+
+def parse_screen_block(lines: Iterable[str]) -> list[str]:
+    """The ``[[screen]]`` block out of ``screen-template`` output.
+
+    Empty when there is none. Trailing blank lines are dropped; nothing else
+    is, because the command's own comments about cells it read unconfidently
+    belong in the file beside the block they are about.
+    """
+    block: list[str] = []
+    for line in lines:
+        if line.strip().startswith(SCREEN_MARKER):
+            block = [line.rstrip()]
+        elif block:
+            block.append(line.rstrip())
+    while block and not block[-1].strip():
+        block.pop()
+    return block
 
 
 #: Log levels as the daemon's format string writes them, longest first so

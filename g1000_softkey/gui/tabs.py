@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import copy
 import os
-import re
 import subprocess
 import sys
 import tkinter as tk
@@ -25,7 +24,15 @@ from dataclasses import replace
 from ..color import BACKGROUND_NAMES, BLACK
 from ..config import StripGeometry
 from . import checks, commands, configio, geometry, schema
-from .logparse import classify, parse_health, parse_row, parse_window
+from .logparse import (
+    classify,
+    parse_calibration,
+    parse_colors,
+    parse_health,
+    parse_row,
+    parse_screen_block,
+    parse_window,
+)
 from .runner import Event, Failed, Finished, Line, Started
 from .widgets import (
     CELL_COLORS,
@@ -512,12 +519,6 @@ class WindowsTab(Tab):
 # ---------------------------------------------------------------------------
 # Calibrate
 # ---------------------------------------------------------------------------
-
-
-_FRAME_HEADER = re.compile(r"\[(?P<display>[A-Za-z0-9_.-]+)\]\s+frame\s+(?P<size>\d+x\d+)")
-_AUTO_DETECT = re.compile(
-    r"auto-detect:\s*x=(?P<x>[\d.]+)\s+y=(?P<y>[\d.]+)\s+w=(?P<w>[\d.]+)\s+h=(?P<h>[\d.]+)"
-)
 
 
 GEOMETRY_KEYS = ("x", "y", "w", "h", "cell_pad_x", "cell_pad_y")
@@ -1081,15 +1082,7 @@ class CalibrateTab(Tab):
         )
 
     def _parse(self, code: int, lines: list[str]) -> None:
-        current = ""
-        for line in lines:
-            header = _FRAME_HEADER.search(line)
-            if header:
-                current = header.group("display")
-                continue
-            auto = _AUTO_DETECT.search(line)
-            if auto and current:
-                self._suggested[current] = {k: float(auto.group(k)) for k in ("x", "y", "w", "h")}
+        self._suggested = parse_calibration(lines)
         self._load_picture()
         self.auto_button.configure(
             state="normal" if self.display.get() in self._suggested else "disabled"
@@ -1313,14 +1306,6 @@ class CellsTab(Tab):
 # ---------------------------------------------------------------------------
 
 
-#: A row of `dump-colors` output:  " 4   250 250 250    0   0 250   white     1"
-_COLOR_ROW = re.compile(
-    r"^\s*(?P<cell>\d+)\s+(?P<b>\d+)\s+(?P<g>\d+)\s+(?P<r>\d+)\s+"
-    r"(?P<h>\d+)\s+(?P<s>\d+)\s+(?P<v>\d+)\s+(?P<name>\S+)\s+(?P<bg>\d+)\s*$"
-)
-_COLOR_HEADER = re.compile(r"^\[(?P<display>[A-Za-z0-9_.-]+)\]\s+ring")
-
-
 class ColorsTab(Tab):
     """Measure the softkey background colours and check the thresholds."""
 
@@ -1370,22 +1355,14 @@ class ColorsTab(Tab):
     def _parse(self, code: int, lines: list[str]) -> None:
         if code != 0:
             return
-        display = ""
-        rows = 0
-        for line in lines:
-            header = _COLOR_HEADER.search(line)
-            if header:
-                display = header.group("display")
-                continue
-            match = _COLOR_ROW.match(line)
-            if match is None:
-                continue
-            rows += 1
-            self.tree.insert("", "end", tags=(match.group("name"),), values=(
-                display, match.group("cell"),
-                f"{match.group('b')} / {match.group('g')} / {match.group('r')}",
-                f"{match.group('h')} / {match.group('s')} / {match.group('v')}",
-                match.group("name"),
+        measured = parse_colors(lines)
+        rows = len(measured)
+        for row in measured:
+            self.tree.insert("", "end", tags=(row.name,), values=(
+                row.display, row.cell,
+                " / ".join(str(v) for v in row.bgr),
+                " / ".join(str(v) for v in row.hsv),
+                row.name,
             ))
         self.app.set_status(
             f"{rows} cell(s) measured. A cell named wrongly means a threshold to move, "
@@ -1495,16 +1472,7 @@ class PagesTab(Tab):
     def _captured(self, code: int, lines: list[str]) -> None:
         if code != 0:
             return
-        block: list[str] = []
-        for line in lines:
-            if line.strip().startswith("[[screen]]"):
-                block = [line.rstrip()]
-            elif block:
-                block.append(line.rstrip())
-        # Trailing blank lines only; the command prints the check-these notes
-        # after the block and they are worth keeping as a comment in the file.
-        while block and not block[-1].strip():
-            block.pop()
+        block = parse_screen_block(lines)
         self._block = block
         if block:
             self.append_button.configure(state="normal")

@@ -8,7 +8,7 @@ going blank for a user.
 
 import pytest
 
-from g1000_softkey.color import BLACK, RED, WHITE, YELLOW
+from g1000_softkey.color import BACKGROUND_NAMES, BLACK, RED, WHITE, YELLOW
 from g1000_softkey.gui import logparse
 from g1000_softkey.main import _format_row
 from g1000_softkey.ocr import CellResult
@@ -231,3 +231,102 @@ def test_a_class_name_with_a_quote_survives_too():
 ])
 def test_lines_that_are_not_windows_are_ignored(line):
     assert logparse.parse_window(line) is None
+
+
+# -- the one-shot commands' output -----------------------------------------
+#
+# The Calibrate, Colours and Pages tabs each read a command's printed output.
+# Those parsers used to live in tabs.py with a sample of the format typed into
+# a comment beside them, which is how the window-list parser came to disagree
+# with the producer for two years' worth of aircraft names. Here they are fed
+# from the commands themselves: the tests run the real subcommand over the
+# synthetic frames and parse exactly what it printed.
+
+
+@pytest.fixture(scope="module")
+def frames(tmp_path_factory):
+    from g1000_softkey import synth
+
+    path = tmp_path_factory.mktemp("frames")
+    synth.write_menus(path)
+    return path
+
+
+def _run(capsys, argv):
+    """Run a real subcommand and hand back the lines it printed."""
+    from g1000_softkey.main import main
+
+    assert main(argv) == 0, f"{argv} failed"
+    return capsys.readouterr().out.splitlines()
+
+
+def test_the_suggested_geometry_is_read_from_calibrate(frames, tmp_path, capsys):
+    lines = _run(capsys, ["calibrate", "--image", str(frames / "pfd_menu.png"),
+                          "--out", str(tmp_path)])
+    suggested = logparse.parse_calibration(lines)
+
+    assert "pfd" in suggested, "\n".join(lines)
+    for key in logparse.DETECTED_KEYS:
+        assert 0.0 <= suggested["pfd"][key] <= 1.0
+
+
+def test_a_display_whose_strip_was_not_found_is_not_suggested():
+    """calibrate prints a sentence instead of numbers, and a button offering
+    to apply nothing is worse than a button that stays off."""
+    assert logparse.parse_calibration([
+        "[pfd] frame 1288x832 source=image:x.png",
+        "  auto-detect: no dark softkey band found; set the geometry by hand",
+    ]) == {}
+
+
+def test_the_colour_table_is_read_from_dump_colors(frames, capsys):
+    lines = _run(capsys, ["dump-colors", "--image", str(frames / "alerts.png")])
+    rows = logparse.parse_colors(lines)
+
+    assert len(rows) == 24, "\n".join(lines)  # both displays, twelve cells each
+    assert {row.display for row in rows} == {"pfd", "mfd"}
+    assert [row.cell for row in rows[:12]] == list(range(1, 13))
+    for row in rows:
+        assert row.name in BACKGROUND_NAMES.values()
+        assert row.background in BACKGROUND_NAMES
+        assert len(row.bgr) == 3 and len(row.hsv) == 3
+
+
+def test_the_colours_read_back_are_the_ones_the_command_measured(frames, tmp_path, capsys):
+    """The JSON the command writes for a bug report is the same measurement,
+    so the two have to agree cell for cell."""
+    import json
+
+    out = tmp_path / "colors.json"
+    lines = _run(capsys, ["dump-colors", "--image", str(frames / "alerts.png"),
+                          "--json", str(out)])
+    rows = logparse.parse_colors(lines)
+    records = json.loads(out.read_text(encoding="utf-8"))
+
+    assert len(rows) == len(records)
+    for row, record in zip(rows, records):
+        assert (row.display, row.cell) == (record["display"], record["cell"])
+        assert list(row.bgr) == record["bgr"]
+        assert list(row.hsv) == record["hsv"]
+        assert row.background == record["background"]
+        assert row.name == record["name"]
+
+
+def test_the_screen_block_is_read_from_screen_template(frames, capsys):
+    import tomllib
+
+    lines = _run(capsys, ["screen-template", "--image", str(frames / "xpdr.png"),
+                          "--display", "pfd", "--name", "xpdr-code"])
+    block = logparse.parse_screen_block(lines)
+
+    assert block, "\n".join(lines)
+    assert block[0].strip() == "[[screen]]"
+    assert block[-1].strip(), "trailing blank lines belong to the file, not the block"
+    # What the Pages tab appends has to be a page the daemon can read back.
+    parsed = tomllib.loads("\n".join(block))
+    assert parsed["screen"][0]["name"] == "xpdr-code"
+    assert parsed["screen"][0]["display"] == "pfd"
+
+
+def test_output_with_no_block_in_it_gives_nothing():
+    assert logparse.parse_screen_block(["reading pfd...", "nothing to say"]) == []

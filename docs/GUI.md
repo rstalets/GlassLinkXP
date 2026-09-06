@@ -230,9 +230,19 @@ change to either fails the suite rather than the user's window:
 | the argv every button builds | `main.build_parser()` | `tests/test_gui_commands.py` parses every possible argv with the real parser, and asserts the GUI covers every subcommand the CLI has |
 | the daemon's `[pfd] 1:INSET \| ...` log rows | `main._format_row()` | `tests/test_gui_logparse.py` formats a `DisplayResult` with `_format_row` and parses it back |
 | the `list-windows` lines the Find windows tab lists | `capture.WindowInfo.__str__()` | `tests/test_gui_logparse.py` formats a real `WindowInfo` and parses it back, over titles with quotes, backslashes and non-ASCII in them |
+| what `calibrate`, `dump-colors` and `screen-template` print | `main.cmd_calibrate` / `cmd_dump_colors` / `cmd_screen_template` | `tests/test_gui_logparse.py` runs each command over the synthetic frames and parses exactly what it printed |
 | every config setting | the dataclasses in `config.py` | `tests/test_gui_schema.py` fails if a field is neither in `gui/schema.py` nor in `NOT_IN_THE_FORM` with a reason |
 | where the strip and its cells are | `strip.strip_rect` / `strip.cell_rects` | `tests/test_gui_geometry.py` compares the editor's pixels with theirs; `tests/test_gui_canvas.py` reads the drawn boxes back off the canvas |
 | whether a crop cuts a label | `strip.clipped_edges` | shared outright: the editor's amber boxes and `run -v`'s `CLIPPED?` are the same function |
+
+Every one of those parsers lives in `gui/logparse.py`, not in the tab that
+uses it, and every one is tested by *producing* its input -- formatting a real
+object, or running the real subcommand over the synthetic frames -- rather
+than from a sample pasted into the test. That is not a style preference. The
+window-list parser was written from a sample typed into a comment beside it,
+the sample had no apostrophe in it, and so the parser and its test agreed with
+each other while disagreeing with the producer for every aircraft whose name
+has one.
 
 The alternative to parsing the log rows was a second, machine-readable output
 mode on `run`. That would be a second thing to keep correct, and a board fed
@@ -252,8 +262,8 @@ g1000_softkey/gui/
   geometry.py   fractions ↔ frame pixels ↔ canvas pixels, and the clamping (no Tk)
   checks.py     runs the daemon's crop over the frame and reports clipped cells
   runner.py     child process + reader thread + event queue (no Tk)
-  logparse.py   the daemon's log rows back into labels and colours, and its
-                list-windows lines back into windows
+  logparse.py   everything the CLI prints, back into structures: the daemon's
+                log rows, list-windows, calibrate, dump-colors, screen-template
   schema.py     every config setting, with the text that explains it
   configio.py   config.toml in and out, including the small TOML writer
   prefs.py      which config file was open last, the frame source, the debug
