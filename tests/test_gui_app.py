@@ -259,6 +259,79 @@ def test_the_daemon_and_a_one_shot_command_are_separate_processes(gui):
     assert gui.daemon is not gui.task
 
 
+# -- the poll loop ---------------------------------------------------------
+#
+# The loop is what makes every other event in this file arrive at all: the
+# tests above hand a tab an event directly, so none of them notices if the
+# thing that would have delivered it has stopped running. Tkinter *catches*
+# an exception raised inside an `after` callback, so a reschedule written at
+# the end of the callback is skipped by any failure before it and the polling
+# never resumes -- silently, and with no stderr at all under pythonw.exe.
+
+
+def _ticking_runner(monkeypatch, gui, ticks, events_on_tick=None):
+    """Count drains of the daemon, optionally handing out an event on one."""
+    def drain(limit=500):
+        ticks.append(len(ticks) + 1)
+        if events_on_tick and len(ticks) in events_on_tick:
+            return [Line("[pfd] 1:INSET")]
+        return []
+
+    monkeypatch.setattr(gui.daemon, "drain", drain)
+    monkeypatch.setattr(gui.task, "drain", lambda limit=500: [])
+
+
+def test_the_poll_loop_keeps_running_when_a_handler_raises(gui, monkeypatch):
+    import time
+
+    from g1000_softkey.gui import app as app_module
+
+    monkeypatch.setattr(app_module, "POLL_MS", 1)
+    ticks = []
+    _ticking_runner(monkeypatch, gui, ticks, events_on_tick={3})
+    gui._daemon_sink = lambda event: (_ for _ in ()).throw(RuntimeError("handler exploded"))
+
+    # Driven through the loop the window started for itself, and only that
+    # one: calling _poll() here as well would leave a second chain of `after`
+    # callbacks running, and the survivor would hide the death of the first.
+    deadline = time.monotonic() + 5.0
+    while len(ticks) < 20 and time.monotonic() < deadline:
+        gui.root.update()
+        time.sleep(0.001)
+
+    # Before the fix this froze on the tick the handler raised on.
+    assert len(ticks) >= 20
+
+
+def test_a_handler_that_raises_is_said_out_loud_rather_than_swallowed(gui, monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(gui.root, "after", lambda ms, fn: scheduled.append((ms, fn)))
+    monkeypatch.setattr(gui.daemon, "drain", lambda limit=500: [Line("[pfd] 1:INSET")])
+    monkeypatch.setattr(gui.task, "drain", lambda limit=500: [])
+    gui._daemon_sink = lambda event: (_ for _ in ()).throw(RuntimeError("handler exploded"))
+
+    gui._poll()
+
+    assert gui.poll_failures == 1
+    assert "handler exploded" in gui.last_poll_error
+    assert "handler exploded" in gui.status._text.get()
+    assert scheduled and scheduled[-1][1] == gui._poll
+
+
+def test_the_next_drain_is_scheduled_even_if_the_reporting_fails(gui, monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(gui.root, "after", lambda ms, fn: scheduled.append((ms, fn)))
+    monkeypatch.setattr(gui.daemon, "drain",
+                        lambda limit=500: (_ for _ in ()).throw(RuntimeError("drain exploded")))
+    monkeypatch.setattr(gui, "_poll_failed",
+                        lambda exc: (_ for _ in ()).throw(RuntimeError("reporting exploded")))
+
+    with pytest.raises(RuntimeError):
+        gui._poll()
+
+    assert scheduled and scheduled[-1][1] == gui._poll
+
+
 # -- settings --------------------------------------------------------------
 
 

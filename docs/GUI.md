@@ -52,6 +52,18 @@ everything else is a one-shot that finishes on its own. They get separate
 process slots so that pressing **Take a picture** cannot silently kill a
 running daemon.
 
+Both are drained by one `after` callback, `app._poll`, twenty times a second,
+and it reschedules itself in a `finally`. That is not tidiness. Tkinter
+*catches* an exception raised inside an `after` callback -- it reports it and
+returns -- so a reschedule written as the last statement is skipped by any
+failure above it, and the polling stops for good while the window carries on
+looking healthy: no more log lines, no board, no `Finished` event to put the
+Start button back. One bad line of output reaching one tab's handler is
+enough, and under `pythonw.exe` the traceback goes to a stderr nobody can
+see. So the loop survives a handler that raises, and says so in the status
+bar with a count and the traceback kept on the app (`poll_failures`,
+`last_poll_error`) -- kept alive is not the same as kept quiet.
+
 ## The tabs
 
 | Tab | Runs | For |
