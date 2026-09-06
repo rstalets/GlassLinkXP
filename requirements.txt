@@ -12,6 +12,14 @@ requests>=2.31,<3         # verified with 2.33.1 (X-Plane Web API client)
 # Pure-Python wheel, no build step.
 websocket-client>=1.7,<2  # verified with 1.9.2
 
+# The GUI writes config.toml; tomllib reads TOML and does not write it. This
+# is a pure-Python wheel with no dependencies of its own, and it replaced a
+# hand-written serialiser that had four ways of mangling or silently dropping
+# legal TOML. Only the GUI needs it -- the daemon reads its config and never
+# writes one -- so a headless install can leave it out and everything except
+# the Settings form's Save still works.
+tomli-w>=1.0,<2         # verified with 1.2.0
+
 # --- OCR -------------------------------------------------------------------
 # tesserocr is the production path: a direct C++ binding, so the Tesseract API
 # object is created once and reused.
