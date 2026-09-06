@@ -62,12 +62,26 @@ def test_a_thoroughly_non_default_config_round_trips(tmp_path):
     assert load_config(path) == config
 
 
-def test_an_unset_optional_setting_is_written_as_a_comment(tmp_path):
+def test_an_unset_optional_setting_is_left_out(tmp_path):
+    """TOML has no null; an absent key is the unset state, and is what the
+    daemon reads back as None."""
     path = tmp_path / "config.toml"
     configio.save(path, configio.default_document(), backup=False)
-    text = path.read_text(encoding="utf-8")
-    assert "# tessdata_path is not set" in text
+    assert "tessdata_path" not in path.read_text(encoding="utf-8")
     assert load_config(path).ocr.tessdata_path is None
+
+
+def test_dropping_unset_keys_does_not_disturb_the_document():
+    """The form still needs somewhere to put an empty box."""
+    document = configio.default_document()
+    configio.strip_unset(document)
+    assert document["ocr"]["tessdata_path"] is None
+
+
+def test_the_written_file_points_at_the_reference(tmp_path):
+    path = tmp_path / "config.toml"
+    configio.save(path, configio.default_document(), backup=False)
+    assert "docs/CONFIGURATION.md" in path.read_text(encoding="utf-8")
 
 
 def test_saving_keeps_the_previous_file(tmp_path):
@@ -94,13 +108,11 @@ def test_the_raw_editor_refuses_to_write_broken_toml(tmp_path):
     assert load_config(path).loop_hz == 1.0  # the old file is still intact
 
 
-# -- what the writer can and cannot express ---------------------------------
+# -- what the writer can express --------------------------------------------
 #
-# It is a writer for this config's shapes, not a TOML implementation. What
-# makes that defensible is that it says so: everything below either round
-# trips exactly or is refused by name. Silently dropping a line of somebody's
-# configuration on save would be far worse than declining to write it, and
-# the raw editor passes text through untouched for anything this cannot say.
+# Writing is tomli-w's job now. These are kept because they are the cases a
+# hand-written writer got wrong, and a test suite that only exercised the
+# happy path is what let it ship that way.
 
 
 def _round_trips(text: str) -> bool:
@@ -132,39 +144,28 @@ def test_a_display_whose_name_needs_quoting_survives(tmp_path):
     assert [d.key for d in load_config(path).displays] == ["G1000 PFD"]
 
 
-@pytest.mark.parametrize("name,text,expected", [
-    ("an array of tables", '[app]\nloop_hz = 1.0\n[[screen]]\nname = "x"\n', "array of tables"),
-    ("a top-level value", 'title = "mine"\n[app]\nloop_hz = 1.0\n', "top level"),
-    ("a table inside a table", '[extra]\na = 1\n[extra.deeper]\nb = 2\n', "table inside a table"),
-    ("a datetime", '[extra]\nwhen = 1979-05-27T07:32:00Z\n', "datetime"),
+@pytest.mark.parametrize("name,text", [
+    # Every one of these was mangled or silently dropped by the writer this
+    # module used to carry. They are here as a record of why it is a
+    # dependency now, and to catch a future attempt to hand-roll it again.
+    ("an array of tables", '[app]\nloop_hz = 1.0\n[[screen]]\nname = "x"\n'),
+    ("a value at the top level", 'title = "mine"\n[app]\nloop_hz = 1.0\n'),
+    ("a table inside a table", '[extra]\na = 1\n[extra.deeper]\nb = 2\n'),
+    ("a datetime", '[extra]\nwhen = 1979-05-27T07:32:00Z\n'),
+    ("a deeply nested table", '[a.b.c.d]\ne = 1\n'),
 ])
-def test_these_are_refused_by_name_rather_than_dropped(name, text, expected):
-    with pytest.raises(configio.ConfigIoError) as exc:
-        configio.dumps(configio.loads(text))
-    assert expected in str(exc.value), name
-    assert "Raw file tab" in str(exc.value)
+def test_the_shapes_that_used_to_break_now_survive(name, text):
+    assert _round_trips(text), name
 
 
-def test_a_refusal_leaves_the_previous_file_untouched(tmp_path):
-    """All of it or none of it: a writer that stopped where it got surprised
-    would leave a truncated config behind."""
+def test_something_that_is_not_toml_at_all_is_reported(tmp_path):
     path = tmp_path / "config.toml"
     original = "[app]\nloop_hz = 3.0\n"
     path.write_text(original, encoding="utf-8")
-    with pytest.raises(configio.ConfigIoError):
-        configio.save(path, configio.loads('[[screen]]\nname = "x"\n'), backup=False)
+    with pytest.raises(configio.ConfigIoError) as exc:
+        configio.save(path, {"app": {"loop_hz": {1, 2}}}, backup=False)
+    assert "cannot be written as TOML" in str(exc.value)
     assert path.read_text(encoding="utf-8") == original
-
-
-def test_the_geometry_subsection_is_still_allowed():
-    """The one nested table the writer does understand."""
-    assert configio.unsupported(configio.default_document()) == ""
-
-
-def test_an_unset_optional_setting_is_not_a_refusal():
-    document = configio.default_document()
-    assert document["ocr"]["tessdata_path"] is None
-    assert configio.unsupported(document) == ""
 
 
 def test_a_table_the_gui_does_not_know_about_is_kept(tmp_path):
@@ -233,6 +234,24 @@ def test_a_number_field_given_words_is_refused():
 def test_a_malformed_composite_field_is_refused():
     with pytest.raises(configio.ConfigIoError):
         configio.parse_field(schema.setting("ocr", "sharpen_ladder"), "[[0.0, ")
+
+
+@pytest.mark.parametrize("value", [
+    [[0.0, 0.0], [0.5, 1.0]], [1400, 1000], [], [1.5], ["a", "b"], True, 3, 2.5, "text",
+])
+def test_a_form_field_holds_one_line_of_real_toml(value):
+    """The field text is written as JSON and read back with tomllib.
+
+    That only works because the two notations overlap for these values, so it
+    is asserted rather than assumed -- and asserted through the TOML parser,
+    not through json.
+    """
+    import tomllib
+
+    setting = schema.setting("ocr", "sharpen_ladder")
+    text = configio.format_field(setting, value)
+    assert "\n" not in text
+    assert tomllib.loads(f"v = {text}")["v"] == value
 
 
 def test_composite_fields_survive_a_form_round_trip():

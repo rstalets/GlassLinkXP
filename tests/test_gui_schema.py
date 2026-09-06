@@ -7,21 +7,19 @@ rather than eyeballed.
 """
 
 from dataclasses import fields
+from pathlib import Path
 
 import pytest
 
 from g1000_softkey import config as daemon_config
 from g1000_softkey.gui import schema
 
-#: Which config dataclass each form group describes.
-SECTIONS = (
-    ("app", daemon_config.AppConfig),
-    ("display", daemon_config.DisplayConfig),
-    ("geometry", daemon_config.StripGeometry),
-    ("ocr", daemon_config.OcrConfig),
-    ("color", daemon_config.ColorConfig),
-    ("publish", daemon_config.PublishConfig),
-)
+#: Which config dataclass each form group describes. Read from the schema
+#: itself rather than restated here: the reference documentation is generated
+#: from the same table, and a second copy of it would be a third thing to keep
+#: in step.
+SECTIONS = tuple((section, cls) for section, (cls, _table)
+                 in schema.SECTION_CLASSES.items())
 
 
 @pytest.mark.parametrize("section,cls", SECTIONS, ids=[s for s, _ in SECTIONS])
@@ -92,3 +90,50 @@ def test_kind_of_is_quiet_about_things_it_does_not_describe():
     assert schema.kind_of("app", "loop_hz") == "float"
     assert schema.kind_of("app", "not_a_setting") == ""
     assert schema.kind_of("not_a_section", "anything") == ""
+
+
+# ---------------------------------------------------------------------------
+# the generated reference
+# ---------------------------------------------------------------------------
+
+DOC = Path(__file__).resolve().parents[1] / "docs" / "CONFIGURATION.md"
+
+
+def test_the_reference_documentation_is_up_to_date():
+    """docs/CONFIGURATION.md is generated from this schema, not written.
+
+    config.toml carries no comments -- the GUI rewrites the whole file when
+    the form is saved -- so that document is where the reasoning for every
+    setting lives, and it has to be regenerated when the schema changes:
+
+        python -m g1000_softkey.gui.schema > docs/CONFIGURATION.md
+    """
+    assert DOC.is_file(), f"{DOC} is missing; regenerate it"
+    assert DOC.read_text(encoding="utf-8") == schema.as_markdown(), (
+        "docs/CONFIGURATION.md no longer matches gui/schema.py. Regenerate it:\n"
+        "    python -m g1000_softkey.gui.schema > docs/CONFIGURATION.md"
+    )
+
+
+def test_every_setting_reaches_the_reference():
+    text = schema.as_markdown()
+    for group in schema.GROUPS:
+        for setting in group.settings:
+            assert f"### `{setting.key}`" in text, f"{group.section}.{setting.key}"
+            assert setting.help in text
+
+
+def test_the_reference_says_where_each_setting_goes():
+    text = schema.as_markdown()
+    for _cls, table in schema.SECTION_CLASSES.values():
+        assert f"`{table}`" in text
+
+
+def test_the_reference_gives_the_default_for_every_setting():
+    for group in schema.GROUPS:
+        for setting in group.settings:
+            assert schema._default_for(group.section, setting)
+
+
+def test_every_group_describes_a_real_config_table():
+    assert set(schema.SECTION_CLASSES) == {g.section for g in schema.GROUPS}

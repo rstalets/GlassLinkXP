@@ -17,6 +17,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..config import (
+    AppConfig,
+    ColorConfig,
+    DisplayConfig,
+    OcrConfig,
+    PublishConfig,
+    StripGeometry,
+)
+
 #: Fields the form deliberately does not show, and why. Read by the coverage
 #: test, so a field cannot be dropped from the GUI silently -- only on purpose.
 NOT_IN_THE_FORM: dict[str, str] = {
@@ -264,6 +273,18 @@ PUBLISH = Group(
 #: Ordered as the form shows them.
 GROUPS: tuple[Group, ...] = (APP, DISPLAY, GEOMETRY, OCR, COLOR, PUBLISH)
 
+#: Which config dataclass each group describes, and the TOML table it lives
+#: in. Kept here rather than in the test that checks the coverage, so the
+#: form, the reference documentation and that test all read it from one place.
+SECTION_CLASSES: dict[str, tuple[type, str]] = {
+    "app": (AppConfig, "[app]"),
+    "display": (DisplayConfig, "[display.<name>]"),
+    "geometry": (StripGeometry, "[display.<name>.geometry]"),
+    "ocr": (OcrConfig, "[ocr]"),
+    "color": (ColorConfig, "[color]"),
+    "publish": (PublishConfig, "[publish]"),
+}
+
 BY_SECTION: dict[str, Group] = {group.section: group for group in GROUPS}
 
 
@@ -283,3 +304,78 @@ def kind_of(section: str, key: str) -> str:
         if item.key == key:
             return item.kind
     return ""
+
+
+# ---------------------------------------------------------------------------
+# the reference documentation
+# ---------------------------------------------------------------------------
+
+#: How each kind is described to somebody reading the reference rather than
+#: filling in the form.
+_KINDS = {
+    "bool": "true or false",
+    "int": "a whole number",
+    "float": "a number",
+    "text": "text",
+    "path": "text (a path or a name)",
+    "choice": "one of",
+    "toml": "a TOML value",
+}
+
+DOC_HEADER = """\
+# Configuration reference
+
+Every setting in `config.toml`, what it does, and why its default is what it
+is. The GUI's Settings tab shows the same text beside each field.
+
+`config.toml` itself carries no comments: the GUI rewrites the whole file when
+you save from the form, so anything written in there would be lost the first
+time somebody pressed a button. This file is where the reasoning lives
+instead. `config.example.toml` is a starting point to copy; a missing config
+file is not an error, and every setting below has a working default.
+
+> Generated from `g1000_softkey/gui/schema.py`, which is also what the
+> Settings form is built from -- so the form and this document cannot say
+> different things. Regenerate with:
+>
+> ```
+> python -m g1000_softkey.gui.schema > docs/CONFIGURATION.md
+> ```
+"""
+
+
+def _default_for(section: str, setting: "Setting") -> str:
+    cls, _table = SECTION_CLASSES[section]
+    instance = cls(key="<name>") if cls is DisplayConfig else cls()
+    value = getattr(instance, setting.key)
+    if value is None:
+        return "not set"
+    if isinstance(value, bool):
+        return f"`{str(value).lower()}`"
+    if isinstance(value, tuple):
+        return "`" + str([list(v) if isinstance(v, tuple) else v for v in value]) + "`"
+    return f"`{value!r}`"
+
+
+def as_markdown() -> str:
+    """The reference documentation for every setting."""
+    out = [DOC_HEADER]
+    for group in GROUPS:
+        _cls, table = SECTION_CLASSES[group.section]
+        out.append(f"\n## {group.title} — `{table}`\n")
+        out.append(group.blurb + "\n")
+        for setting in group.settings:
+            out.append(f"### `{setting.key}`\n")
+            kind = _KINDS.get(setting.kind, setting.kind)
+            if setting.choices:
+                kind += " " + ", ".join(f"`{c}`" for c in setting.choices)
+            note = f"{kind}. Default: {_default_for(group.section, setting)}."
+            if setting.optional:
+                note += " Leave it out to leave it unset."
+            out.append(f"*{setting.label}* — {note}\n")
+            out.append(setting.help + "\n")
+    return "\n".join(out).rstrip() + "\n"
+
+
+if __name__ == "__main__":  # pragma: no cover - a one-line regeneration
+    print(as_markdown(), end="")

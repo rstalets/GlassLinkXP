@@ -243,33 +243,48 @@ most of the GUI is tested without a display.
 
 ## Writing config.toml
 
-The daemon reads TOML and never writes it, and the standard library only
-reads. Rather than take a dependency, `configio.py` carries a small writer for
-this config's own shapes. It is closed by a round trip: write a document, load
-it back through the daemon's `load_config`, compare against what it started
-from.
+Reading TOML is `tomllib`'s job and writing it is `tomli-w`'s. Neither is
+this project's.
 
-The one thing it cannot do is keep comments. So saving from the form copies the
-previous file to `config.toml.bak` first, and the **Raw file** tab writes text
-through unchanged for anyone who keeps notes in there.
+It was, briefly. The standard library reads TOML and does not write it, and no
+library writes the comments that explained each setting, so `configio.py`
+carried a small hand-written serialiser that emitted the values with the
+schema's help text as comments beside them.
 
-Comments are also why it is a writer here rather than a dependency. `tomli-w`
-is small and pure Python, but it writes values and throws the explanations
-away -- and in this project the explanations *are* the documentation for every
-setting.
+Both halves of that reasoning were wrong, and in an instructive way.
 
-That is a defensible trade only because the writer says what it cannot do.
-Its first version quietly assumed everything it met would be a scalar or a
-short array in a one-deep table, and probing it found five ways to be wrong:
-a display named `"G1000 PFD"` produced `[display.G1000 PFD]`, which does not
-parse, so the file the GUI had just saved could not be reopened; and a nested
-table, an array of tables and a top-level scalar were each **silently
-dropped**. Now keys are quoted when they need to be, and `unsupported()`
-checks the whole document up front and refuses by name anything the writer
-cannot express faithfully, pointing at the raw editor. All of it or none of
-it: a writer that stopped where it got surprised would leave a truncated
-config behind.
+The comments were the weaker half: they lived in a file the form rewrites
+every time somebody presses Save, which is a poor place for the only copy of
+anything. They are now [`CONFIGURATION.md`](CONFIGURATION.md), generated from
+`gui/schema.py` -- the same table the Settings form is built from, so the
+document and the form cannot say different things, and a test fails if the
+checked-in file falls behind:
 
-The lesson generalises past TOML. A small hand-written serialiser is fine for
-a closed schema; what is not fine is leaving its contract implicit, so that
-the shapes it was never designed for fail silently rather than loudly.
+```
+python -m g1000_softkey.gui.schema > docs/CONFIGURATION.md
+```
+
+The writer was the worse half. It quietly assumed everything it met would be
+a scalar or a short array in a one-deep table, and probing it found four ways
+to be wrong on perfectly legal TOML: a display named `"G1000 PFD"` produced
+`[display.G1000 PFD]`, which does not parse, so the file the GUI had just
+saved could not be reopened -- and a nested table, an array of tables and a
+top-level scalar were each **silently dropped**. `tomli-w` handles all four,
+weighs nothing, and is somebody else's to maintain. The tests for those cases
+are kept in `test_gui_configio.py` as a record of why, and to catch a future
+attempt to hand-roll it again.
+
+What remains here is the shape of a config document and the moving of values
+in and out of a form -- plus two small things worth naming:
+
+* **`strip_unset`.** `None` is how the form says a setting is not set, and
+  TOML has no null; an absent key *is* the unset state, and is what the daemon
+  reads back as `None`. Done on a copy, because the form still needs somewhere
+  to put an empty box.
+* **The header comment.** Prepended as a string, not serialised -- it points
+  at `CONFIGURATION.md` and warns that saving from the form does not keep
+  comments.
+
+Comments in an existing file are still lost when the form saves, so `save`
+keeps the previous version as `<name>.bak`, and the **Raw file** tab writes
+text through untouched for anyone who keeps notes in there.

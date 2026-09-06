@@ -18,10 +18,11 @@ truth, and it is a low-resolution, anti-aliased, GPU-composited image.**
 | file | what it tells you |
 | --- | --- |
 | `docs/PIPELINE.md` | Flowcharts of the daemon loop and the per-frame path, why the stages are ordered as they are, and a key for reading `-v` output. **Start here.** |
-| `docs/GUI.md` | How the window is put together, why it spawns the CLI rather than calling it, and the three couplings that let it -- each pinned by a test. |
+| `docs/GUI.md` | How the window is put together, why it spawns the CLI rather than calling it, and the couplings that let it -- each pinned by a test. |
+| `docs/CONFIGURATION.md` | Every setting, generated from `gui/schema.py`. `config.toml` carries no comments because the GUI rewrites it. |
 | `README.md` | Setup, calibration workflow, PilotsDeck wiring, troubleshooting, and -- importantly -- *Verified offline* and *Not verified here*. |
 | `PLAN.md` | The original design rationale, including approaches that were considered and rejected. |
-| `config.example.toml` | Every setting, with the reasoning for its default written beside it. Often the fastest answer to "why is this value what it is". |
+| `config.example.toml` | A starting point to copy, commented because people read it. The generated reference above is the authority. |
 
 ## Shape of the system
 
@@ -56,7 +57,8 @@ g1000_softkey/
   publish.py    WebSocket / REST / file / console publishers
   screens.py    softkey page definitions (screens.toml)
   signatures.py glyph shape fallback, off by default
-  config.py     frozen dataclasses + TOML loader
+  config.py     frozen dataclasses + TOML loader (reading only; the GUI
+                writes with tomli-w)
   gui/          the window (see docs/GUI.md), including the calibration editor
                 where the strip is drawn on the frame with the mouse. Only
                 app.py, tabs.py and widgets.py import Tk; the rest, geometry.py
@@ -186,7 +188,7 @@ commit, not afterwards.
 | --- | --- |
 | a pipeline stage, or the order of stages | the flowcharts in `docs/PIPELINE.md` |
 | anything printed by `-v` | the "Reading the debug output" table in `docs/PIPELINE.md` |
-| a config setting, or its default | `config.example.toml`, including *why* the default is what it is |
+| a config setting, or its default | `gui/schema.py` (the help text is the documentation), then regenerate `docs/CONFIGURATION.md` -- a test fails until you do -- and `config.example.toml` |
 | a CLI subcommand or flag | the command list in `CLAUDE.md` and the relevant `README.md` section, and `gui/commands.py` -- `test_gui_commands.py` fails until the GUI covers it |
 | a tab, or how the GUI runs a command | `docs/GUI.md`, including its flowchart and the tab table |
 | what `_format_row` prints, or a config dataclass field | `gui/logparse.py` or `gui/schema.py` -- see *Things that will catch you out* |

@@ -50,6 +50,8 @@ g1000-gui.cmd   open the window (double-click it, or make a shortcut)
 docs/
   PIPELINE.md   flowcharts of the daemon loop and the per-frame path
   GUI.md        how the window is put together, and what it is coupled to
+  CONFIGURATION.md  every setting and why its default is what it is
+                    (generated from gui/schema.py)
 wheels/         the compiled tesserocr wheel (git-ignored, but keep it)
 tests/          offline tests over the whole pipeline
 ```
@@ -409,6 +411,10 @@ display).
   then S, then hue) means a wrong `value_max` shows up as coloured cells
   reading black, and a wrong `saturation_max` as white cells reading
   coloured.
+`docs/CONFIGURATION.md` is the full reference: every setting, what it does and
+why its default is what it is. It is generated from the same text the GUI's
+Settings tab shows beside each field.
+
 * `labels.txt` -- the vocabulary. It is version and aircraft dependent; add
   anything your setup shows that is missing. Unknown strings are passed
   through raw (and logged at debug level) rather than being forced onto a
@@ -539,9 +545,9 @@ says:
   `[[screen]]` block; **Tools** ran the benchmark.
 * **Find windows** failed as it must on Linux, and the tab showed the command
   that failed and the daemon's own explanation of why.
-* The tests cover this without a display too: 285 of them, of which the 78 that
-  need Tk skip themselves when there is no display (`504 passed` with one,
-  `426 passed, 78 skipped` without). Four of them are there to stop the GUI
+* The tests cover this without a display too: 300 of them, of which the 78 that
+  need Tk skip themselves when there is no display (`519 passed` with one,
+  `441 passed, 78 skipped` without). Four of them are there to stop the GUI
   drifting from the daemon -- every argv the GUI can build is parsed by
   `main.build_parser()`, the softkey board's parser is fed
   `main._format_row()`'s own output, the settings form is checked against the

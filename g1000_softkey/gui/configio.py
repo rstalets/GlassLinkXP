@@ -12,39 +12,33 @@ document, load it back through the daemon's own ``load_config`` and compare
 against the ``AppConfig`` it started from. A writer that is wrong about
 quoting or about floats fails that round trip.
 
-It only writes what it can write faithfully, and says so about anything else.
-A general TOML writer would handle arrays of tables, top-level scalars,
-datetimes and tables nested to any depth; this one handles the shapes a
-config document actually has, and :func:`unsupported` refuses the rest by
-name rather than dropping it. That distinction is the whole reason a writer
-this small is defensible: silently losing a line of somebody's config on save
-would be much worse than declining to write it, and the GUI's raw editor --
-which passes text through untouched -- is right there for whatever this
-cannot express.
+Reading is ``tomllib``'s and writing is ``tomli-w``'s; what is left here is
+the shape of a config document and the moving of values in and out of a form.
 
-One thing it deliberately does not do is preserve comments. That is also why
-it exists at all rather than being a dependency: the comments carry the
-reasoning for every setting, and a library would write the values and throw
-the explanations away. :func:`save` keeps the previous file as ``<name>.bak``
-first, and the raw editor is the way to keep a hand-annotated file exactly as
-written.
+Writing was a hand-written function here for a while, on the grounds that the
+standard library reads TOML but does not write it, and that a library cannot
+write the comments that explained each setting. Both halves of that were the
+wrong trade. The comments are better off in docs/CONFIGURATION.md, where they
+are not at the mercy of somebody pressing Save. And the writer had four ways
+of mangling or silently dropping legal TOML -- a quoted table name, a table
+inside a table, an array of tables, a value at the top level -- which is the
+ordinary fate of a serialiser written for the shapes its author had in mind.
+
+Comments in an existing file are still lost when the form saves, so
+:func:`save` keeps the previous version as ``<name>.bak`` and the GUI's raw
+editor writes text through untouched for anyone who keeps notes in there.
 """
 
 from __future__ import annotations
 
-import re
+import json
 import shutil
 import tomllib
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 from ..config import AppConfig, StripGeometry, default_config, from_mapping
 from . import schema
-
-#: Sections in the order they are written, matching config.example.toml so a
-#: file saved by the GUI and one copied from the example read the same way.
-SECTION_ORDER = ("app", "display", "ocr", "color", "publish")
-
 
 class ConfigIoError(Exception):
     """A config file could not be read, parsed or written."""
@@ -182,239 +176,62 @@ def save_text(path: str | Path, text: str, backup: bool = True) -> Path | None:
     return backup_path
 
 
-#: A key that needs no quotes in TOML. Anything else is legal but has to be
-#: written as a quoted string -- and a display named "G1000 PFD" produced
-#: `[display.G1000 PFD]`, which does not parse, so the file the GUI had just
-#: saved could not be opened again.
-_BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
-
-
-def _key(name: str) -> str:
-    return name if _BARE_KEY.match(name) else _string(name)
-
-
-def _header(path: Sequence[str]) -> str:
-    """A table header, with each segment quoted only if it has to be."""
-    return "[" + ".".join(_key(part) for part in path) + "]"
-
-
-#: Value types this writer can represent. Deliberately short: a config
-#: document is scalars and small arrays, and everything outside that list is
-#: something to decline rather than to guess at. None is included because it
-#: is how an optional setting says "not set", and is written as a commented
-#: line rather than as a value -- but only as a whole value, never inside an
-#: array, where TOML has nothing to write it as.
-_WRITABLE = (bool, int, float, str)
-
-
-def unsupported(document: Mapping[str, Any]) -> str:
-    """What in this document the writer cannot express, or "" if nothing.
-
-    Checked up front so a save either writes the whole document or writes
-    none of it. The alternative -- discovering it half way through -- is how
-    a file ends up truncated at the first thing that surprised the writer.
-    """
-    for key, value in document.items():
-        if not isinstance(value, Mapping):
-            # An array of tables ([[screen]]) arrives as a plain list here,
-            # and calling it "a value at the top level" would send whoever
-            # reads it looking for something else entirely.
-            if isinstance(value, (list, tuple)) and any(
-                isinstance(item, Mapping) for item in value
-            ):
-                return f"[[{key}]] is an array of tables"
-            return f"{key!r} is a value at the top level, not a table"
-        if key == "display":
-            for name, entry in value.items():
-                if not isinstance(entry, Mapping):
-                    return f"display.{name} is not a table"
-                problem = _unsupported_table(f"display.{name}", entry,
-                                             nested_allowed=("geometry",))
-                if problem:
-                    return problem
-            continue
-        problem = _unsupported_table(key, value)
-        if problem:
-            return problem
-    return ""
-
-
-def _unsupported_table(where: str, table: Mapping[str, Any],
-                       nested_allowed: tuple[str, ...] = ()) -> str:
-    for key, value in table.items():
-        if isinstance(value, Mapping):
-            if key in nested_allowed:
-                nested = _unsupported_table(f"{where}.{key}", value)
-                if nested:
-                    return nested
-                continue
-            return f"{where}.{key} is a table inside a table"
-        problem = _unsupported_value(f"{where}.{key}", value)
-        if problem:
-            return problem
-    return ""
-
-
-def _unsupported_value(where: str, value: Any) -> str:
-    """Whether one value can be written. Arrays may nest -- ``sharpen_ladder``
-    is an array of [amount, radius] pairs -- but may not contain tables."""
-    if isinstance(value, (list, tuple)):
-        for item in value:
-            if isinstance(item, Mapping):
-                return f"{where} is an array of tables"
-            nested = _unsupported_value(where, item)
-            if nested:
-                return nested
-        return ""
-    if value is None or isinstance(value, _WRITABLE):
-        return ""
-    return f"{where} is a {type(value).__name__}"
-
-
-CANNOT_WRITE = (
-    "The settings form cannot write this configuration back without losing "
-    "part of it: {problem}.\n\nUse the Raw file tab instead -- it writes your "
-    "text through exactly as you typed it."
-)
-
-
 HEADER = """\
 # G1000 softkey daemon configuration.
 #
-# Written by the g1000 GUI. Editing it by hand is fine -- the GUI reads
-# whatever is here -- but note that saving from the Settings form rewrites the
-# whole file and does not keep hand-written comments. The previous version is
-# saved beside it as config.toml.bak, and the GUI's raw editor writes your
-# text through unchanged if you would rather keep your own notes in here.
-#
-# config.example.toml carries the full reasoning behind every default.
+# Written by the g1000 GUI. What each setting means, and why its default is
+# what it is, lives in docs/CONFIGURATION.md -- saving from the Settings form
+# rewrites this file and does not keep comments, so the reasoning is kept
+# somewhere that survives. The previous version is saved beside this one as
+# config.toml.bak, and the GUI's Raw file tab writes your text through exactly
+# as you typed it if you would rather keep notes in here.
+
 """
 
 
-def dumps(document: Mapping[str, Any]) -> str:
-    """Serialise a config document to TOML, with a one-line note per setting."""
-    problem = unsupported(document)
-    if problem:
-        raise ConfigIoError(CANNOT_WRITE.format(problem=problem))
-    out: list[str] = [HEADER]
-    for section in SECTION_ORDER:
-        body = document.get(section)
-        if body is None:
-            continue
-        if section == "display":
-            out.append(_dump_displays(body))
-        else:
-            out.append(_dump_table(_header((section,)), section, body))
-    # Anything the GUI does not know about is kept rather than dropped: an
-    # unrecognised table is more likely to be a newer setting than a mistake,
-    # and silently deleting a user's file content is not a thing to do.
+def strip_unset(document: Mapping[str, Any]) -> dict[str, Any]:
+    """A copy with the ``None`` values removed.
+
+    ``None`` is how the form says a setting is not set, and TOML has no way to
+    write that -- an absent key *is* the unset state, which is what the daemon
+    reads it as. Done on a copy: the document the window is holding still has
+    the key, because the form needs somewhere to put an empty box.
+    """
+    out: dict[str, Any] = {}
     for key, value in document.items():
-        if key not in SECTION_ORDER and isinstance(value, Mapping):
-            out.append(_dump_table(_header((key,)), key, value))
-    return "\n".join(out).rstrip() + "\n"
-
-
-def _dump_displays(displays: Mapping[str, Any]) -> str:
-    blocks: list[str] = []
-    for key, entry in displays.items():
-        if not isinstance(entry, Mapping):
-            continue
-        geometry = entry.get("geometry")
-        scalars = {k: v for k, v in entry.items() if k != "geometry"}
-        blocks.append(_dump_table(_header(("display", key)), "display", scalars,
-                                  blurb=schema.DISPLAY.blurb))
-        if isinstance(geometry, Mapping):
-            blocks.append(_dump_table(_header(("display", key, "geometry")), "geometry",
-                                      geometry, blurb=schema.GEOMETRY.blurb))
-    return "\n".join(blocks)
-
-
-def _dump_table(header: str, section: str, body: Mapping[str, Any], blurb: str = "") -> str:
-    group = schema.BY_SECTION.get(section)
-    lines: list[str] = []
-    text = blurb or (group.blurb if group else "")
-    if text:
-        lines += _comment(text)
-    lines.append(header)
-    for key, value in body.items():
-        if isinstance(value, Mapping):  # nested tables are emitted by the caller
-            continue
-        note = _note(section, key)
-        if note:
-            lines += _comment(note)
         if value is None:
-            # An optional setting left unset. Written as a comment rather than
-            # omitted silently, so the file still lists everything there is to
-            # set -- the file is documentation as much as it is configuration.
-            lines.append(f"# {_key(key)} is not set")
             continue
-        lines.append(f"{_key(key)} = {_value(section, key, value)}")
-    return "\n".join(lines) + "\n"
+        out[key] = strip_unset(value) if isinstance(value, Mapping) else value
+    return out
 
 
-def _note(section: str, key: str) -> str:
-    group = schema.BY_SECTION.get(section)
-    if group is None:
-        return ""
-    for item in group.settings:
-        if item.key == key:
-            return item.help
-    return ""
+def dumps(document: Mapping[str, Any]) -> str:
+    """Serialise a config document to TOML.
 
+    The serialising is ``tomli-w``'s. It was a hand-written function here
+    once, because the standard library reads TOML and does not write it and
+    because a library cannot write the comments that explained each setting.
+    Both halves of that turned out to be the wrong trade: the comments moved
+    to docs/CONFIGURATION.md, where they are not at the mercy of a save, and
+    the hand-written writer had four ways of mangling or silently dropping
+    perfectly legal TOML -- a quoted table name, a nested table, an array of
+    tables, a value at the top level. A dependency that already handles all of
+    them is the right amount of code to own for this: none.
+    """
+    try:
+        import tomli_w  # noqa: PLC0415 - a clear message beats an ImportError
+    except ImportError as exc:  # pragma: no cover - depends on the install
+        raise ConfigIoError(
+            "tomli-w is needed to save the configuration and is not installed. "
+            "Run: pip install tomli-w   (or re-run the installer). The Raw file "
+            "tab can still save, since it writes your text out unchanged."
+        ) from exc
 
-def _comment(text: str, width: int = 74) -> list[str]:
-    words = text.split()
-    lines: list[str] = []
-    current = "#"
-    for word in words:
-        if len(current) + 1 + len(word) > width and current != "#":
-            lines.append(current)
-            current = "#"
-        current += " " + word
-    if current != "#":
-        lines.append(current)
-    return lines
-
-
-def _value(section: str, key: str, value: Any) -> str:
-    kind = schema.kind_of(section, key)
-    if kind == "float" and isinstance(value, (int, float)) and not isinstance(value, bool):
-        # Always with a decimal point. TOML types 12 as an integer, and while
-        # the daemon would cope, a config that reads `loop_hz = 12` when the
-        # setting is a rate invites the next reader to wonder which it is.
-        return repr(float(value))
-    return _scalar(value)
-
-
-def _scalar(value: Any) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return repr(value)
-    if isinstance(value, str):
-        return _string(value)
-    if isinstance(value, (list, tuple)):
-        return "[" + ", ".join(_scalar(item) for item in value) + "]"
-    raise ConfigIoError(f"cannot write {value!r} ({type(value).__name__}) to TOML")
-
-
-_ESCAPES = {"\\": "\\\\", '"': '\\"', "\b": "\\b", "\f": "\\f",
-            "\n": "\\n", "\r": "\\r", "\t": "\\t"}
-
-
-def _string(value: str) -> str:
-    out = ["\""]
-    for char in value:
-        if char in _ESCAPES:
-            out.append(_ESCAPES[char])
-        elif ord(char) < 0x20 or ord(char) == 0x7F:
-            out.append(f"\\u{ord(char):04X}")
-        else:
-            out.append(char)
-    out.append("\"")
-    return "".join(out)
+    try:
+        body = tomli_w.dumps(strip_unset(document))
+    except (TypeError, ValueError) as exc:
+        raise ConfigIoError(f"this configuration cannot be written as TOML: {exc}") from exc
+    return HEADER + body
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +277,7 @@ def format_field(setting: schema.Setting, value: Any) -> str:
     if setting.kind == "bool":
         return "true" if value else "false"
     if setting.kind == "toml":
-        return _scalar(_plain(value))
+        return _toml_literal(value)
     if setting.kind == "float":
         return repr(float(value))
     return str(value)
@@ -499,6 +316,20 @@ def set_geometry(document: dict[str, Any], display: str, geometry: StripGeometry
     for field in GEOMETRY_FIELDS:
         set_in(document, ("display", display, "geometry", field),
                _plain(getattr(geometry, field)))
+
+
+def _toml_literal(value: Any) -> str:
+    """One value as the TOML text a form field holds, on a single line.
+
+    ``json.dumps`` rather than the TOML writer, which spreads a nested array
+    over five lines -- correct in a file, useless in a one-line entry box. For
+    the values these fields hold (numbers, strings, booleans and arrays of
+    them) JSON's notation and TOML's are the same text, and
+    ``test_gui_configio.py`` checks that by reading every one of them back
+    with ``tomllib``. Anything outside that overlap has no business in a
+    single-line box in the first place.
+    """
+    return json.dumps(_plain(value))
 
 
 def get_in(document: Mapping[str, Any], path: tuple[str, ...], default: Any = None) -> Any:
