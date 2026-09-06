@@ -50,12 +50,27 @@ class ConfigIoError(Exception):
 
 
 def read_document(path: str | Path) -> dict[str, Any]:
-    """The file as a plain nested dict, ready for the form to edit."""
+    """The file as a plain nested dict, ready for the form to edit.
+
+    Both ways of failing to *read* the bytes are a ``ConfigIoError``, because
+    the window opens by calling this and catches nothing else. A file saved
+    as UTF-16 -- which is what Notepad's old "Unicode" option produces, and
+    what a config file edited on a Windows machine can easily end up as --
+    raises ``UnicodeDecodeError``, a ``ValueError``, which used to escape:
+    the exception happened before the window existed, so there was no window,
+    no message, and under ``pythonw.exe`` no console to print to either.
+    ``prefs.load`` has always caught ``ValueError`` for the same reason.
+    """
     p = Path(path)
     try:
         text = p.read_text(encoding="utf-8")
     except OSError as exc:
         raise ConfigIoError(f"could not read {p}: {exc}") from exc
+    except ValueError as exc:  # UnicodeDecodeError, and anything like it
+        raise ConfigIoError(
+            f"could not read {p}: it is not UTF-8 text ({exc}). TOML files are UTF-8; "
+            "if you saved it from Notepad, save it again with the encoding set to UTF-8."
+        ) from exc
     return loads(text, source=str(p))
 
 

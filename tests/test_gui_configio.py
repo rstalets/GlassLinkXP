@@ -53,9 +53,9 @@ def test_a_thoroughly_non_default_config_round_trips(tmp_path):
         color=ColorConfig(enabled=False, ring_fraction=0.22, value_max=70,
                           saturation_max=80, red_hue_max=9, red_hue_wrap_min=170,
                           yellow_hue_min=20, yellow_hue_max=38),
-        publish=PublishConfig(target="file", base_url="http://example:1/",
+        publish=PublishConfig(target="webapi", base_url="http://example:1/",
                               api_version="v2", field_width=32, timeout=2.5,
-                              json_path="/tmp/labels.json", retry_interval=9.0),
+                              retry_interval=9.0),
     )
     path = tmp_path / "config.toml"
     configio.save(path, configio.document_from_config(config), backup=False)
@@ -201,6 +201,25 @@ def test_reading_a_broken_file_says_where(tmp_path):
     with pytest.raises(configio.ConfigIoError) as exc:
         configio.read_document(path)
     assert "bad.toml" in str(exc.value)
+
+
+def test_a_config_saved_as_utf_16_is_reported_not_thrown(tmp_path):
+    """Notepad's old "Unicode" option writes UTF-16, and the window opens by
+    calling this: a UnicodeDecodeError here is a ValueError, which is not a
+    ConfigIoError, so it escaped app.load_config and there was no window at
+    all -- and under pythonw.exe no console to print the traceback to."""
+    path = tmp_path / "config.toml"
+    path.write_bytes('loop_hz = 12\n'.encode("utf-16"))
+    with pytest.raises(configio.ConfigIoError) as exc:
+        configio.read_document(path)
+    assert "UTF-8" in str(exc.value)
+
+
+def test_a_config_full_of_bytes_that_are_not_text_is_reported(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_bytes(b"\xff\xfe\x00\x00binary rubbish")
+    with pytest.raises(configio.ConfigIoError):
+        configio.read_document(path)
 
 
 # -- form fields -----------------------------------------------------------

@@ -1580,7 +1580,9 @@ class VocabularyTab(Tab):
         self.text.delete("1.0", "end")
         try:
             self.text.insert("1.0", path.read_text(encoding="utf-8"))
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
+            # ValueError covers UnicodeDecodeError: a file that is not UTF-8
+            # is a thing to say in the pane, not an exception into Tk.
             self.text.insert("1.0", f"# could not read {path}: {exc}\n")
         self.text.edit_reset()
 
@@ -1826,7 +1828,7 @@ class SettingsTab(Tab):
             return
         try:
             self._raw_loaded = self.app.config_path.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, ValueError) as exc:  # ValueError: not UTF-8 text
             self._raw_loaded = ""
             self.raw.insert("1.0", f"# could not read {self.app.config_path}: {exc}\n")
             return

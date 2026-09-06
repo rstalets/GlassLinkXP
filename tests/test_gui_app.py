@@ -96,6 +96,48 @@ def test_opening_a_config_file_reads_it(tmp_path, monkeypatch):
         root.destroy()
 
 
+def test_a_config_that_is_not_utf_8_still_opens_the_window(tmp_path, monkeypatch):
+    """A config.toml saved as UTF-16 used to mean no window at all: the decode
+    error is a ValueError, which read_document did not turn into a
+    ConfigIoError, which is the only thing app.load_config catches."""
+    from g1000_softkey.gui.app import build
+
+    monkeypatch.setattr(prefs, "prefs_path", lambda: tmp_path / "gui.json")
+    monkeypatch.setattr(prefs, "project_root", lambda: tmp_path)
+    path = tmp_path / "config.toml"
+    path.write_bytes("[app]\nloop_hz = 3.5\n".encode("utf-16"))
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:  # pragma: no cover
+        pytest.skip(f"no display available for Tk ({exc})")
+    root.withdraw()
+    try:
+        app = build(root, path)
+        assert "could not be read" in app.config_display.get()
+        assert "UTF-8" in app.status._text.get()
+        assert app.document  # the built-in defaults, so every tab still works
+    finally:
+        root.destroy()
+
+
+def test_the_raw_editor_says_so_rather_than_raising_on_a_non_utf_8_file(gui, tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_bytes("[app]\n".encode("utf-16"))
+    gui.config_path = path
+    settings = _tab(gui, "SettingsTab")
+    settings.reload_raw()
+    assert "could not read" in settings.raw.get("1.0", "end-1c")
+
+
+def test_a_vocabulary_file_that_is_not_utf_8_says_so_rather_than_raising(gui, tmp_path):
+    path = tmp_path / "labels.txt"
+    path.write_bytes("INSET\n".encode("utf-16"))
+    configio.set_in(gui.document, ("ocr", "labels_file"), str(path))
+    vocabulary = _tab(gui, "VocabularyTab")
+    vocabulary.reload()
+    assert "could not read" in vocabulary.text.get("1.0", "end-1c")
+
+
 def test_an_unreadable_config_is_reported_rather_than_fatal(gui, tmp_path):
     broken = tmp_path / "broken.toml"
     broken.write_text("[app\n", encoding="utf-8")
