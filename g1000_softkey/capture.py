@@ -98,6 +98,29 @@ class ImageCapture:
 # ---------------------------------------------------------------------------
 
 
+class _RECT(ctypes.Structure):
+    """Win32 RECT. One definition, used by every user32 call in this module."""
+
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
+
+
+#: The window class every X-Plane window carries -- the main sim view and each
+#: pop-out alike. Windows of other applications do not, so this is what
+#: separates "the sim's windows" from the rest of the desktop, and it is the
+#: default filter for ``list-windows``.
+#:
+#: Observed on a running X-Plane 12 rather than documented by Laminar, so a
+#: future version could in principle change it. That is why it only ever
+#: *filters* a listing -- ``--all`` shows everything, and nothing in the
+#: pipeline depends on a window carrying this class.
+XPLANE_WINDOW_CLASS = "X-System"
+
+
 @dataclass(frozen=True)
 class WindowInfo:
     hwnd: int
@@ -106,10 +129,18 @@ class WindowInfo:
     width: int
     height: int
     pid: int
+    #: Top-left of the *window* in screen coordinates, which is what places it
+    #: on a monitor -- while width/height above are the *client* area, which is
+    #: what capture sees. The two deliberately measure different rectangles:
+    #: each is the number its own job needs, and averaging them into one
+    #: would leave neither correct. Negative on a monitor left of the primary.
+    x: int = 0
+    y: int = 0
 
     def __str__(self) -> str:
         return (
             f"hwnd=0x{self.hwnd:08X} pid={self.pid:<6} {self.width}x{self.height} "
+            f"at {self.x},{self.y} "
             f"class={self.class_name!r} title={self.title!r}"
         )
 
@@ -121,7 +152,12 @@ def is_windows() -> bool:
 def list_windows(visible_only: bool = True) -> list[WindowInfo]:
     """Enumerate top-level windows so the user can find the pop-out titles.
 
-    Pure ctypes/user32 -- no pywin32 needed. Windows only.
+    Everything, never filtered by class: both callers want the whole desktop.
+    ``list-windows`` shows X-Plane's own windows but counts them against the
+    total, and window management looks for a pop-out by title whether or not
+    it carries the class it is expected to. Filtering here would take that
+    choice away from both of them. Pure ctypes/user32 -- no pywin32 needed.
+    Windows only.
     """
     if not is_windows():
         raise CaptureError(
@@ -135,14 +171,6 @@ def list_windows(visible_only: bool = True) -> list[WindowInfo]:
     )
     results: list[WindowInfo] = []
 
-    class RECT(ctypes.Structure):
-        _fields_ = [
-            ("left", ctypes.c_long),
-            ("top", ctypes.c_long),
-            ("right", ctypes.c_long),
-            ("bottom", ctypes.c_long),
-        ]
-
     def callback(hwnd, _lparam):  # pragma: no cover - Windows only
         if visible_only and not user32.IsWindowVisible(hwnd):
             return True
@@ -153,8 +181,10 @@ def list_windows(visible_only: bool = True) -> list[WindowInfo]:
         user32.GetWindowTextW(hwnd, buf, length + 1)
         cls = ctypes.create_unicode_buffer(256)
         user32.GetClassNameW(hwnd, cls, 256)
-        rect = RECT()
+        rect = _RECT()
         user32.GetClientRect(hwnd, ctypes.byref(rect))
+        outer = _RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(outer))
         pid = ctypes.c_ulong()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         results.append(
@@ -165,6 +195,8 @@ def list_windows(visible_only: bool = True) -> list[WindowInfo]:
                 width=rect.right - rect.left,
                 height=rect.bottom - rect.top,
                 pid=int(pid.value),
+                x=outer.left,
+                y=outer.top,
             )
         )
         return True
@@ -190,27 +222,44 @@ def find_window(title_substring: str) -> WindowInfo:  # pragma: no cover - Windo
     return matches[0]
 
 
-def resize_window(hwnd: int, width: int, height: int) -> tuple[int, int]:
-    """Resize a window so its *client area* is width x height.
+@dataclass(frozen=True)
+class Placement:
+    """Where a window ended up, and how big its client area ended up.
+
+    Reported back rather than assumed because neither is guaranteed: X-Plane
+    enforces a minimum size on pop-outs, and Windows will refuse a position
+    that would put a window entirely off every monitor.
+    """
+
+    width: int
+    height: int
+    x: int
+    y: int
+
+    def __str__(self) -> str:
+        return f"{self.width}x{self.height} at {self.x},{self.y}"
+
+
+def _set_window(
+    hwnd: int, width: int, height: int, x: int | None = None, y: int | None = None
+) -> Placement:  # pragma: no cover - Windows only
+    """Size a window's *client area* and optionally move the window.
 
     The client area is what gets captured, and it is smaller than the window by
     the title bar and borders, so the outer size is the target plus whatever
     that frame costs -- measured rather than assumed, since it varies with DPI
     and theme.
 
-    Returns the client size actually achieved. X-Plane enforces a minimum on
-    pop-out windows, so a request below that comes back larger than asked.
+    ``x``/``y`` are the *window's* top-left in screen coordinates, not the
+    client area's: that is the corner Windows positions a window by, and the
+    frame overhead above is exactly the difference between them.
     """
-    if not is_windows():  # pragma: no cover - Windows only
+    if not is_windows():
         raise CaptureError("resizing windows requires Windows")
 
     user32 = ctypes.windll.user32  # type: ignore[attr-defined]
 
-    class RECT(ctypes.Structure):
-        _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
-                    ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
-
-    window_rect, client_rect = RECT(), RECT()
+    window_rect, client_rect = _RECT(), _RECT()
     if not user32.GetWindowRect(hwnd, ctypes.byref(window_rect)):
         raise CaptureError(f"GetWindowRect failed for hwnd 0x{hwnd:08X}")
     if not user32.GetClientRect(hwnd, ctypes.byref(client_rect)):
@@ -220,12 +269,90 @@ def resize_window(hwnd: int, width: int, height: int) -> tuple[int, int]:
     frame_h = (window_rect.bottom - window_rect.top) - client_rect.bottom
 
     SWP_NOMOVE, SWP_NOZORDER, SWP_NOACTIVATE = 0x0002, 0x0004, 0x0010
+    flags = SWP_NOZORDER | SWP_NOACTIVATE
+    if x is None or y is None:
+        flags |= SWP_NOMOVE
+        x = y = 0
     user32.SetWindowPos(
-        hwnd, 0, 0, 0, width + frame_w, height + frame_h,
-        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        hwnd, 0, x, y, width + frame_w, height + frame_h, flags,
     )
     user32.GetClientRect(hwnd, ctypes.byref(client_rect))
-    return client_rect.right, client_rect.bottom
+    user32.GetWindowRect(hwnd, ctypes.byref(window_rect))
+    return Placement(
+        width=client_rect.right, height=client_rect.bottom,
+        x=window_rect.left, y=window_rect.top,
+    )
+
+
+def resize_window(hwnd: int, width: int, height: int) -> tuple[int, int]:
+    """Resize a window so its *client area* is width x height, leaving it put.
+
+    Returns the client size actually achieved. X-Plane enforces a minimum on
+    pop-out windows, so a request below that comes back larger than asked.
+    """
+    if not is_windows():  # pragma: no cover - Windows only
+        raise CaptureError("resizing windows requires Windows")
+    placed = _set_window(hwnd, width, height)  # pragma: no cover - Windows only
+    return placed.width, placed.height  # pragma: no cover - Windows only
+
+
+def place_window(hwnd: int, x: int, y: int, width: int, height: int) -> Placement:
+    """Move a window to ``x, y`` and size its client area to width x height.
+
+    One call rather than a move and then a resize: two SetWindowPos calls make
+    the window visibly jump, and the intermediate position can be one the user
+    sees.
+    """
+    if not is_windows():  # pragma: no cover - Windows only
+        raise CaptureError("placing windows requires Windows")
+    return _set_window(hwnd, width, height, x, y)  # pragma: no cover - Windows only
+
+
+def monitor_bounds(hwnd: int) -> tuple[int, int, int, int]:
+    """The full bounds of the monitor a window is on, in screen coordinates.
+
+    ``(left, top, right, bottom)`` of the monitor itself, *not* its work area:
+    the work area stops short of the taskbar, and the whole point of placing a
+    pop-out at the monitor's own origin is to have it start above where the
+    taskbar sits rather than be pushed down by it.
+
+    The left/top are not (0, 0) except on the primary monitor -- a second
+    monitor's origin is wherever the desktop arrangement puts it, and is
+    negative for one placed left of or above the primary.
+    """
+    if not is_windows():  # pragma: no cover - Windows only
+        raise CaptureError("reading monitor bounds requires Windows")
+    return _monitor_bounds(hwnd)  # pragma: no cover - Windows only
+
+
+def _monitor_bounds(hwnd: int) -> tuple[int, int, int, int]:  # pragma: no cover - Windows only
+    user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", ctypes.c_ulong),
+            ("rcMonitor", _RECT),
+            ("rcWork", _RECT),
+            ("dwFlags", ctypes.c_ulong),
+        ]
+
+    # An HMONITOR is a pointer. ctypes defaults a return value to c_int, which
+    # would truncate it on 64-bit Windows and hand GetMonitorInfoW a handle
+    # that is not the one MonitorFromWindow returned.
+    user32.MonitorFromWindow.restype = ctypes.c_void_p
+    user32.MonitorFromWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MONITORINFO)]
+
+    MONITOR_DEFAULTTONEAREST = 2
+    handle = user32.MonitorFromWindow(ctypes.c_void_p(hwnd), MONITOR_DEFAULTTONEAREST)
+    if not handle:
+        raise CaptureError(f"MonitorFromWindow found no monitor for hwnd 0x{hwnd:08X}")
+    info = MONITORINFO()
+    info.cbSize = ctypes.sizeof(MONITORINFO)
+    if not user32.GetMonitorInfoW(ctypes.c_void_p(handle), ctypes.byref(info)):
+        raise CaptureError(f"GetMonitorInfoW failed for hwnd 0x{hwnd:08X}")
+    rect = info.rcMonitor
+    return rect.left, rect.top, rect.right, rect.bottom
 
 
 class WgcCapture:
@@ -348,14 +475,31 @@ def create_source(spec: str) -> FrameSource:
     raise CaptureError(f"unknown frame source {spec!r} (expected 'wgc:<title>' or 'image:<path>')")
 
 
-def sources_for(displays: Iterable, image_path: str | Path | None) -> dict[str, FrameSource]:
-    """One frame source per display; ``image_path`` overrides WGC everywhere."""
+def sources_for(
+    displays: Iterable,
+    image_path: str | Path | None,
+    managed: Iterable[str] = (),
+) -> dict[str, FrameSource]:
+    """One frame source per display; ``image_path`` overrides WGC everywhere.
+
+    ``managed`` names the displays window management has already sized and
+    placed. Those are left alone here: a second resize from a second setting
+    would be one authority too many, and the one that ran last would win by
+    accident rather than by decision. See ``windowmgr``.
+    """
+    already_sized = set(managed)
     sources: dict[str, FrameSource] = {}
     for display in displays:
         if image_path is not None:
             path = Path(image_path)
             per_display = path / f"{display.key}.png"
             sources[display.key] = ImageCapture(per_display if per_display.is_file() else path)
+        elif display.key in already_sized:
+            # Nothing about size is passed, rather than passing it and turning
+            # it off: the "window_size is set but manage_window_size is off"
+            # note below is about a config that will not do what it looks like
+            # it says, and this is not that case.
+            sources[display.key] = WgcCapture(display.window_title)
         else:
             sources[display.key] = WgcCapture(
                 display.window_title,

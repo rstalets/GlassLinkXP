@@ -63,6 +63,44 @@ def encode_value(value: Value, width: int = 16) -> str | int | float:
     return value
 
 
+def negotiate_api_version(
+    session, base_url: str, timeout: float, fallback: str
+) -> str | None:
+    """The newest API version X-Plane advertises, or None if it did not say.
+
+    The ``/api/capabilities`` endpoint is unversioned and reports e.g.
+    ``{"api": {"versions": ["v1","v2","v3"]}}``. Picking the highest avoids
+    guessing wrong about which version carries the interface we want -- Laminar
+    has shipped v1, v2 and v3, and the oldest of those will not be served
+    forever.
+
+    None rather than the fallback on failure, so the caller can tell "X-Plane
+    said v3" from "X-Plane did not answer" and decide for itself whether to
+    remember the answer. The publisher deliberately does not cache a failure:
+    falling back to the floor is what a daemon started *before* X-Plane does,
+    and pinning it there for the session would leave it on the floor for a sim
+    that was about to advertise something newer.
+
+    Shared by the publishers and the command client so that one daemon does not
+    end up talking two different versions of the same API to the same sim.
+    """
+    root = base_url.rstrip("/")
+    try:
+        response = session.get(f"{root}/api/capabilities", timeout=timeout)
+        versions = (response.json() or {}).get("api", {}).get("versions", [])
+        numbered = sorted(
+            (v for v in versions if isinstance(v, str) and v.startswith("v")),
+            key=lambda v: int(v[1:]) if v[1:].isdigit() else -1,
+        )
+        if numbered:
+            LOG.info("X-Plane advertises API versions %s; using %s",
+                     ", ".join(versions), numbered[-1])
+            return numbered[-1]
+    except Exception as exc:  # noqa: BLE001 - endpoint is optional
+        LOG.debug("could not read /api/capabilities (%s); using %s", exc, fallback)
+    return None
+
+
 class Publisher(Protocol):
     name: str
 
@@ -128,42 +166,24 @@ class WebApiPublisher:
         return f"{self.config.base_url.rstrip('/')}/api/{self._version}"
 
     def _negotiate_version(self) -> str:
-        """Ask /api/capabilities which API versions this X-Plane speaks.
-
-        The endpoint is unversioned and reports e.g. {"api": {"versions":
-        ["v1","v2","v3"]}}. Picking the highest avoids guessing wrong about
-        which version carries the interface we want -- Laminar has shipped
-        v1, v2 and v3, and the oldest of those will not be served forever.
+        """Settle which API version to talk, once per id-resolution attempt.
 
         Called from :meth:`resolve` rather than from ``_root``, so it costs
         one request per id-resolution attempt and not one per write. A
         successful answer is cached for the life of the publisher: X-Plane
         cannot change which versions it serves without restarting, which
-        restarts the daemon's dataref ids too.
-
-        A *failed* answer is deliberately not cached. Falling back to the
-        floor is what a daemon started before X-Plane does, and pinning it
-        there for the session would leave it on the floor for a sim that was
-        about to advertise something newer; the next resolve() -- already
-        rate-limited to retry_interval -- asks again.
+        restarts the daemon's dataref ids too. A failed one is not -- see
+        :func:`negotiate_api_version` -- and the next resolve(), already
+        rate-limited to retry_interval, asks again.
         """
         if self._api_version:
             return self._api_version
-        base = self.config.base_url.rstrip("/")
-        try:
-            response = self._session.get(f"{base}/api/capabilities", timeout=self.config.timeout)
-            versions = (response.json() or {}).get("api", {}).get("versions", [])
-            numbered = sorted(
-                (v for v in versions if isinstance(v, str) and v.startswith("v")),
-                key=lambda v: int(v[1:]) if v[1:].isdigit() else -1,
-            )
-            if numbered:
-                self._api_version = numbered[-1]
-                LOG.info("X-Plane advertises API versions %s; using %s",
-                         ", ".join(versions), self._api_version)
-                return self._api_version
-        except Exception as exc:  # noqa: BLE001 - endpoint is optional
-            LOG.debug("could not read /api/capabilities (%s); using %s", exc, self._version)
+        found = negotiate_api_version(
+            self._session, self.config.base_url, self.config.timeout, self._version
+        )
+        if found:
+            self._api_version = found
+            return found
         return self._version
 
     def _log_offline(self, detail: str) -> None:

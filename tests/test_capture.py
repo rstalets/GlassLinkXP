@@ -80,3 +80,70 @@ def test_resize_window_refuses_off_windows():
         pytest.skip("this asserts the non-Windows guard")
     with pytest.raises(CaptureError, match="requires Windows"):
         resize_window(0x1234, 1400, 1000)
+
+
+# -- who is allowed to resize a window --------------------------------------
+#
+# Two settings that both fix one window's size is one more than can be true at
+# once, and which of them won would come down to which ran last. So when window
+# management has sized a display, the per-display setting is not consulted for
+# it. WgcCapture is stood in for here because the real one needs Windows; what
+# is being checked is which arguments it is handed, which is the whole of the
+# coupling.
+
+
+class _Recorder:
+    def __init__(self, title, **kwargs):
+        self.name = f"wgc:{title}"
+        _Recorder.calls.append((title, kwargs))
+
+    calls: list = []
+
+    def grab(self):
+        return None
+
+    def close(self):
+        return None
+
+
+@pytest.fixture
+def recorded(monkeypatch):
+    from g1000_softkey import capture
+
+    _Recorder.calls = []
+    monkeypatch.setattr(capture, "WgcCapture", _Recorder)
+    return _Recorder.calls
+
+
+def _sized_display():
+    return DisplayConfig(
+        key="pfd", window_title="G1000 PFD",
+        manage_window_size=True, window_size=(1400, 1000),
+    )
+
+
+def test_a_display_window_management_sized_is_not_sized_again(recorded):
+    sources_for([_sized_display()], None, managed={"pfd"})
+
+    assert recorded == [("G1000 PFD", {})], (
+        "nothing about size should be passed for a window already placed -- not even "
+        "a size with resizing turned off, which would trip the 'window_size is set but "
+        "manage_window_size is off' note about a config that will not do what it says"
+    )
+
+
+def test_a_display_window_management_did_not_touch_keeps_its_own_setting(recorded):
+    sources_for([_sized_display()], None, managed=frozenset())
+
+    assert recorded == [
+        ("G1000 PFD", {"target_size": (1400, 1000), "manage_size": True}),
+    ]
+
+
+def test_managing_one_display_leaves_the_other_alone(recorded):
+    mfd = DisplayConfig(key="mfd", window_title="G1000 MFD",
+                        manage_window_size=True, window_size=(1400, 1000))
+    sources_for([_sized_display(), mfd], None, managed={"pfd"})
+
+    assert recorded[0] == ("G1000 PFD", {})
+    assert recorded[1] == ("G1000 MFD", {"target_size": (1400, 1000), "manage_size": True})

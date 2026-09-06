@@ -25,6 +25,7 @@ from ..config import (
     OcrConfig,
     PublishConfig,
     StripGeometry,
+    WindowManagementConfig,
 )
 
 #: Fields the form deliberately does not show, and why. Read by the coverage
@@ -36,6 +37,7 @@ NOT_IN_THE_FORM: dict[str, str] = {
     "AppConfig.ocr": "a subsection",
     "AppConfig.color": "a subsection",
     "AppConfig.publish": "a subsection",
+    "AppConfig.window_management": "a subsection",
 }
 
 
@@ -128,6 +130,31 @@ DISPLAY = Group(
                 "so a smaller display area throws detail away before capture sees it -- "
                 "but the pop-out includes the bezel, so the window has to be bigger than "
                 "that. Find the number with one calibration pass.", optional=True),
+    ),
+)
+
+WINDOW_MANAGEMENT = Group(
+    "window_management", "Pop-out windows",
+    "Whether the daemon opens, sizes and positions the PFD and MFD pop-outs itself. "
+    "On, this replaces a pre-flight routine that fails quietly when you get it wrong: "
+    "a window that was never popped out, or one with the taskbar over the bottom of "
+    "it, reads as no labels rather than as an error.",
+    (
+        Setting("enabled", "bool", "Manage the pop-out windows",
+                "Pops out the PFD and MFD if they are not already open, sizes them, and "
+                "puts them in the top-left corner of the monitor X-Plane is on. Only the "
+                "displays named 'pfd' and 'mfd' are managed, because those are the ones "
+                "X-Plane has pop-out commands for. While this is on it is the only thing "
+                "that sizes those windows, and the per-display 'Resize to' setting is not "
+                "consulted -- two settings fixing one window's size is one more than can "
+                "be true at once. Turn it off to place the windows yourself."),
+        Setting("size", "toml", "Pop-out size",
+                "The client size the pop-outs are set to, as [width, height]. MUST BE 4:3: "
+                "the G1000 draws a 4:3 panel, and the strip position is stored as fractions "
+                "of the window, so a window of any other shape moves the softkey strip out "
+                "from under your calibration. Anything else falls back to 1280x960, which "
+                "is comfortably above the 1024x768 the G1000 is drawn at, so the labels are "
+                "not downsampled before they are read."),
     ),
 )
 
@@ -282,13 +309,16 @@ PUBLISH = Group(
 )
 
 #: Ordered as the form shows them.
-GROUPS: tuple[Group, ...] = (APP, DISPLAY, GEOMETRY, OCR, COLOR, PUBLISH)
+GROUPS: tuple[Group, ...] = (
+    APP, WINDOW_MANAGEMENT, DISPLAY, GEOMETRY, OCR, COLOR, PUBLISH,
+)
 
 #: Which config dataclass each group describes, and the TOML table it lives
 #: in. Kept here rather than in the test that checks the coverage, so the
 #: form, the reference documentation and that test all read it from one place.
 SECTION_CLASSES: dict[str, tuple[type, str]] = {
     "app": (AppConfig, "[app]"),
+    "window_management": (WindowManagementConfig, "[window_management]"),
     "display": (DisplayConfig, "[display.<name>]"),
     "geometry": (StripGeometry, "[display.<name>.geometry]"),
     "ocr": (OcrConfig, "[ocr]"),

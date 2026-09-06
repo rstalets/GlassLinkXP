@@ -123,7 +123,19 @@ LIST_WINDOWS = CommandSpec(
     options=(
         Option("filter", "--filter", label="Title contains",
                help="Only show window titles containing this text."),
+        Option("all", "--all", kind="flag", label="Show every window",
+               help="By default only X-Plane's own windows are listed, which is nearly "
+                    "always what you are looking for. Tick this to see every window on "
+                    "the desktop -- worth doing if the pop-out you expected is not here."),
     ),
+)
+
+MANAGE_WINDOWS = CommandSpec(
+    name="manage-windows",
+    title="Set up pop-outs",
+    summary="Pop the PFD and MFD out if they are not open, size them, and put them in "
+            "the corner of the monitor X-Plane is on.",
+    needs_windows=True,
 )
 
 CALIBRATE = CommandSpec(
@@ -214,7 +226,7 @@ SYNTH = CommandSpec(
 )
 
 COMMANDS: tuple[CommandSpec, ...] = (
-    RUN, LIST_WINDOWS, CALIBRATE, DUMP_CELLS, DUMP_COLORS,
+    RUN, LIST_WINDOWS, MANAGE_WINDOWS, CALIBRATE, DUMP_CELLS, DUMP_COLORS,
     BENCH, SCREEN_TEMPLATE, TUNE, SYNTH,
 )
 

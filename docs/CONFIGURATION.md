@@ -41,6 +41,23 @@ Compare each cell against the previous frame and only re-read the ones whose pix
 How much a pixel has to move (0-255) to count as changed. Too low and anti-aliasing noise re-reads every frame; too high and a real change is missed.
 
 
+## Pop-out windows — `[window_management]`
+
+Whether the daemon opens, sizes and positions the PFD and MFD pop-outs itself. On, this replaces a pre-flight routine that fails quietly when you get it wrong: a window that was never popped out, or one with the taskbar over the bottom of it, reads as no labels rather than as an error.
+
+### `enabled`
+
+*Manage the pop-out windows* — true or false. Default: `true`.
+
+Pops out the PFD and MFD if they are not already open, sizes them, and puts them in the top-left corner of the monitor X-Plane is on. Only the displays named 'pfd' and 'mfd' are managed, because those are the ones X-Plane has pop-out commands for. While this is on it is the only thing that sizes those windows, and the per-display 'Resize to' setting is not consulted -- two settings fixing one window's size is one more than can be true at once. Turn it off to place the windows yourself.
+
+### `size`
+
+*Pop-out size* — a TOML value. Default: `[1280, 960]`.
+
+The client size the pop-outs are set to, as [width, height]. MUST BE 4:3: the G1000 draws a 4:3 panel, and the strip position is stored as fractions of the window, so a window of any other shape moves the softkey strip out from under your calibration. Anything else falls back to 1280x960, which is comfortably above the 1024x768 the G1000 is drawn at, so the labels are not downsampled before they are read.
+
+
 ## Window — `[display.<name>]`
 
 Which window this display is captured from.

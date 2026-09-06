@@ -22,6 +22,46 @@ change_gating = true
 # Per-pixel intensity difference that counts as a change (0..255).
 change_tolerance = 6
 
+# --- the pop-out windows ---------------------------------------------------
+# Whether the daemon opens, sizes and places the PFD and MFD pop-outs itself.
+# On unless you turn it off, because the alternative is a pre-flight routine
+# that fails quietly: a window that was never popped out, or one with the
+# taskbar across the bottom of it, reads as no labels rather than as an error.
+#
+# When it is on, before capture starts (and again if a display goes quiet) it:
+#   * fires sim/GPS/g1000n1_popout / g1000n3_popout for any display whose
+#     window is not open -- note _popout, not _popup: the popup opens the panel
+#     inside the X-Plane window, where it cannot be captured;
+#   * sizes the client area to `size` below;
+#   * puts it in the top-left corner of the monitor X-Plane is running on,
+#     which is the corner the taskbar is least likely to sit over.
+#
+# Only the displays named `pfd` and `mfd` are managed -- those are the ones
+# X-Plane has pop-out commands for. Anything else is left alone.
+#
+# It needs X-Plane's web API reachable to fire the commands, i.e. the same
+# [publish] base_url below, and X-Plane's Settings -> Network -> Web API on.
+
+[window_management]
+enabled = true
+# The client size the pop-outs are set to, as [width, height].
+#
+# MUST BE 4:3. The G1000 draws a 4:3 panel and the geometry below is stored as
+# fractions of the window, so a window of any other shape moves the softkey
+# strip out from under your calibration -- which shows up as labels that will
+# not read, a long way from this line. Anything that is not 4:3 is refused,
+# with a warning, and 1280x960 used instead.
+#
+# 1280x960 by default: the G1000 renders to a 1024x768 texture, so this is
+# comfortably above the point where detail is thrown away before capture sees
+# it, and going much larger only interpolates.
+size = [1280, 960]
+
+# Turning this off leaves the windows entirely to you, and the per-display
+# manage_window_size / window_size settings below work as they always did.
+# While it is on, it is the only thing that sizes the windows it manages: two
+# settings fixing one window's size is one more than can be true at once.
+
 # --- displays --------------------------------------------------------------
 # One section per captured window. `key` is the table name and also the
 # dataref prefix: g1000/softkey/<key>/1..12
@@ -44,6 +84,10 @@ enabled = true
 # RealSimGear G1000 unit, for instance -- where its size and position are part
 # of a physical setup. Breaking somebody's panel to make our OCR marginally
 # easier is not a trade to make silently. Both displays decide independently.
+#
+# NOT CONSULTED while [window_management] above is on and this display is one
+# it manages (pfd or mfd) -- that setting sizes those windows instead. This is
+# for a display window management does not touch, or for when it is off.
 # manage_window_size = true
 #
 # Client size to force the pop-out to, as [width, height]. Only applied when

@@ -417,30 +417,39 @@ class WindowsTab(Tab):
         super().__init__(app)
         self.filter = tk.StringVar(value="")
         self.target = tk.StringVar(value="")
+        self.show_all = tk.BooleanVar(value=False)
 
         controls = ttk.Frame(self)
         controls.pack(fill="x")
         ttk.Button(controls, text="List windows", width=13, command=self.list_windows).pack(side="left")
+        ttk.Button(controls, text="Set up pop-outs", width=16,
+                   command=self.manage_windows).pack(side="left", padx=(6, 0))
         ttk.Label(controls, text="Title contains").pack(side="left", padx=(16, 4))
         entry = ttk.Entry(controls, textvariable=self.filter, width=24)
         entry.pack(side="left")
         entry.bind("<Return>", lambda _e: self.list_windows())
+        ttk.Checkbutton(
+            controls, text="Show every window", variable=self.show_all,
+            command=self.list_windows,
+        ).pack(side="left", padx=(12, 0))
 
         help_label(
             self,
-            "Pop the PFD and MFD out in X-Plane first, then list the windows and pick each "
-            "one below. Only a distinctive part of the title is stored, matched without "
-            "regard to case, so it keeps working if X-Plane adds something to the title. "
-            "This needs Windows -- it reads the list from the operating system, and there "
-            "is no equivalent to read on Linux or macOS.",
+            "With pop-out management on -- it is on unless you turned it off in Settings -- "
+            "listing the windows pops the PFD and MFD out first, so they are here to be "
+            "picked. Only a distinctive part of the title is stored, matched without regard "
+            "to case, so it keeps working if X-Plane adds something to the title. Only "
+            "X-Plane's own windows are listed unless you ask for all of them. This needs "
+            "Windows -- it reads the list from the operating system, and there is no "
+            "equivalent to read on Linux or macOS.",
             width=900,
         ).pack(anchor="w", pady=(6, 8))
 
-        columns = ("title", "size", "cls", "pid")
+        columns = ("title", "size", "at", "cls", "pid")
         self.tree = ttk.Treeview(self, columns=columns, show="headings", height=9)
         for name, heading, width in (
-            ("title", "Window title", 420), ("size", "Size", 100),
-            ("cls", "Class", 180), ("pid", "Process", 80),
+            ("title", "Window title", 360), ("size", "Size", 100),
+            ("at", "Position", 90), ("cls", "Class", 150), ("pid", "Process", 80),
         ):
             self.tree.heading(name, text=heading)
             self.tree.column(name, width=width, anchor="w")
@@ -467,8 +476,22 @@ class WindowsTab(Tab):
     def list_windows(self) -> None:
         self.tree.delete(*self.tree.get_children())
         self.app.run_task(
-            commands.LIST_WINDOWS, {"filter": self.filter.get().strip()},
+            commands.LIST_WINDOWS,
+            {"filter": self.filter.get().strip(), "all": self.show_all.get()},
             self.output, on_finish=self._parse,
+        )
+
+    def manage_windows(self) -> None:
+        """Open, size and place the pop-outs, then show what that left open.
+
+        Listing afterwards rather than leaving the pane's text as the answer:
+        what the user is here to do is pick a window, and the windows worth
+        picking are the ones that now exist.
+        """
+        self.tree.delete(*self.tree.get_children())
+        self.app.run_task(
+            commands.MANAGE_WINDOWS, {}, self.output,
+            on_finish=lambda _code, _lines: self.list_windows(),
         )
 
     def _parse(self, code: int, lines: list[str]) -> None:
@@ -481,13 +504,20 @@ class WindowsTab(Tab):
                 continue
             found += 1
             self.tree.insert("", "end", values=(
-                window.title, window.size, window.class_name, window.pid,
+                window.title, window.size, window.position, window.class_name, window.pid,
             ))
-        self.app.set_status(
-            f"{found} window(s) listed. Select one and apply it to a display."
-            if found else "No windows matched. Are the displays popped out?",
-            "info" if found else "warning",
-        )
+        if found:
+            message, level = (
+                f"{found} window(s) listed. Select one and apply it to a display.", "info",
+            )
+        elif not self.show_all.get():
+            message, level = (
+                "No X-Plane windows matched. Is X-Plane running, and are the displays "
+                "popped out? Tick 'Show every window' to see what else is open.", "warning",
+            )
+        else:
+            message, level = ("No windows matched.", "warning")
+        self.app.set_status(message, level)
 
     def apply(self) -> None:
         selection = self.tree.selection()
@@ -1750,12 +1780,38 @@ class VocabularyTab(Tab):
 # ---------------------------------------------------------------------------
 
 
+#: The Settings tab's inner pages, in order.
+SETTINGS_PAGE_NAMES = ("Loop and displays", "Reading and colour", "Publishing")
+
+#: Which page each group of settings is rendered on, and where it reads from
+#: in the document. Declared rather than spelled out in the body of
+#: :meth:`SettingsTab.refresh`, because the version that named each group in
+#: code had a hole in exactly the shape this table closes: a group added to
+#: ``schema.GROUPS`` and not added to the form was still *described* -- every
+#: field had its help text, and the coverage test passed -- while being
+#: nowhere in the window. That is how ``[window_management]`` arrived, and it
+#: was noticed by looking at a screenshot rather than by anything failing.
+#: ``tests/test_gui_schema.py`` now fails instead.
+SETTINGS_PAGES: tuple[tuple[str, "schema.Group", tuple[str, ...]], ...] = (
+    ("Loop and displays", schema.APP, ("app",)),
+    ("Loop and displays", schema.WINDOW_MANAGEMENT, ("window_management",)),
+    ("Reading and colour", schema.OCR, ("ocr",)),
+    ("Reading and colour", schema.COLOR, ("color",)),
+    ("Publishing", schema.PUBLISH, ("publish",)),
+)
+
+#: Rendered once per configured display instead of once, so they are not in
+#: the table above: how many of them there are is a property of the config
+#: rather than of the schema.
+PER_DISPLAY_GROUPS = (schema.DISPLAY, schema.GEOMETRY)
+
+
 class SettingsTab(Tab):
     """Every setting in the config file, as a form, generated from the schema.
 
-    Laid out from ``schema.GROUPS`` rather than by hand so that a setting
-    added to the daemon cannot quietly fail to appear here -- see the coverage
-    test in ``tests/test_gui_schema.py``.
+    Laid out from :data:`SETTINGS_PAGES` and :data:`PER_DISPLAY_GROUPS` rather
+    than by hand so that a setting added to the daemon cannot quietly fail to
+    appear here -- see the coverage tests in ``tests/test_gui_schema.py``.
     """
 
     tab_title = "Settings"
@@ -1783,7 +1839,7 @@ class SettingsTab(Tab):
         self.inner.pack(fill="both", expand=True, pady=(8, 0))
 
         self._pages: dict[str, ScrollableFrame] = {}
-        for name in ("Loop and displays", "Reading and colour", "Publishing"):
+        for name in SETTINGS_PAGE_NAMES:
             page = ScrollableFrame(self.inner)
             self.inner.add(page, text=f" {name} ")
             self._pages[name] = page
@@ -1822,19 +1878,17 @@ class SettingsTab(Tab):
                 child.destroy()
         self._fields = []
 
+        for page_name, group, path in SETTINGS_PAGES:
+            self._add_group(self._pages[page_name].body, group, path)
+
+        # After the whole-config groups, because these pack in call order and
+        # a display's own settings read as belonging under the loop's.
         first = self._pages["Loop and displays"].body
-        self._add_group(first, schema.APP, ("app",))
         for key in self.app.display_keys():
             self._add_group(first, schema.DISPLAY, ("display", key),
                             title=f"Display \"{key}\" -- window")
             self._add_group(first, schema.GEOMETRY, ("display", key, "geometry"),
                             title=f"Display \"{key}\" -- softkey strip position")
-
-        second = self._pages["Reading and colour"].body
-        self._add_group(second, schema.OCR, ("ocr",))
-        self._add_group(second, schema.COLOR, ("color",))
-
-        self._add_group(self._pages["Publishing"].body, schema.PUBLISH, ("publish",))
         self.reload_raw()
 
     def _add_group(self, parent: tk.Misc, group: schema.Group, path: tuple[str, ...],

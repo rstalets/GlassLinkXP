@@ -236,6 +236,67 @@ class ColorConfig:
             raise ConfigError("color.yellow_hue_min must not exceed color.yellow_hue_max")
 
 
+#: What a G1000 pop-out is sized to when the configured size cannot be used.
+#: 4:3, and large enough that the 1024x768 display texture is not downsampled
+#: before capture sees it.
+DEFAULT_WINDOW_SIZE = (1280, 960)
+
+
+@dataclass(frozen=True)
+class WindowManagementConfig:
+    """Whether this daemon opens, sizes and places the G1000 pop-outs itself.
+
+    On by default, because the alternative is a checklist the user has to work
+    through by hand before every flight -- pop out two windows, size them the
+    same way as last time, drag them somewhere the taskbar will not sit over
+    them -- and getting any step of it wrong shows up as OCR that reads
+    nothing rather than as an error.
+
+    It is one switch rather than three because the three parts are not
+    independently useful: a window this daemon opened lands wherever X-Plane
+    felt like putting it, at whatever size it felt like using, so opening one
+    without also sizing and placing it just moves the manual step. Turn the
+    whole thing off to manage the windows yourself.
+
+    Note this supersedes the per-display ``manage_window_size`` /
+    ``window_size`` settings for the displays it manages: while it is on, it is
+    the only thing that sizes those windows. Two settings that both claim to
+    fix a window's size is one more than can be true at once.
+    """
+
+    enabled: bool = True
+    #: Client size for a managed pop-out, as [width, height].
+    #:
+    #: Must be 4:3. The G1000 draws a 4:3 panel, so a window of any other shape
+    #: either letterboxes it or stretches it -- and the strip geometry is
+    #: stored as *fractions of the client area*, so either one silently moves
+    #: the softkey strip out from under everybody's calibration. A bad value
+    #: therefore falls back to the default rather than being taken literally.
+    size: tuple[int, int] = DEFAULT_WINDOW_SIZE
+
+    def __post_init__(self) -> None:
+        try:
+            width, height = self.size
+            width, height = int(width), int(height)
+        except (TypeError, ValueError):
+            LOG.warning(
+                "window_management.size must be [width, height], got %r -- using %dx%d",
+                self.size, *DEFAULT_WINDOW_SIZE,
+            )
+            object.__setattr__(self, "size", DEFAULT_WINDOW_SIZE)
+            return
+        if width <= 0 or height <= 0 or width * 3 != height * 4:
+            LOG.warning(
+                "window_management.size %dx%d is not 4:3, which is the shape the G1000 "
+                "panel is drawn in -- using %dx%d instead. Multiply the height by 4/3 "
+                "for a size that will be used as written.",
+                width, height, *DEFAULT_WINDOW_SIZE,
+            )
+            object.__setattr__(self, "size", DEFAULT_WINDOW_SIZE)
+        else:
+            object.__setattr__(self, "size", (width, height))
+
+
 @dataclass(frozen=True)
 class PublishConfig:
     target: str = "webapi"  # websocket | webapi | console
@@ -278,6 +339,7 @@ class AppConfig:
     ocr: OcrConfig = field(default_factory=OcrConfig)
     color: ColorConfig = field(default_factory=ColorConfig)
     publish: PublishConfig = field(default_factory=PublishConfig)
+    window_management: WindowManagementConfig = field(default_factory=WindowManagementConfig)
 
     def display(self, key: str) -> DisplayConfig:
         for disp in self.displays:
@@ -348,6 +410,15 @@ def from_mapping(raw: Mapping[str, Any], base_dir: Path | None = None) -> AppCon
             ) from exc
     color_data = _subsection(raw, "color")
     publish_data = _subsection(raw, "publish")
+    window_data = _subsection(raw, "window_management")
+    if window_data.get("size") is not None:
+        # Coerced here rather than trusted: TOML hands back a list, and the
+        # dataclass wants a tuple so it stays hashable. An outright malformed
+        # value falls back in __post_init__ along with a wrong aspect ratio,
+        # so this only has to turn a well-formed pair into a tuple.
+        size = window_data["size"]
+        if isinstance(size, (list, tuple)) and len(size) == 2:
+            window_data["size"] = tuple(size)
 
     if base_dir is not None and ocr_data.get("screens_file"):
         screens = Path(ocr_data["screens_file"])
@@ -383,6 +454,7 @@ def from_mapping(raw: Mapping[str, Any], base_dir: Path | None = None) -> AppCon
         ocr=_build(OcrConfig, ocr_data),
         color=_build(ColorConfig, color_data),
         publish=_build(PublishConfig, publish_data),
+        window_management=_build(WindowManagementConfig, window_data),
         **{k: v for k, v in app_data.items() if k in {"loop_hz", "change_gating", "change_tolerance"}},
     )
     if config.loop_hz <= 0:

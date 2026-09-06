@@ -421,3 +421,67 @@ def test_a_string_with_quotes_and_backslashes_survives(tmp_path):
     path = tmp_path / "config.toml"
     configio.save(path, document, backup=False)
     assert load_config(path).display("pfd").window_title == 'C:\\X-Plane "12"\ta\nb'
+
+
+# -- a section the writer forgets ------------------------------------------
+#
+# `document_from_config` builds the document a section at a time, and a
+# section left out of it does not fail anything on its own: the daemon's own
+# loader fills the absent table in from the dataclass defaults, so the
+# round-trip test above still passes. What breaks is the form. It fills each
+# box from the document, an absent key reads as None, and None as a bool is
+# False -- so a defaulted-on setting is drawn switched off, and the next Save
+# writes that back as `false`. [window_management] shipped that way for the
+# length of one screenshot: the box said off, and saving would have turned the
+# feature off for a user who never touched it.
+
+
+def _whole_config_sections():
+    """The sections that exist once, not once per display."""
+    return [s for s in schema.BY_SECTION if s not in ("display", "geometry")]
+
+
+@pytest.mark.parametrize("section", _whole_config_sections())
+def test_every_whole_config_section_reaches_the_document(section):
+    document = configio.default_document()
+    assert section in document, (
+        f"[{section}] is in the form but not in document_from_config, so its boxes "
+        "will show as empty or off and Save will write those values back"
+    )
+    described = {
+        setting.key for setting in schema.BY_SECTION[section].settings
+        # Deliberately absent: an empty key means "the file the package ships".
+        if not setting.package_default
+    }
+    assert described <= set(document[section]), (
+        f"{sorted(described - set(document[section]))} missing from [{section}]"
+    )
+
+
+@pytest.mark.parametrize("section", _whole_config_sections())
+def test_no_default_in_the_document_reads_as_off_when_it_is_not(section):
+    """The specific symptom, stated as the property it violates."""
+    document = configio.default_document()
+    for setting in schema.BY_SECTION[section].settings:
+        if setting.kind != "bool":
+            continue
+        expected = schema.default_value(section, setting)
+        assert document[section][setting.key] == expected, (
+            f"{section}.{setting.key} defaults to {expected} but the form would show "
+            f"{document[section].get(setting.key)!r}"
+        )
+
+
+def test_window_management_round_trips_off_its_defaults(tmp_path):
+    from g1000_softkey.config import WindowManagementConfig
+
+    config = AppConfig(
+        displays=default_config().displays,
+        window_management=WindowManagementConfig(enabled=False, size=(1600, 1200)),
+    )
+    path = tmp_path / "config.toml"
+    configio.save(path, configio.document_from_config(config), backup=False)
+
+    loaded = load_config(path).window_management
+    assert loaded.enabled is False
+    assert loaded.size == (1600, 1200)

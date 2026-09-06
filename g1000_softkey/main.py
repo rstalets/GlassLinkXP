@@ -1,5 +1,5 @@
-"""CLI entry point: run | gui | list-windows | calibrate | dump-cells | dump-colors
-| bench | screen-template | tune | synth."""
+"""CLI entry point: run | gui | list-windows | manage-windows | calibrate | dump-cells
+| dump-colors | bench | screen-template | tune | synth."""
 
 from __future__ import annotations
 
@@ -13,8 +13,15 @@ from pathlib import Path
 
 import numpy as np
 
-from . import synth
-from .capture import CaptureError, FrameSource, ImageCapture, list_windows, sources_for
+from . import synth, windowmgr
+from .capture import (
+    XPLANE_WINDOW_CLASS,
+    CaptureError,
+    FrameSource,
+    ImageCapture,
+    list_windows,
+    sources_for,
+)
 from .color import BLACK, background_name, measure_cell
 from .config import (
     AppConfig,
@@ -52,8 +59,69 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
-def _open_sources(config: AppConfig, image: str | None) -> dict[str, FrameSource]:
-    return sources_for(config.active_displays, image)
+def _open_sources(
+    config: AppConfig, image: str | None, managed: frozenset[str] = frozenset()
+) -> dict[str, FrameSource]:
+    return sources_for(config.active_displays, image, managed=managed)
+
+
+def _manage_windows(config: AppConfig, image: str | None) -> windowmgr.Report:
+    """Open, size and place the pop-outs before anything tries to capture them.
+
+    A no-op when reading PNGs: there is no window behind an ``--image`` run, so
+    there is nothing to manage and firing pop-out commands at whatever sim
+    happens to be running would be a surprise.
+    """
+    if image is not None:
+        return windowmgr.Report(skipped="reading from --image, so no window is managed.")
+    report = windowmgr.manage_windows(config)
+    for line in report.lines():
+        LOG.info("window management: %s", line)
+    return report
+
+
+#: How often a display that is delivering no frames may trigger a fresh
+#: window-management pass. A pop-out the user closed mid-flight is worth
+#: reopening; looking every cycle would fire pop-out commands at X-Plane a
+#: dozen times a second.
+RECOVERY_INTERVAL = 10.0
+
+
+def _recover(
+    config: AppConfig,
+    image: str | None,
+    display: DisplayConfig,
+    sources: dict[str, FrameSource],
+) -> None:
+    """Try to put a display that has stopped delivering frames back on screen.
+
+    Only acts when window management actually had to *open* the window. A
+    window that was already there is not delivering frames for some other
+    reason -- minimised, or a capture session that died -- and rebuilding the
+    capture around the same window would be a guess at a cause nobody has
+    measured. Reopening a window that had been closed is the one case where the
+    old capture is known to be attached to something that no longer exists.
+    """
+    # The enabled check is here as well as inside manage_windows, which would
+    # only report that it is off: this runs every RECOVERY_INTERVAL for as long
+    # as a display is starved, and "window management is off in the config"
+    # every ten seconds is not news the second time.
+    if not config.window_management.enabled:
+        return
+    report = _manage_windows(config, image)
+    if not report.opened(display.key):
+        return
+    try:
+        rebuilt = sources_for([display], None, managed=report.managed)[display.key]
+    except CaptureError as exc:
+        LOG.warning("reopened %s, but could not start capturing it: %s", display.key, exc)
+        return
+    try:
+        sources[display.key].close()
+    except Exception as exc:  # noqa: BLE001 - the old one is being discarded anyway
+        LOG.debug("ignoring error closing the old %s capture: %s", display.key, exc)
+    sources[display.key] = rebuilt
+    LOG.info("%s was reopened and is being captured again", display.key)
 
 
 def _grab(source: FrameSource, retries: int = 25, delay: float = 0.2) -> np.ndarray:
@@ -102,15 +170,48 @@ def _format_row(result: DisplayResult) -> str:
 
 
 def cmd_list_windows(args: argparse.Namespace, config: AppConfig) -> int:
-    windows = list_windows()
+    # Before listing, not after: the pop-outs this is being run to find are
+    # often the ones window management is about to open, and a list taken
+    # first would be a list of the windows that existed before the answer.
+    _manage_windows(config, None)
+
+    everything = list_windows()
+    show_all = getattr(args, "all", False)
+    candidates = (
+        everything if show_all
+        else [w for w in everything if w.class_name == XPLANE_WINDOW_CLASS]
+    )
     needle = (args.filter or "").casefold()
-    shown = [w for w in windows if needle in w.title.casefold()]
-    print(f"{len(shown)} of {len(windows)} visible top-level windows")
+    shown = [w for w in candidates if needle in w.title.casefold()]
+
+    print(f"{len(shown)} of {len(everything)} visible top-level windows")
     for window in sorted(shown, key=lambda w: w.title.lower()):
         print(f"  {window}")
+    if not show_all:
+        # Said even when the filter found plenty: somebody looking for a
+        # window that is not here needs to know something was hidden, and the
+        # moment they need to know it is while they are looking at the list.
+        print(f"\nOnly windows of class {XPLANE_WINDOW_CLASS!r} are shown, which is the "
+              "class X-Plane's own windows carry. Add --all to see every window on the "
+              "desktop.")
     print("\nPut a distinctive substring of the pop-out title into "
           "[display.pfd].window_title in your config.")
     return 0
+
+
+def cmd_manage_windows(args: argparse.Namespace, config: AppConfig) -> int:
+    """Open, size and place the G1000 pop-outs, and say what was done.
+
+    The same pass ``run`` makes on the way up, on its own, so the setting can
+    be tried and its result read without starting the daemon.
+    """
+    report = windowmgr.manage_windows(config)
+    for line in report.lines():
+        print(line)
+    if report.skipped or not report.xplane_running:
+        return 0
+    failed = [o for o in report.outcomes if not o.ok]
+    return 1 if failed else 0
 
 
 def cmd_calibrate(args: argparse.Namespace, config: AppConfig) -> int:
@@ -303,7 +404,11 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
             LOG.error("--hz must be > 0")
             return 2
         object.__setattr__(config, "loop_hz", args.hz)
-    sources = _open_sources(config, args.image)
+    # Before the sources are opened: WgcCapture resolves its window in its
+    # constructor and fails if it is not there, so a pop-out that has to be
+    # opened has to be opened before that, not after.
+    managed = _manage_windows(config, args.image).managed
+    sources = _open_sources(config, args.image, managed)
     reader = SoftkeyReader(config.ocr)
     names: list[str] = []
     for display in config.active_displays:
@@ -333,6 +438,7 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
     previous: dict[str, tuple[list[str], list[int]]] = {}
     starved: dict[str, float] = {}
     warned_starved: set[str] = set()
+    next_recovery: dict[str, float] = {}
     LOG.info(
         "running at %.1f Hz, gating=%s, publisher=%s",
         config.loop_hz, config.change_gating, publisher.name,
@@ -360,6 +466,9 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
                             "is open.",
                             display.key, waited, display.window_title,
                         )
+                    if waited > 3.0 and time.monotonic() >= next_recovery.get(display.key, 0.0):
+                        next_recovery[display.key] = time.monotonic() + RECOVERY_INTERVAL
+                        _recover(config, args.image, display, sources)
                     continue
                 if display.key in starved:
                     del starved[display.key]
@@ -573,7 +682,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     windows = sub.add_parser("list-windows", help="list top-level windows (Windows only)", parents=[common])
     windows.add_argument("--filter", help="only show titles containing this substring")
+    windows.add_argument(
+        "--all", action="store_true",
+        help=f"show every window, not just the ones of class {XPLANE_WINDOW_CLASS!r} "
+             "that X-Plane's own windows carry",
+    )
     windows.set_defaults(func=cmd_list_windows)
+
+    manage = sub.add_parser(
+        "manage-windows",
+        help="open, size and place the G1000 pop-outs (Windows only)",
+        parents=[common],
+    )
+    manage.set_defaults(func=cmd_manage_windows)
 
     calibrate = sub.add_parser("calibrate", help="dump raw/crop/overlay PNGs and suggest geometry", parents=[common])
     add_image(calibrate)

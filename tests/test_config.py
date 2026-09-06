@@ -199,3 +199,40 @@ def test_the_field_width_agrees_with_the_plugin():
 
     assert plugin.FIELD_WIDTH == PublishConfig().field_width
     assert plugin.FIELD_WIDTH == load_config(EXAMPLE).publish.field_width
+
+
+# -- window management ------------------------------------------------------
+
+
+def test_window_management_is_on_by_default_at_a_four_by_three_size():
+    config = default_config()
+    assert config.window_management.enabled is True
+    assert config.window_management.size == (1280, 960)
+
+
+def test_window_management_is_read_from_its_own_table():
+    config = from_mapping({
+        "window_management": {"enabled": False, "size": [1600, 1200]},
+    })
+    assert config.window_management.enabled is False
+    assert config.window_management.size == (1600, 1200)
+
+
+def test_a_size_from_toml_arrives_as_a_tuple():
+    """TOML gives a list; the config is frozen and has to stay hashable."""
+    config = from_mapping({"window_management": {"size": [1024, 768]}})
+    assert config.window_management.size == (1024, 768)
+
+
+def test_a_size_that_is_not_four_by_three_is_refused_rather_than_used(caplog):
+    """And says so: a silently ignored setting is worse than a rejected one.
+
+    The strip geometry is fractions of the window, so a pop-out of the wrong
+    shape moves the softkey strip out from under the calibration -- which shows
+    up as labels that will not read, a long way from the setting that caused it.
+    """
+    with caplog.at_level("WARNING"):
+        config = from_mapping({"window_management": {"size": [1920, 1080]}})
+
+    assert config.window_management.size == (1280, 960)
+    assert "4:3" in caplog.text

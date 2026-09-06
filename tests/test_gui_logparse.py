@@ -174,11 +174,11 @@ def test_an_ordinary_line_says_nothing_about_health():
 # WindowInfo and reading it back, never from a sample typed into the test.
 
 
-def _window(title="G1000 PFD", class_name="X-Plane"):
+def _window(title="G1000 PFD", class_name="X-System", x=0, y=0):
     from g1000_softkey.capture import WindowInfo
 
     return WindowInfo(hwnd=0x10F42, title=title, class_name=class_name,
-                      width=1288, height=832, pid=1234)
+                      width=1288, height=832, pid=1234, x=x, y=y)
 
 
 def _listed(window):
@@ -214,6 +214,28 @@ def test_every_kind_of_title_survives_the_round_trip(title):
     parsed = logparse.parse_window(_listed(window))
     assert parsed is not None, f"{window} did not parse"
     assert parsed.title == title
+
+
+@pytest.mark.parametrize("x, y", [
+    (0, 0),
+    (1920, 0),
+    (-1920, 0),        # a monitor placed to the left of the primary one
+    (-1920, -180),     # ...and above it, which is the ordinary way to align
+    (2560, 1440),      # two monitors of different heights
+])
+def test_a_windows_position_round_trips(x, y):
+    """Including the negative coordinates a second monitor is addressed by.
+
+    Window management reports where it put a window by listing it again, so a
+    position the parser drops is a position the Find windows tab cannot show --
+    and the monitor most likely to be involved is the second one, whose origin
+    is negative for every arrangement that puts it left of or above the primary.
+    """
+    window = _window(x=x, y=y)
+    parsed = logparse.parse_window(_listed(window))
+    assert parsed is not None, f"{window} did not parse"
+    assert (parsed.x, parsed.y) == (x, y)
+    assert parsed.position == f"{x},{y}"
 
 
 def test_a_class_name_with_a_quote_survives_too():

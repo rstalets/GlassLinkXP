@@ -125,15 +125,21 @@ _QUOTED = r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\""
 #: One line of ``list-windows`` output, as ``capture.WindowInfo.__str__``
 #: writes it:
 #:
-#:     hwnd=0x00010F42 pid=1234   1288x832 class='X-Plane' title='G1000 PFD'
+#:     hwnd=0x00010F42 pid=1234   1288x832 at 0,0 class='X-System' title='G1000 PFD'
 #:
 #: The class and title come from ``repr()``, so a window called
 #: ``Cirrus SR22's PFD`` is printed in double quotes instead. A pattern with a
 #: single quote typed into it therefore skipped exactly those windows, and the
 #: Find windows tab told the user "No windows matched" with the line they were
 #: looking for visible in the pane above it.
+#:
+#: The position is signed. A monitor placed left of or above the primary one
+#: starts at a negative coordinate, so a pattern that only accepted digits
+#: would drop every window on it -- which is the half of a two-monitor setup
+#: somebody is most likely to be flying the G1000 on.
 _WINDOW = re.compile(
     rf"hwnd=(?P<hwnd>\S+)\s+pid=(?P<pid>\d+)\s+(?P<width>\d+)x(?P<height>\d+)\s+"
+    rf"at\s+(?P<x>-?\d+),(?P<y>-?\d+)\s+"
     rf"class=(?P<cls>{_QUOTED})\s+title=(?P<title>{_QUOTED})\s*$"
 )
 
@@ -148,10 +154,16 @@ class WindowLine:
     height: int
     class_name: str
     title: str
+    x: int = 0
+    y: int = 0
 
     @property
     def size(self) -> str:
         return f"{self.width}x{self.height}"
+
+    @property
+    def position(self) -> str:
+        return f"{self.x},{self.y}"
 
 
 def parse_window(line: str) -> WindowLine | None:
@@ -179,6 +191,8 @@ def parse_window(line: str) -> WindowLine | None:
         height=int(match.group("height")),
         class_name=class_name,
         title=title,
+        x=int(match.group("x")),
+        y=int(match.group("y")),
     )
 
 
