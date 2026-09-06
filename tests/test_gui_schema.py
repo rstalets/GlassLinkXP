@@ -59,7 +59,6 @@ def test_every_setting_is_explained():
 
 
 def test_choices_match_what_the_daemon_accepts():
-    assert set(schema.setting("ocr", "engine").choices) == {"auto", "tesserocr", "pytesseract"}
     assert set(schema.setting("ocr", "threshold").choices) == {"otsu", "adaptive"}
     assert set(schema.setting("publish", "target").choices) == \
         {"websocket", "webapi", "file", "console"}

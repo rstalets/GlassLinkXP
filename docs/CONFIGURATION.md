@@ -127,12 +127,6 @@ Fraction of the strip height trimmed off the top and bottom.
 
 How the cropped cells are turned into text. The glyphs are only about 10 pixels tall, so most of this is about giving Tesseract a fair chance at them -- and about not trusting it too far when it fails.
 
-### `engine`
-
-*Engine* — one of `auto`, `tesserocr`, `pytesseract`. Default: `'auto'`.
-
-auto prefers tesserocr, which keeps one Tesseract instance alive. pytesseract shells out per cell and is roughly ten times slower.
-
 ### `lang`
 
 *Language* — text. Default: `'eng'`.

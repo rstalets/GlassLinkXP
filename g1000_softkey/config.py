@@ -122,7 +122,6 @@ class DisplayConfig:
 
 @dataclass(frozen=True)
 class OcrConfig:
-    engine: str = "auto"  # auto | tesserocr | pytesseract
     lang: str = "eng"
     tessdata_path: str | None = None
     psm: int = 7  # single text line

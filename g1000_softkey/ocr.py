@@ -2,8 +2,9 @@
 
 Two things matter for speed and accuracy here:
 
-* the Tesseract API object is created **once** and reused (pytesseract shells
-  out and reloads the model per call, which is far too slow for video rates);
+* the Tesseract API object is created **once** and reused (a binding that
+  shells out to tesseract.exe and reloads the model per call is far too slow
+  for video rates);
 * the raw OCR string is snapped to the nearest known G1000 label, which turns
   ``DCLTP`` into ``DCLTR`` and ``lNSET`` into ``INSET`` for the price of a
   ``difflib`` call. Both the raw and the snapped string are reported so the
@@ -70,7 +71,7 @@ class CellResult:
 
 
 # ---------------------------------------------------------------------------
-# Engines
+# The engine
 # ---------------------------------------------------------------------------
 
 
@@ -109,8 +110,9 @@ class TesserocrEngine:
             import tesserocr  # noqa: F401
         except ImportError as exc:
             raise OcrUnavailable(
-                "tesserocr is not installed (pip install tesserocr, or set ocr.engine "
-                "= 'pytesseract' in the config to use the slower subprocess binding)"
+                "tesserocr is not installed. Run scripts/install-windows.ps1, which "
+                "installs the pinned prebuilt wheel with `uv sync --locked`; elsewhere, "
+                "`uv sync --locked` in a checkout does the same."
             ) from exc
         from PIL import Image
 
@@ -143,66 +145,9 @@ class TesserocrEngine:
             LOG.debug("ignoring tesserocr shutdown error: %s", exc)
 
 
-class PytesseractEngine:
-    """Fallback binding; correct but noticeably slower (process per call)."""
-
-    name = "pytesseract"
-
-    def __init__(self, config: OcrConfig) -> None:
-        try:
-            import pytesseract
-        except ImportError as exc:
-            raise OcrUnavailable("pytesseract is not installed (pip install pytesseract)") from exc
-        from PIL import Image
-
-        self._pytesseract = pytesseract
-        self._Image = Image
-        tessdata = resolve_tessdata(config.tessdata_path)
-        flags = [f"--psm {config.psm}"]
-        if config.whitelist:
-            flags.append(f'-c tessedit_char_whitelist="{config.whitelist}"')
-        if tessdata:
-            flags.append(f'--tessdata-dir "{tessdata}"')
-        self._config = " ".join(flags)
-        self._lang = config.lang
-        try:
-            pytesseract.get_tesseract_version()
-        except Exception as exc:  # noqa: BLE001 - EnvironmentError subclass varies
-            raise OcrUnavailable(
-                "the tesseract executable was not found on PATH. Install Tesseract "
-                "(Windows: the UB-Mannheim installer) and make sure tesseract.exe is on PATH."
-            ) from exc
-
-    def recognize(self, image: np.ndarray) -> tuple[str, float]:
-        data = self._pytesseract.image_to_data(
-            self._Image.fromarray(image),
-            lang=self._lang,
-            config=self._config,
-            output_type=self._pytesseract.Output.DICT,
-        )
-        words = [w for w in data["text"] if w.strip()]
-        confs = [float(c) for c, w in zip(data["conf"], data["text"]) if w.strip() and float(c) >= 0]
-        return " ".join(words), (sum(confs) / len(confs) if confs else 0.0)
-
-    def close(self) -> None:
-        return None
-
-
 def create_engine(config: OcrConfig) -> OcrEngine:
-    """Build the OCR engine named by ``config.engine`` ('auto' prefers tesserocr)."""
-    if config.engine == "tesserocr":
-        return TesserocrEngine(config)
-    if config.engine == "pytesseract":
-        return PytesseractEngine(config)
-    if config.engine != "auto":
-        raise OcrUnavailable(
-            f"unknown ocr.engine {config.engine!r} (use 'auto', 'tesserocr' or 'pytesseract')"
-        )
-    try:
-        return TesserocrEngine(config)
-    except OcrUnavailable as exc:
-        LOG.warning("tesserocr unavailable (%s); falling back to pytesseract", exc)
-        return PytesseractEngine(config)
+    """Build the OCR engine. One engine, kept as the seam the tests inject at."""
+    return TesserocrEngine(config)
 
 
 # ---------------------------------------------------------------------------

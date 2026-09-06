@@ -133,7 +133,7 @@ Three further traps, all handled by the script:
    uv venv --python 3.12
    uv pip install setuptools wheel "Cython>=3.0.0,<3.2.0" cysignals
    uv pip install --no-build-isolation tesserocr
-   uv pip install -r requirements.txt
+   uv sync --locked
    ```
 5. Copy `C:\vcpkg\installed\x64-windows\bin\*.dll` next to the installed
    `tesserocr` package, and set `TESSDATA_PREFIX` to a directory holding
@@ -147,11 +147,7 @@ Leptonica prebuilt. The catch: conda-forge's **win-64 builds stop at tesserocr
 2.5.2, Python 3.8-3.11**. That is fine for this code -- it only uses
 `PyTessBaseAPI`, `SetVariable`, `SetImage`, `GetUTF8Text`, `MeanTextConf` and
 `End`, all present since 2.x -- but loosen the `tesserocr>=2.6` pin in
-`requirements.txt` first.
-
-Last resort: `engine = "pytesseract"` in `[ocr]`, which works with a plain UB
-Mannheim install but restarts Tesseract for every cell (measured ~24x slower
-per frame; same accuracy).
+`pyproject.toml` first.
 
 ### The X-Plane side
 
