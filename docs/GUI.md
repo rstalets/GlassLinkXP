@@ -287,12 +287,24 @@ are kept in `test_gui_configio.py` as a record of why, and to catch a future
 attempt to hand-roll it again.
 
 What remains here is the shape of a config document and the moving of values
-in and out of a form -- plus two small things worth naming:
+in and out of a form -- plus three small things worth naming:
 
 * **`strip_unset`.** `None` is how the form says a setting is not set, and
   TOML has no null; an absent key *is* the unset state, and is what the daemon
   reads back as `None`. Done on a copy, because the form still needs somewhere
   to put an empty box.
+* **The files that come with the package.** `ocr.screens_file` and
+  `ocr.labels_file` default to absolute paths *inside this checkout*, so a
+  document built from the defaults would carry them, the form would show them
+  as values, and the first Save would write them into `config.toml` -- pinning
+  the configuration to one install, and stopping the daemon starting the day
+  it moves. `config.example.toml` deliberately leaves them out for the same
+  reason. So they are marked `package_default` in `gui/schema.py` (which
+  implies `optional`): a document never carries them at their default, an
+  empty box means "whatever the package ships with", and the current file is
+  shown as a **hint drawn over the empty box** rather than as its contents.
+  Hint, not placeholder text: a placeholder written into the widget is
+  written into the variable the form serialises, which is the bug again.
 * **The header comment.** Prepended as a string, not serialised -- it points
   at `CONFIGURATION.md` and warns that saving from the form does not keep
   comments.

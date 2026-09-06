@@ -112,8 +112,9 @@ def document_from_config(config: AppConfig) -> dict[str, Any]:
             entry["window_size"] = list(display.window_size)
         document["display"][display.key] = entry
     document["ocr"] = {
-        key: _plain(getattr(config.ocr, key))
-        for key in (setting.key for setting in schema.OCR.settings)
+        setting.key: _plain(getattr(config.ocr, setting.key))
+        for setting in schema.OCR.settings
+        if not _is_package_default(config.ocr, setting, "ocr")
     }
     document["color"] = {
         key: getattr(config.color, key)
@@ -131,6 +132,25 @@ def _plain(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_plain(item) for item in value]
     return value
+
+
+def _is_package_default(section_config: Any, setting: schema.Setting, section: str) -> bool:
+    """Whether this value is only the path to the package's own copy of a file.
+
+    Those defaults are absolute paths into whichever checkout is running --
+    ``.../g1000_softkey/screens.toml`` -- and a document is what the form
+    fills its boxes from and what Save writes back out. Copying one into
+    config.toml pins the file to this install, so moving or reinstalling the
+    project leaves the daemon pointing at a file that is not there; the user
+    never asked for that path and would have no reason to look for it.
+    ``config.example.toml`` leaves these keys out for the same reason.
+
+    An absent key is not a missing setting: it is the setting saying "the copy
+    that ships with the package", which is what the daemon does with it.
+    """
+    if not setting.package_default:
+        return False
+    return getattr(section_config, setting.key) == schema.default_value(section, setting)
 
 
 # ---------------------------------------------------------------------------

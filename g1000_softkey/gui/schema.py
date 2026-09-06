@@ -16,6 +16,7 @@ has to be told what ``blank_contrast`` does before they can sensibly move it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from ..config import (
     AppConfig,
@@ -51,12 +52,27 @@ class Setting:
     #: settings whose absence is meaningful -- an unset tessdata_path means
     #: "ask Tesseract", which is different from setting it to "".
     optional: bool = False
+    #: The built-in default is a file *inside the installed package*, so it is
+    #: an absolute path into whichever checkout happens to be running. Writing
+    #: that path into config.toml pins the configuration to one install: move
+    #: it, or copy the file to another machine, and the daemon points at a
+    #: file that is not there any more. The GUI therefore never writes these
+    #: out at their default; an absent key means "the copy that ships with the
+    #: package", which is how config.example.toml leaves them, and the form
+    #: shows the current one as a hint beside an empty box rather than as a
+    #: value in it. Implies :attr:`optional`.
+    package_default: bool = False
 
     def __post_init__(self) -> None:
         if self.kind not in ("bool", "int", "float", "text", "choice", "path", "toml"):
             raise ValueError(f"{self.key}: unknown kind {self.kind!r}")
         if self.kind == "choice" and not self.choices:
             raise ValueError(f"{self.key}: a choice needs choices")
+        if self.package_default and not self.optional:
+            raise ValueError(
+                f"{self.key}: a package default has to be optional -- an empty box is "
+                "the only way back to letting the package decide"
+            )
 
 
 @dataclass(frozen=True)
@@ -183,10 +199,15 @@ OCR = Group(
                 "identification made from a guess would spread that guess into every cell "
                 "it fills."),
         Setting("screens_file", "path", "Pages file",
-                "The known softkey pages. Add one with the Screen template tab."),
+                "The known softkey pages. Add one with the Screen template tab. Leave it "
+                "empty to use the file that ships with the package, which is what the hint "
+                "beside the box names -- set it only to point at a file of your own.",
+                optional=True, package_default=True),
         Setting("labels_file", "path", "Vocabulary file",
                 "The list of labels a reading is snapped to. Edit it in the Vocabulary tab; "
-                "it is aircraft and version dependent."),
+                "it is aircraft and version dependent. Leave it empty to use the file that "
+                "ships with the package.",
+                optional=True, package_default=True),
         Setting("fuzzy_cutoff", "float", "Snap cutoff",
                 "How close a raw reading has to be to a known label before it is corrected "
                 "to it. Lower corrects more, and snaps to the wrong label more."),
@@ -334,10 +355,19 @@ file is not an error, and every setting below has a working default.
 """
 
 
-def _default_for(section: str, setting: "Setting") -> str:
+def default_value(section: str, setting: "Setting") -> Any:
+    """What the daemon uses for this setting when the config file is silent.
+
+    Read off the config dataclass rather than repeated here, so the form's
+    hints, this document and the daemon cannot disagree about a default.
+    """
     cls, _table = SECTION_CLASSES[section]
     instance = cls(key="<name>") if cls is DisplayConfig else cls()
-    value = getattr(instance, setting.key)
+    return getattr(instance, setting.key)
+
+
+def _default_for(section: str, setting: "Setting") -> str:
+    value = default_value(section, setting)
     if value is None:
         return "not set"
     if isinstance(value, bool):
@@ -360,7 +390,11 @@ def as_markdown() -> str:
             if setting.choices:
                 kind += " " + ", ".join(f"`{c}`" for c in setting.choices)
             note = f"{kind}. Default: {_default_for(group.section, setting)}."
-            if setting.optional:
+            if setting.package_default:
+                note += (" Leave it out to use the copy that comes with the package -- "
+                         "the default above is a path into this install, so writing it "
+                         "into your config file would tie the file to it.")
+            elif setting.optional:
                 note += " Leave it out to leave it unset."
             out.append(f"*{setting.label}* — {note}\n")
             out.append(setting.help + "\n")

@@ -62,6 +62,50 @@ def test_a_thoroughly_non_default_config_round_trips(tmp_path):
     assert load_config(path) == config
 
 
+def test_the_packages_own_files_are_not_written_into_the_config(tmp_path):
+    """They are absolute paths into this checkout. Writing them out of the
+    form -- which is what the first Save did -- pins the config to one
+    install, so moving or reinstalling the project stops the daemon starting.
+    config.example.toml leaves them out for the same reason."""
+    document = configio.default_document()
+    for key in ("screens_file", "labels_file"):
+        assert key not in document["ocr"]
+
+    path = tmp_path / "config.toml"
+    configio.save(path, document, backup=False)
+    text = path.read_text(encoding="utf-8")
+    assert "screens_file" not in text
+    assert "labels_file" not in text
+
+    # and the daemon still finds them, because absent means "the package's"
+    loaded = load_config(path)
+    assert loaded.ocr.screens_file == OcrConfig().screens_file
+    assert loaded.ocr.labels_file == OcrConfig().labels_file
+
+
+def test_a_file_the_user_chose_is_kept(tmp_path):
+    """Only the default is left out. A path somebody typed is theirs."""
+    mine = tmp_path / "my_screens.toml"
+    document = configio.default_document()
+    document["ocr"]["screens_file"] = str(mine)
+    path = tmp_path / "config.toml"
+    configio.save(path, document, backup=False)
+    assert str(mine) in path.read_text(encoding="utf-8")
+
+
+def test_an_empty_box_is_a_way_back_to_the_packages_own_file():
+    """The form says "unset" with None, and these have to be able to say it."""
+    for key in ("screens_file", "labels_file"):
+        setting = schema.setting("ocr", key)
+        assert setting.optional, f"{key} cannot be cleared"
+        assert configio.parse_field(setting, "") is None
+
+
+def test_a_package_default_that_is_not_optional_is_refused():
+    with pytest.raises(ValueError):
+        schema.Setting("screens_file", "path", "Pages file", package_default=True)
+
+
 def test_an_unset_optional_setting_is_left_out(tmp_path):
     """TOML has no null; an absent key is the unset state, and is what the
     daemon reads back as None."""

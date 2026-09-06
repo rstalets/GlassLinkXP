@@ -44,6 +44,24 @@ def _tab(app, class_name):
     return app.root.nametowidget(widget)
 
 
+def _entry_for(settings_tab, path):
+    """The widget the Settings form built for one setting, found by its variable."""
+    from g1000_softkey.gui.widgets import HintEntry
+
+    variable = {p: v for p, _s, v in settings_tab._fields}[path]
+    name = str(variable)
+    for widget in _descendants(settings_tab):
+        if isinstance(widget, HintEntry) and str(widget.cget("textvariable")) == name:
+            return widget
+    raise AssertionError(f"no entry for {path}")
+
+
+def _descendants(widget):
+    for child in widget.winfo_children():
+        yield child
+        yield from _descendants(child)
+
+
 # -- construction ----------------------------------------------------------
 
 
@@ -451,6 +469,69 @@ def test_editing_a_field_and_saving_writes_the_file(gui, tmp_path):
     saved = load_config(path)
     assert saved.loop_hz == 5.5
     assert saved.display("pfd").window_title == "My PFD Window"
+
+
+def test_saving_the_form_does_not_bake_this_installs_paths_into_the_config(gui, tmp_path):
+    """The form used to fill these boxes from the built-in defaults -- absolute
+    paths into whichever checkout was running -- and write them straight back
+    out on the first Save. Moving the install then stopped the daemon."""
+    path = tmp_path / "config.toml"
+    configio.save(path, configio.default_document(), backup=False)
+    gui.config_path = path
+    gui.load_config(quiet=True)
+
+    settings = _tab(gui, "SettingsTab")
+    boxes = {p: v for p, _s, v in settings._fields}
+    assert boxes[("ocr", "screens_file")].get() == ""
+    assert boxes[("ocr", "labels_file")].get() == ""
+
+    settings.save()
+    text = path.read_text(encoding="utf-8")
+    assert "screens_file" not in text
+    assert "labels_file" not in text
+
+
+def test_the_packages_own_file_is_shown_as_a_hint_beside_the_empty_box(gui):
+    from g1000_softkey.config import OcrConfig
+
+    settings = _tab(gui, "SettingsTab")
+    entry = _entry_for(settings, ("ocr", "screens_file"))
+    assert OcrConfig().screens_file in entry.hint
+    assert entry.hint_showing()
+    # ... and it is a hint, not a value: nothing to save, nothing to clear.
+    assert entry.get() == ""
+
+
+def test_the_hint_gets_out_of_the_way_of_a_path_of_your_own(gui):
+    settings = _tab(gui, "SettingsTab")
+    entry = _entry_for(settings, ("ocr", "screens_file"))
+    variable = {p: v for p, _s, v in settings._fields}[("ocr", "screens_file")]
+    variable.set("/somewhere/else/screens.toml")
+    assert not entry.hint_showing()
+    variable.set("")
+    assert entry.hint_showing()
+
+
+def test_clearing_the_box_is_the_way_back_to_the_packages_file(gui, tmp_path):
+    """It used to raise "Pages file cannot be empty", which left no way back."""
+    from g1000_softkey.config import OcrConfig, load_config
+
+    path = tmp_path / "config.toml"
+    document = configio.default_document()
+    document["ocr"]["screens_file"] = str(tmp_path / "mine.toml")
+    configio.save(path, document, backup=False)
+    gui.config_path = path
+    gui.load_config(quiet=True)
+
+    settings = _tab(gui, "SettingsTab")
+    for field_path, _setting, variable in settings._fields:
+        if field_path == ("ocr", "screens_file"):
+            assert variable.get() == str(tmp_path / "mine.toml")
+            variable.set("")
+    settings.save()
+
+    assert "screens_file" not in path.read_text(encoding="utf-8")
+    assert load_config(path).ocr.screens_file == OcrConfig().screens_file
 
 
 def test_a_value_the_daemon_would_reject_is_not_written(gui, tmp_path, monkeypatch):

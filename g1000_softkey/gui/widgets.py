@@ -292,6 +292,63 @@ class LabelBoard(ttk.LabelFrame):
 # ---------------------------------------------------------------------------
 
 
+class HintEntry(ttk.Entry):
+    """An entry box that shows what will be used when it is left empty.
+
+    The hint is a label placed *over* the box, never text put into it. A
+    placeholder written into the widget is written into its textvariable as
+    well, and this form's variables are what Save serialises: a placeholder
+    of that kind would quietly become a value in config.toml the first time
+    somebody pressed Save, which is the exact bug this widget exists to
+    prevent. Clicking the hint focuses the box underneath, so it behaves like
+    the empty box it is drawn on.
+    """
+
+    def __init__(self, parent: tk.Misc, hint: str = "", **kwargs) -> None:
+        super().__init__(parent, **kwargs)
+        self.hint = hint
+        self._variable: tk.Variable | None = kwargs.get("textvariable")
+        background = ttk.Style().lookup("TEntry", "fieldbackground") or "white"
+        self._hint_label = tk.Label(
+            self, text=hint, foreground=HELP_COLOR, background=background,
+            borderwidth=0, anchor="w",
+        )
+        self._hint_label.bind("<Button-1>", lambda _e: self.focus_set())
+        self._focused = False
+        self.bind("<FocusIn>", self._on_focus_in, add="+")
+        self.bind("<FocusOut>", self._on_focus_out, add="+")
+        self.bind("<KeyRelease>", lambda _e: self.show_hint(), add="+")
+        if self._variable is not None:
+            self._variable.trace_add("write", lambda *_a: self.show_hint())
+        self.show_hint()
+
+    def _on_focus_in(self, _event: object = None) -> None:
+        self._focused = True
+        self.show_hint()
+
+    def _on_focus_out(self, _event: object = None) -> None:
+        self._focused = False
+        self.show_hint()
+
+    def hint_showing(self) -> bool:
+        return bool(self._hint_label.winfo_manager())
+
+    def show_hint(self) -> None:
+        """Show the hint exactly when the box is empty and not being typed in."""
+        try:
+            # Asked of the variable rather than of the box: a trace fires
+            # before Tk has copied the new value into the widget, so reading
+            # the box here would see the old text and leave the hint sitting
+            # over what the user just typed.
+            empty = not (self._variable.get() if self._variable is not None else self.get())
+        except tk.TclError:  # pragma: no cover - the widget is being destroyed
+            return
+        if self.hint and empty and not self._focused:
+            self._hint_label.place(x=4, rely=0.5, anchor="w")
+        else:
+            self._hint_label.place_forget()
+
+
 def help_label(parent: tk.Misc, text: str, width: int = 560) -> ttk.Label:
     """Explanatory text under a control, in the GUI's quieter voice."""
     label = ttk.Label(parent, text=text, foreground=HELP_COLOR, wraplength=width,

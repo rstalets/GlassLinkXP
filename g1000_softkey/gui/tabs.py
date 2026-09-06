@@ -32,6 +32,7 @@ from .widgets import (
     HELP_COLOR,
     WARN_COLOR,
     GeometryCanvas,
+    HintEntry,
     ImageView,
     LabelBoard,
     OutputPane,
@@ -1705,11 +1706,12 @@ class SettingsTab(Tab):
         fields.columnconfigure(1, weight=1)
         row = 0
         for setting in group.settings:
-            row = self._add_field(fields, row, setting, (*path, setting.key))
+            row = self._add_field(fields, row, setting, (*path, setting.key),
+                                  section=group.section)
         return None
 
     def _add_field(self, parent: tk.Misc, row: int, setting: schema.Setting,
-                   path: tuple[str, ...]) -> int:
+                   path: tuple[str, ...], section: str = "") -> int:
         value = configio.get_in(self.app.document, path)
         if value is None and not setting.optional:
             value = self._default_for(path, setting)
@@ -1726,17 +1728,38 @@ class SettingsTab(Tab):
                                   state="readonly", width=16)
         else:
             variable = tk.StringVar(value=configio.format_field(setting, value))
-            widget = ttk.Entry(parent, textvariable=variable)
+            # The hint is drawn beside an empty box, never typed into it: a
+            # box holding the package's own path is a box whose contents get
+            # written into config.toml on the next Save, which pins the
+            # configuration to this install. An empty box means "whatever the
+            # package ships with", and it has to stay reachable.
+            widget = HintEntry(parent, textvariable=variable,
+                               hint=self._hint_for(setting, section))
         widget.grid(row=row, column=1, sticky="ew", pady=(2, 0))
         self._fields.append((path, setting, variable))
         row += 1
         if setting.help:
             note = setting.help
-            if setting.optional:
+            if setting.package_default:
+                note += "  (leave empty to use the file that comes with the package)"
+            elif setting.optional:
                 note += "  (leave empty to leave it unset)"
             help_label(parent, note, width=640).grid(row=row, column=1, sticky="w", pady=(0, 6))
             row += 1
         return row
+
+    def _hint_for(self, setting: schema.Setting, section: str) -> str:
+        """What an empty box will actually use, for the hint drawn inside it.
+
+        Only for the settings whose default is a file inside the installed
+        package. Those are the ones where an empty box does something
+        specific and invisible, and where showing the answer as a *value*
+        would write this checkout's path into the user's config file.
+        """
+        if not (section and setting.package_default):
+            return ""
+        default = schema.default_value(section, setting)
+        return f"{default}  (the one that comes with the package)" if default else ""
 
     def _default_for(self, path: tuple[str, ...], setting: schema.Setting) -> Any:
         """The built-in default, so an absent key shows what it will actually be."""
