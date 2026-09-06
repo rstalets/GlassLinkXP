@@ -118,6 +118,35 @@ against a picture that was lying to them. `tests/test_gui_canvas.py` reads the
 green rectangles back off the canvas and compares them with `cell_rects` for
 several geometries.
 
+### The clipping warning
+
+The editor can show where the boxes are, but not what is inside them. So it
+runs the daemon's own crop over the captured frame and asks the question
+`run -v` asks of every cell: does the ink reach the outermost pixel? Cells
+that do are drawn **amber** instead of green, named in a line under the
+close-up, and listed in a confirmation when **Save** is pressed.
+
+It is asked, not refused. The check has both kinds of error -- a label drawn
+hard against the edge of its own cell reports a clipping that is really the
+sim's layout, and a crop that has slipped wholesale onto a separator bar or a
+solid background reports nothing at all. A warning that blocked the save would
+eventually be worked around by whoever hit the false positive, at which point
+it has taught them to ignore it.
+
+The margin is zero pixels, and that is a definition rather than a tuned value.
+It began as 2% of the cell width; measuring the ink extents across the offline
+corpus at a geometry known to be right showed that long labels legitimately
+come within *one* pixel of the crop edge, while nothing correctly cropped ever
+reaches the outermost pixel. There is no gap between "close" and "cut" to put
+a percentage in. `tests/test_gui_checks.py` keeps that measurement as a
+regression across every synthetic frame.
+
+The check costs about five milliseconds, which is slower than a drag produces
+changes, so it is debounced: free while the mouse is moving, immediate once it
+stops. Blank cells are skipped on the same test the pipeline uses to decide a
+cell never reaches OCR -- the G1000 leaves plenty of softkeys empty, and every
+one of them would otherwise report ink touching nothing at all.
+
 Two things in there are worth knowing about:
 
 * **The view is computed on demand, not cached.** Redrawing is debounced, so a
@@ -154,6 +183,7 @@ change to either fails the suite rather than the user's window:
 | the daemon's `[pfd] 1:INSET \| ...` log rows | `main._format_row()` | `tests/test_gui_logparse.py` formats a `DisplayResult` with `_format_row` and parses it back |
 | every config setting | the dataclasses in `config.py` | `tests/test_gui_schema.py` fails if a field is neither in `gui/schema.py` nor in `NOT_IN_THE_FORM` with a reason |
 | where the strip and its cells are | `strip.strip_rect` / `strip.cell_rects` | `tests/test_gui_geometry.py` compares the editor's pixels with theirs; `tests/test_gui_canvas.py` reads the drawn boxes back off the canvas |
+| whether a crop cuts a label | `strip.clipped_edges` | shared outright: the editor's amber boxes and `run -v`'s `CLIPPED?` are the same function |
 
 The alternative to parsing the log rows was a second, machine-readable output
 mode on `run`. That would be a second thing to keep correct, and a board fed
@@ -171,6 +201,7 @@ g1000_softkey/gui/
   widgets.py    output pane, image view, the softkey board, form helpers
   commands.py   every subcommand the GUI can run, as data, and argv building
   geometry.py   fractions ↔ frame pixels ↔ canvas pixels, and the clamping (no Tk)
+  checks.py     runs the daemon's crop over the frame and reports clipped cells
   runner.py     child process + reader thread + event queue (no Tk)
   logparse.py   the daemon's log rows back into labels and colours
   schema.py     every config setting, with the text that explains it

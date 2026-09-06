@@ -284,6 +284,113 @@ def test_zoom_changes_how_much_of_the_frame_the_close_up_shows(editor):
     assert close[2] < wide[2]
 
 
+# -- the clipping warning --------------------------------------------------
+
+
+def _real_frame(calibrate, tmp_path):
+    """Swap the blank test picture for a synthetic strip with real labels."""
+    from g1000_softkey import synth
+    from g1000_softkey.gui import checks
+
+    frames = tmp_path / "frames"
+    frames.mkdir(exist_ok=True)
+    synth.write_menus(frames)
+    calibrate._frame = checks.load_frame(frames / "pfd_menu.png")
+    return calibrate
+
+
+def test_an_over_trimmed_crop_warns_and_names_the_cells(editor, tmp_path):
+    calibrate = _real_frame(editor[1], tmp_path)
+    calibrate.set_geometry(replace(StripGeometry(), cell_pad_x=0.30, cell_pad_y=0.35))
+    clips = calibrate._check_clipping()
+    assert len(clips) >= 6
+    assert "may be clipped" in calibrate.clip_warning.cget("text")
+
+
+def test_the_warned_cells_are_the_amber_ones(editor, tmp_path):
+    calibrate = _real_frame(editor[1], tmp_path)
+    calibrate.set_geometry(replace(StripGeometry(), cell_pad_x=0.30, cell_pad_y=0.35))
+    clips = calibrate._check_clipping()
+    assert calibrate.picture._warned == frozenset(c.cell for c in clips)
+    assert calibrate.closeup._warned == calibrate.picture._warned
+
+
+def test_a_reasonable_crop_says_nothing(editor, tmp_path):
+    calibrate = _real_frame(editor[1], tmp_path)
+    calibrate.set_geometry(StripGeometry())
+    calibrate._check_clipping()
+    assert calibrate.clip_warning.cget("text") == ""
+    assert calibrate.picture._warned == frozenset()
+
+
+def test_saving_a_clipped_geometry_asks_first(editor, tmp_path, monkeypatch):
+    from g1000_softkey.gui import configio
+
+    app, calibrate = editor
+    _real_frame(calibrate, tmp_path)
+    path = tmp_path / "config.toml"
+    configio.save(path, configio.default_document(), backup=False)
+    app.config_path = path
+    app.load_config(quiet=True)
+    _real_frame(calibrate, tmp_path)
+
+    asked = {}
+    monkeypatch.setattr("tkinter.messagebox.askokcancel",
+                        lambda title, message, **k: asked.setdefault("message", message) and False)
+    calibrate.display.set("pfd")
+    calibrate.set_geometry(replace(StripGeometry(), cell_pad_x=0.30, cell_pad_y=0.35))
+    calibrate.save()
+    assert "may be clipped" in asked.get("message", "")
+    # Cancelled, so nothing was written.
+    assert app.document["display"]["pfd"]["geometry"]["cell_pad_x"] != 0.30
+
+
+def test_saying_yes_saves_it_anyway(editor, tmp_path, monkeypatch):
+    """Asked, not refused: the check cannot tell a clipped glyph from a label
+    that fills its cell, and a block would train people to work around it."""
+    from g1000_softkey.config import load_config
+    from g1000_softkey.gui import configio
+
+    app, calibrate = editor
+    path = tmp_path / "config.toml"
+    configio.save(path, configio.default_document(), backup=False)
+    app.config_path = path
+    app.load_config(quiet=True)
+    _real_frame(calibrate, tmp_path)
+
+    monkeypatch.setattr("tkinter.messagebox.askokcancel", lambda *a, **k: True)
+    calibrate.display.set("pfd")
+    calibrate.set_geometry(replace(StripGeometry(), cell_pad_x=0.30, cell_pad_y=0.35))
+    calibrate.save()
+    assert load_config(path).display("pfd").geometry.cell_pad_x == 0.30
+
+
+def test_a_clean_save_is_not_interrupted(editor, tmp_path, monkeypatch):
+    from g1000_softkey.config import load_config
+    from g1000_softkey.gui import configio
+
+    app, calibrate = editor
+    path = tmp_path / "config.toml"
+    configio.save(path, configio.default_document(), backup=False)
+    app.config_path = path
+    app.load_config(quiet=True)
+    _real_frame(calibrate, tmp_path)
+
+    monkeypatch.setattr("tkinter.messagebox.askokcancel",
+                        lambda *a, **k: pytest.fail("asked about a crop that is fine"))
+    calibrate.display.set("pfd")
+    calibrate.set_geometry(replace(StripGeometry(), x=0.05, y=0.915, w=0.9, h=0.055))
+    calibrate.save()
+    assert load_config(path).display("pfd").geometry.w == 0.9
+
+
+def test_the_check_is_debounced_rather_than_run_on_every_drag(editor):
+    """Reading twelve crops costs milliseconds; a drag moves faster than that."""
+    _app, calibrate = editor
+    calibrate.set_geometry(replace(StripGeometry(), x=0.06))
+    assert calibrate._clip_check is not None      # scheduled, not run
+
+
 def test_the_editor_says_what_the_numbers_mean_in_pixels(editor):
     _app, calibrate = editor
     calibrate.set_geometry(replace(StripGeometry(), x=0.05, y=0.915, w=0.9, h=0.055))

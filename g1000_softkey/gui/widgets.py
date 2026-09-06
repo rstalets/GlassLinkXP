@@ -333,6 +333,11 @@ def browse_button(parent: tk.Misc, command: Callable[[], None], text: str = "Bro
 #: which one it is dragging.
 STRIP_COLOR = "#ff3b30"
 CELL_COLOR = "#31d158"
+#: A cell whose ink is touching the edge of its crop. Amber rather than red:
+#: it is a suspicion worth looking at, not a fault -- a long label really can
+#: fill its cell -- and colouring it like an error would train people to
+#: ignore it.
+CELL_WARN_COLOR = "#ffb020"
 HANDLE_FILL = "#ffffff"
 
 #: How the pointer changes over each resize handle, so it is obvious the box
@@ -399,6 +404,7 @@ class GeometryCanvas(ttk.Frame):
         self._photo = None               # the PhotoImage Tk is showing
         self._photo_key: tuple | None = None
         self._geometry = None            # a StripGeometry
+        self._warned: frozenset[int] = frozenset()
         self._drag: tuple[str, float, float] | None = None
         self._pending: str | None = None
         #: Set by arm_draw(). A box already on screen swallows presses near it
@@ -466,6 +472,13 @@ class GeometryCanvas(ttk.Frame):
         if zoom != self.zoom:
             self.zoom = zoom
             self._photo_key = None
+            self.redraw()
+
+    def set_warnings(self, cells) -> None:
+        """Cell numbers (1-based) to draw in amber rather than green."""
+        warned = frozenset(cells)
+        if warned != self._warned:
+            self._warned = warned
             self.redraw()
 
     def set_focus(self, focus: str) -> None:
@@ -574,9 +587,14 @@ class GeometryCanvas(ttk.Frame):
         frame_w, frame_h = self.frame_size
         # The cells first, so the strip outline and its handles sit on top of
         # them rather than being hidden behind a cell edge.
-        for rect in cell_rects((frame_h, frame_w, 3), self._geometry):
+        for index, rect in enumerate(cell_rects((frame_h, frame_w, 3), self._geometry), start=1):
             x0, y0, x1, y1 = view.rect_to_canvas(rect.x, rect.y, rect.w, rect.h)
-            self.canvas.create_rectangle(x0, y0, x1, y1, outline=CELL_COLOR, width=1)
+            warned = index in self._warned
+            self.canvas.create_rectangle(
+                x0, y0, x1, y1,
+                outline=CELL_WARN_COLOR if warned else CELL_COLOR,
+                width=2 if warned else 1,
+            )
 
         x, y, w, h = geo.strip_pixels(self._geometry, frame_w, frame_h)
         x0, y0, x1, y1 = view.rect_to_canvas(x, y, w, h)

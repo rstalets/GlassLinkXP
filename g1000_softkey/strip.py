@@ -93,6 +93,38 @@ def ink_ratio(cell: np.ndarray, contrast: int = 40) -> float:
     return float(np.mean(np.abs(gray - dominant) > contrast))
 
 
+def ink_mask(cell: np.ndarray, contrast: int = 40) -> np.ndarray:
+    """Which pixels deviate from the cell's dominant tone.
+
+    Note what this cannot see: a cell of one uniform tone has no deviation
+    from itself, so a crop that has landed entirely on a solid region reports
+    no ink at all rather than reporting a problem.
+    """
+    gray = to_gray(cell)
+    dominant = np.median(gray)
+    return np.abs(gray.astype(np.int16) - dominant) > contrast
+
+
+def ink_extent(cell: np.ndarray, contrast: int = 40) -> tuple[float, float, float, float] | None:
+    """Where the ink reaches, as fractions of the cell: (left, right, top, bottom).
+
+    None when the cell holds no ink at all, which is a different thing from
+    ink at the edges and must not be confused with it -- an empty softkey is
+    not a clipped one.
+    """
+    mask = ink_mask(cell, contrast)
+    columns = np.flatnonzero(mask.any(axis=0))
+    rows = np.flatnonzero(mask.any(axis=1))
+    if columns.size == 0 or rows.size == 0:
+        return None
+    width = max(1, mask.shape[1] - 1)
+    height = max(1, mask.shape[0] - 1)
+    return (
+        float(columns[0]) / width, float(columns[-1]) / width,
+        float(rows[0]) / height, float(rows[-1]) / height,
+    )
+
+
 def ink_bounds(cell: np.ndarray, contrast: int = 40) -> tuple[float, float]:
     """Horizontal extent of the ink, as fractions of the cell width.
 
@@ -101,14 +133,56 @@ def ink_bounds(cell: np.ndarray, contrast: int = 40) -> tuple[float, float]:
     Tesseract of the shape it needs -- a half "0" is not a character, and comes
     back as an empty string rather than a wrong one.
     """
-    gray = to_gray(cell)
-    dominant = np.median(gray)
-    mask = np.abs(gray.astype(np.int16) - dominant) > contrast
+    extent = ink_extent(cell, contrast)
+    return (0.0, 0.0) if extent is None else (extent[0], extent[1])
+
+
+#: How many pixels in from the boundary still counts as touching it.
+#:
+#: Zero, and that is a definition rather than a tuned value: ink in the
+#: outermost pixel of a crop is ink the crop cut through. It was 2% of the
+#: cell width to begin with, until the extents were measured across the
+#: offline corpus at a geometry known to be right -- long labels legitimately
+#: come within *one* pixel of the edge (CHKLIST, ALERTS, STD BARO all do),
+#: while nothing correctly cropped ever reaches the outermost pixel. There is
+#: no gap between "close" and "cut" to put a percentage in; there is only the
+#: boundary itself.
+CLIP_MARGIN = 0
+
+
+def clipped_edges(
+    cell: np.ndarray, contrast: int = 40, margin: int = CLIP_MARGIN
+) -> tuple[str, ...]:
+    """Which edges of the crop have ink in their outermost pixels, if any.
+
+    Vertical as well as horizontal, because ``cell_pad_y`` can cut the tops
+    off capitals just as easily as ``cell_pad_x`` can cut the ends off a word,
+    and a caller looking only sideways would pass a crop that loses a row of
+    every glyph.
+
+    This is a hint and not a measurement of correctness. It has both kinds of
+    error: a label drawn hard against the edge of its own cell reports a
+    clipping that is really the sim's layout, and a crop that has slipped
+    wholesale onto a separator bar or a solid background reports nothing at
+    all. It says "look at this one", which is worth having and is not the same
+    as saying the calibration is wrong.
+    """
+    mask = ink_mask(cell, contrast)
     columns = np.flatnonzero(mask.any(axis=0))
-    if columns.size == 0:
-        return (0.0, 0.0)
-    width = max(1, gray.shape[1] - 1)
-    return (float(columns[0]) / width, float(columns[-1]) / width)
+    rows = np.flatnonzero(mask.any(axis=1))
+    if columns.size == 0 or rows.size == 0:
+        return ()
+    height, width = mask.shape[:2]
+    edges = []
+    if columns[0] <= margin:
+        edges.append("left")
+    if columns[-1] >= width - 1 - margin:
+        edges.append("right")
+    if rows[0] <= margin:
+        edges.append("top")
+    if rows[-1] >= height - 1 - margin:
+        edges.append("bottom")
+    return tuple(edges)
 
 
 def is_blank(cell: np.ndarray, min_ink_ratio: float = 0.004, contrast: int = 40) -> bool:

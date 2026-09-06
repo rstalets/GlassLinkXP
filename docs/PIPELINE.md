@@ -159,6 +159,7 @@ pfd screen lookup: matched 'xpdr-code' on cells [9, 10, 11]; replaced [1]; confi
 pfd cell 1  bg=black  ink=0.0498 x=0.53-0.63 raw=''   ocr=''   conf=  0.0 match=0.00 -> '0' FROM PAGE 'xpdr-code'
 pfd cell 5  bg=black  ink=0.0405 x=0.51-0.60 raw='4'  ocr='4'  conf= 43.0 match=1.00 -> CONFIRMED BY PAGE 'xpdr-code'
 pfd cell 7  bg=white  ink=0.0447 x=0.50-0.60 raw='6'  ocr='6'  conf= 96.0 match=1.00
+pfd cell 9  bg=black  ink=0.0611 x=0.00-0.97 raw='HKLIS' ocr='' conf= 31.0 match=0.00 CLIPPED? left
 pfd cell 12 BLANK   bg=black  ink=0.0000 < 0.0040 (contrast=40) -- never reached OCR
 ```
 
@@ -178,7 +179,8 @@ pfd cell 3  CACHED  bg=white  was bg=black -- colour changed, label unchanged, n
 | `CONFIRMED BY PAGE` | OCR was unsure, but the page agreed -- value unchanged |
 | neither | read confidently enough that the page was not consulted |
 | `BLANK` | discarded before OCR; the ink figure says by how much |
-| `x=` | horizontal extent of the ink; `CLIPPED?` if it touches an edge |
+| `x=` | horizontal extent of the ink |
+| `CLIPPED?` | the ink reaches the outermost pixel of the crop, and the edges it reaches are named. Ink one pixel in is not flagged: at a geometry known to be right, long labels legitimately come that close, so the boundary itself is the only line that separates a cut glyph from a full one. Both kinds of error are possible -- a label drawn hard against its own cell edge reports a clipping that is really the sim's layout, and a crop that has slipped onto a solid background reports nothing at all. The calibration editor warns from this same function. |
 
 The distinction between the middle two matters when a label looks wrong: a cell
 carrying `CONFIRMED` was checked against a known page, while a bare line means

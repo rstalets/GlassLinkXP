@@ -23,12 +23,13 @@ from dataclasses import replace
 
 from ..color import BACKGROUND_NAMES, BLACK
 from ..config import StripGeometry
-from . import commands, configio, geometry, schema
+from . import checks, commands, configio, geometry, schema
 from .logparse import classify, parse_health, parse_row
 from .runner import Event, Failed, Finished, Line, Started
 from .widgets import (
     CELL_COLORS,
     HELP_COLOR,
+    WARN_COLOR,
     GeometryCanvas,
     ImageView,
     LabelBoard,
@@ -590,6 +591,12 @@ class CalibrateTab(Tab):
         self._suggested: dict[str, dict[str, float]] = {}
         self._fields: dict[str, tk.StringVar] = {}
         self._geometry = StripGeometry()
+        #: The captured frame as an array, so the clipping check reads the
+        #: same pixels the daemon would. Loaded once per picture, not per check.
+        self._frame = None
+        self._ocr = None
+        self._clips: list[checks.CellClip] = []
+        self._clip_check: str | None = None
         #: Guards the two-way binding between the boxes and the entry boxes.
         #: Without it, updating a field from a drag would fire the field's own
         #: handler, which would re-set the geometry, which would redraw...
@@ -645,6 +652,10 @@ class CalibrateTab(Tab):
         side.pack(side="right", fill="y")
         self._build_steps(side)
         self._build_numbers(side)
+
+        self.clip_warning = ttk.Label(pictures, text="", foreground=WARN_COLOR,
+                                      wraplength=760, justify="left")
+        self.clip_warning.pack(anchor="w", pady=(4, 0))
 
         self.output = OutputPane(self, height=6)
         self.output.pack(fill="both", expand=True, pady=(8, 0))
@@ -772,6 +783,30 @@ class CalibrateTab(Tab):
         finally:
             self._syncing = False
         self._show_pixels()
+        self._schedule_clip_check()
+
+    def _schedule_clip_check(self) -> None:
+        """Re-check for clipping once the geometry stops moving.
+
+        Debounced rather than run on every change: reading twelve crops off a
+        1280x800 frame costs about five milliseconds, and a drag produces
+        changes far faster than that. Waiting for the pause makes it free
+        during the drag and immediate once the hand stops.
+        """
+        if self._clip_check is not None:
+            self.after_cancel(self._clip_check)
+        self._clip_check = self.after(250, self._check_clipping)
+
+    def _check_clipping(self) -> list[checks.CellClip]:
+        self._clip_check = None
+        self._clips = checks.check_cells(self._frame, self._geometry, self._ocr)
+        self.picture.set_warnings(c.cell for c in self._clips)
+        self.closeup.set_warnings(c.cell for c in self._clips)
+        self.clip_warning.configure(
+            text=(checks.describe(self._clips) + " Amber boxes above. A long label can fill "
+                  "its cell honestly, so look before you trim.") if self._clips else ""
+        )
+        return self._clips
 
     def _show_pixels(self) -> None:
         """The same numbers in pixels, which is the unit being judged."""
@@ -834,6 +869,14 @@ class CalibrateTab(Tab):
         self.display_box.configure(values=keys)
         if self.display.get() not in keys:
             self.display.set(keys[0] if keys else "")
+        # The user's own blank thresholds decide which cells the clipping
+        # check looks at, so take them from the document rather than from the
+        # defaults -- somebody who lowered blank_contrast to keep dim labels
+        # wants those cells checked too.
+        try:
+            self._ocr = configio.validate(self.app.document).ocr
+        except Exception:  # noqa: BLE001 - a bad config is the Settings tab's problem
+            self._ocr = None
         stored = configio.get_in(self.app.document, ("display", self.display.get(), "geometry"), {})
         known = {f for f in StripGeometry.__dataclass_fields__}
         self.set_geometry(StripGeometry(**{k: v for k, v in stored.items() if k in known}))
@@ -847,6 +890,7 @@ class CalibrateTab(Tab):
         path = raw if raw.is_file() else None
         self.picture.set_frame(path)
         self.closeup.set_frame(path)
+        self._frame = checks.load_frame(path) if path else None
         self.set_geometry(self._geometry)
 
     def calibrate(self) -> None:
@@ -901,6 +945,8 @@ class CalibrateTab(Tab):
 
     def save(self) -> None:
         key = self.display.get()
+        if not self._confirm_clipping(key):
+            return
         # Edited on a copy and only adopted once it validates. Writing into
         # the live document first would leave the window holding a geometry
         # the daemon will not accept, with nothing on screen saying so.
@@ -936,6 +982,27 @@ class CalibrateTab(Tab):
             + (f" (previous version kept as {backup.name})" if backup else "")
             + ". Check it on the Cells tab, then restart the daemon."
         )
+
+    def _confirm_clipping(self, key: str) -> bool:
+        """Ask before saving a geometry whose crops look like they cut labels.
+
+        Asked rather than refused. The check cannot tell a clipped glyph from
+        a label that fills its cell, and a warning that blocks the save would
+        eventually be worked around by whoever hits the false positive -- at
+        which point it has taught them to ignore it. It reports what it saw
+        and lets the person who can look at the picture decide.
+        """
+        if self._frame is None:
+            return True
+        clips = self._check_clipping()
+        if not clips:
+            return True
+        return bool(messagebox.askokcancel(
+            "G1000 softkey labels",
+            f"{checks.describe(clips, key)}\n\n{checks.ADVICE}\n\n"
+            "Save it anyway?",
+            parent=self.app.root, icon="warning", default="cancel",
+        ))
 
     def _open_folder(self) -> None:
         folder = Path(self.out.get())

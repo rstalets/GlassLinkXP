@@ -142,6 +142,7 @@ own code rather than from a copied sample:
 | what `_format_row` prints | `test_gui_logparse.py` -- it formats a `DisplayResult` and parses it back |
 | a field on any config dataclass | `test_gui_schema.py` -- a field must be in `gui/schema.py` or in `NOT_IN_THE_FORM` with a reason |
 | `strip_rect` or `cell_rects` | `test_gui_geometry.py` and `test_gui_canvas.py` -- the calibration editor draws what `cell_rects` returns, and both check it against the real thing |
+| `clipped_edges` or `CLIP_MARGIN` | `test_gui_checks.py` -- the margin is 0 because the ink extents were measured across the corpus, and a test keeps that measurement true; the calibration editor and `run -v` share the function |
 
 Fix the GUI in the same commit; do not weaken the test. A GUI that has drifted
 from the daemon still looks like it is working, which is what makes it worth a
@@ -156,7 +157,7 @@ python -m g1000_softkey.main run --once --image frames/xpdr.png --publisher cons
 python -m g1000_softkey.main gui                       # the window
 ```
 
-The GUI's own tests need a display; without one the 60 that build widgets skip
+The GUI's own tests need a display; without one the 67 that build widgets skip
 themselves and the rest still run. To run all of them here:
 
 ```

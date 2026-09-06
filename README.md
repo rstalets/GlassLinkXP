@@ -281,6 +281,12 @@ expressed as *fractions* of the client area and has to be set once per setup.
    the moving map inside the box. Nudge `x/y/w/h` and `cell_pad_x/y` until it
    does. **Do not skip this step** -- the auto-detect is only a seed; it gets
    the vertical band right but the horizontal extent only approximately.
+   The GUI warns here too: when you save, any cell whose ink reaches the very
+   edge of its box is named, and those boxes are drawn amber while you work.
+   It is a hint rather than a verdict -- a label can fill its cell honestly --
+   but it catches the trim being one notch too tight, which is the mistake
+   that costs a whole label.
+
 5. Check what Tesseract actually sees:
    ```
    .\g1000 -c config.toml dump-cells --out cells
@@ -412,7 +418,7 @@ display).
 | `X-Plane Web API unreachable` | X-Plane is not running, is older than 12.1.1, or the web server is off. The daemon keeps retrying; it never crashes the loop. |
 | `ModuleNotFoundError: No module named 'numpy'` | The venv is not active, so a system Python is running. `.venv\Scripts\Activate.ps1` (PowerShell), or call `.venv\Scripts\python.exe` directly. |
 | `N of 48 datarefs are not registered in X-Plane` | The XPPython3 plugin is not installed or failed to load. Check `<X-Plane>/Log.txt` and `XPPython3.log`. |
-| Labels are garbage or empty | Geometry. Run `dump-cells` and look at the `_prep.png` images. |
+| Labels are garbage or empty | Geometry. Run `dump-cells` and look at the `_prep.png` images, or open the Calibrate tab, which draws the boxes on the frame and flags any whose ink is being cut. |
 | One cell is always wrong | Missing entry in `labels.txt`, or a two-line label (see limitations). |
 | Blank cells produce short nonsense strings | The crop includes something bright above or below the strip; tighten `y`/`h`, or raise `ocr.blank_ink_ratio`. |
 | `g1000-gui.cmd` says this Python has no Tk support | Tk is part of the standard library but a separate build-time component. Reinstall with a Python that includes it -- the python.org installer does. |
@@ -519,15 +525,17 @@ says:
   pixel while holding the right edge still, and the twelve green boxes drawn
   on the canvas matched `strip.cell_rects` -- the function `split_cells`
   actually slices with -- for every geometry tried. Saving wrote the numbers
-  into `config.toml` and they loaded back.
+  into `config.toml` and they loaded back. Over-trimming the cells turned the
+  offending boxes amber and made Save ask before writing; at a correct
+  geometry it asked nothing, on every frame in the offline corpus.
 * **Cells** showed all 24 cell pictures; **Colours** parsed 24 measurements and
   drew each row in the colour it was classified as; **Pages** captured a
   `[[screen]]` block; **Tools** ran the benchmark.
 * **Find windows** failed as it must on Linux, and the tab showed the command
   that failed and the daemon's own explanation of why.
-* The tests cover this without a display too: 223 of them, of which the 60 that
-  need Tk skip themselves when there is no display (`442 passed` with one,
-  `382 passed, 60 skipped` without). Four of them are there to stop the GUI
+* The tests cover this without a display too: 253 of them, of which the 67 that
+  need Tk skip themselves when there is no display (`472 passed` with one,
+  `405 passed, 67 skipped` without). Four of them are there to stop the GUI
   drifting from the daemon -- every argv the GUI can build is parsed by
   `main.build_parser()`, the softkey board's parser is fed
   `main._format_row()`'s own output, the settings form is checked against the

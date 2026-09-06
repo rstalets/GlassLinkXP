@@ -14,6 +14,7 @@ from .ocr import CellResult, SoftkeyReader
 from .screens import ScreenLibrary
 from .strip import (
     changed_cells,
+    clipped_edges,
     ink_bounds,
     ink_ratio,
     is_blank,
@@ -242,7 +243,11 @@ class DisplayPipeline:
             ocr_ms += (time.perf_counter() - t0) * 1000.0
             ocr_calls += 1
             x0, x1 = ink_bounds(cell, self.reader.config.blank_contrast)
-            clipped = " CLIPPED?" if (x0 <= 0.02 or x1 >= 0.98) else ""
+            # Named edges rather than a bare marker: which side is being cut
+            # is the whole of what to do about it, and the calibration editor
+            # warns from this same function so the two always agree.
+            touching = clipped_edges(cell, self.reader.config.blank_contrast)
+            clipped = f" CLIPPED? {','.join(touching)}" if touching else ""
             diagnostics[index] = (
                 f"{bg_tag(index)}ink={ink:.4f} x={x0:.2f}-{x1:.2f} "
                 f"raw={cell_result.raw!r:<12} ocr={cell_result.text!r:<12} "
