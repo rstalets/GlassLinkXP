@@ -12,19 +12,31 @@ document, load it back through the daemon's own ``load_config`` and compare
 against the ``AppConfig`` it started from. A writer that is wrong about
 quoting or about floats fails that round trip.
 
-One thing it cannot do is preserve comments. A user who has hand-annotated
-their config and then saves from the form would lose those notes, so
-:func:`save` keeps the previous file as ``<name>.bak`` first, and the GUI's
-raw editor writes text through untouched for anyone who would rather keep
-their own file exactly as they wrote it.
+It only writes what it can write faithfully, and says so about anything else.
+A general TOML writer would handle arrays of tables, top-level scalars,
+datetimes and tables nested to any depth; this one handles the shapes a
+config document actually has, and :func:`unsupported` refuses the rest by
+name rather than dropping it. That distinction is the whole reason a writer
+this small is defensible: silently losing a line of somebody's config on save
+would be much worse than declining to write it, and the GUI's raw editor --
+which passes text through untouched -- is right there for whatever this
+cannot express.
+
+One thing it deliberately does not do is preserve comments. That is also why
+it exists at all rather than being a dependency: the comments carry the
+reasoning for every setting, and a library would write the values and throw
+the explanations away. :func:`save` keeps the previous file as ``<name>.bak``
+first, and the raw editor is the way to keep a hand-annotated file exactly as
+written.
 """
 
 from __future__ import annotations
 
+import re
 import shutil
 import tomllib
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from ..config import AppConfig, StripGeometry, default_config, from_mapping
 from . import schema
@@ -170,6 +182,102 @@ def save_text(path: str | Path, text: str, backup: bool = True) -> Path | None:
     return backup_path
 
 
+#: A key that needs no quotes in TOML. Anything else is legal but has to be
+#: written as a quoted string -- and a display named "G1000 PFD" produced
+#: `[display.G1000 PFD]`, which does not parse, so the file the GUI had just
+#: saved could not be opened again.
+_BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _key(name: str) -> str:
+    return name if _BARE_KEY.match(name) else _string(name)
+
+
+def _header(path: Sequence[str]) -> str:
+    """A table header, with each segment quoted only if it has to be."""
+    return "[" + ".".join(_key(part) for part in path) + "]"
+
+
+#: Value types this writer can represent. Deliberately short: a config
+#: document is scalars and small arrays, and everything outside that list is
+#: something to decline rather than to guess at. None is included because it
+#: is how an optional setting says "not set", and is written as a commented
+#: line rather than as a value -- but only as a whole value, never inside an
+#: array, where TOML has nothing to write it as.
+_WRITABLE = (bool, int, float, str)
+
+
+def unsupported(document: Mapping[str, Any]) -> str:
+    """What in this document the writer cannot express, or "" if nothing.
+
+    Checked up front so a save either writes the whole document or writes
+    none of it. The alternative -- discovering it half way through -- is how
+    a file ends up truncated at the first thing that surprised the writer.
+    """
+    for key, value in document.items():
+        if not isinstance(value, Mapping):
+            # An array of tables ([[screen]]) arrives as a plain list here,
+            # and calling it "a value at the top level" would send whoever
+            # reads it looking for something else entirely.
+            if isinstance(value, (list, tuple)) and any(
+                isinstance(item, Mapping) for item in value
+            ):
+                return f"[[{key}]] is an array of tables"
+            return f"{key!r} is a value at the top level, not a table"
+        if key == "display":
+            for name, entry in value.items():
+                if not isinstance(entry, Mapping):
+                    return f"display.{name} is not a table"
+                problem = _unsupported_table(f"display.{name}", entry,
+                                             nested_allowed=("geometry",))
+                if problem:
+                    return problem
+            continue
+        problem = _unsupported_table(key, value)
+        if problem:
+            return problem
+    return ""
+
+
+def _unsupported_table(where: str, table: Mapping[str, Any],
+                       nested_allowed: tuple[str, ...] = ()) -> str:
+    for key, value in table.items():
+        if isinstance(value, Mapping):
+            if key in nested_allowed:
+                nested = _unsupported_table(f"{where}.{key}", value)
+                if nested:
+                    return nested
+                continue
+            return f"{where}.{key} is a table inside a table"
+        problem = _unsupported_value(f"{where}.{key}", value)
+        if problem:
+            return problem
+    return ""
+
+
+def _unsupported_value(where: str, value: Any) -> str:
+    """Whether one value can be written. Arrays may nest -- ``sharpen_ladder``
+    is an array of [amount, radius] pairs -- but may not contain tables."""
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            if isinstance(item, Mapping):
+                return f"{where} is an array of tables"
+            nested = _unsupported_value(where, item)
+            if nested:
+                return nested
+        return ""
+    if value is None or isinstance(value, _WRITABLE):
+        return ""
+    return f"{where} is a {type(value).__name__}"
+
+
+CANNOT_WRITE = (
+    "The settings form cannot write this configuration back without losing "
+    "part of it: {problem}.\n\nUse the Raw file tab instead -- it writes your "
+    "text through exactly as you typed it."
+)
+
+
 HEADER = """\
 # G1000 softkey daemon configuration.
 #
@@ -185,6 +293,9 @@ HEADER = """\
 
 def dumps(document: Mapping[str, Any]) -> str:
     """Serialise a config document to TOML, with a one-line note per setting."""
+    problem = unsupported(document)
+    if problem:
+        raise ConfigIoError(CANNOT_WRITE.format(problem=problem))
     out: list[str] = [HEADER]
     for section in SECTION_ORDER:
         body = document.get(section)
@@ -193,13 +304,13 @@ def dumps(document: Mapping[str, Any]) -> str:
         if section == "display":
             out.append(_dump_displays(body))
         else:
-            out.append(_dump_table(section, section, body))
+            out.append(_dump_table(_header((section,)), section, body))
     # Anything the GUI does not know about is kept rather than dropped: an
     # unrecognised table is more likely to be a newer setting than a mistake,
     # and silently deleting a user's file content is not a thing to do.
     for key, value in document.items():
         if key not in SECTION_ORDER and isinstance(value, Mapping):
-            out.append(_dump_table(key, key, value))
+            out.append(_dump_table(_header((key,)), key, value))
     return "\n".join(out).rstrip() + "\n"
 
 
@@ -210,11 +321,11 @@ def _dump_displays(displays: Mapping[str, Any]) -> str:
             continue
         geometry = entry.get("geometry")
         scalars = {k: v for k, v in entry.items() if k != "geometry"}
-        blocks.append(_dump_table(f"display.{key}", "display", scalars,
+        blocks.append(_dump_table(_header(("display", key)), "display", scalars,
                                   blurb=schema.DISPLAY.blurb))
         if isinstance(geometry, Mapping):
-            blocks.append(_dump_table(f"display.{key}.geometry", "geometry", geometry,
-                                      blurb=schema.GEOMETRY.blurb))
+            blocks.append(_dump_table(_header(("display", key, "geometry")), "geometry",
+                                      geometry, blurb=schema.GEOMETRY.blurb))
     return "\n".join(blocks)
 
 
@@ -224,7 +335,7 @@ def _dump_table(header: str, section: str, body: Mapping[str, Any], blurb: str =
     text = blurb or (group.blurb if group else "")
     if text:
         lines += _comment(text)
-    lines.append(f"[{header}]")
+    lines.append(header)
     for key, value in body.items():
         if isinstance(value, Mapping):  # nested tables are emitted by the caller
             continue
@@ -235,9 +346,9 @@ def _dump_table(header: str, section: str, body: Mapping[str, Any], blurb: str =
             # An optional setting left unset. Written as a comment rather than
             # omitted silently, so the file still lists everything there is to
             # set -- the file is documentation as much as it is configuration.
-            lines.append(f"# {key} is not set")
+            lines.append(f"# {_key(key)} is not set")
             continue
-        lines.append(f"{key} = {_value(section, key, value)}")
+        lines.append(f"{_key(key)} = {_value(section, key, value)}")
     return "\n".join(lines) + "\n"
 
 

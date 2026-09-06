@@ -94,6 +94,79 @@ def test_the_raw_editor_refuses_to_write_broken_toml(tmp_path):
     assert load_config(path).loop_hz == 1.0  # the old file is still intact
 
 
+# -- what the writer can and cannot express ---------------------------------
+#
+# It is a writer for this config's shapes, not a TOML implementation. What
+# makes that defensible is that it says so: everything below either round
+# trips exactly or is refused by name. Silently dropping a line of somebody's
+# configuration on save would be far worse than declining to write it, and
+# the raw editor passes text through untouched for anything this cannot say.
+
+
+def _round_trips(text: str) -> bool:
+    document = configio.loads(text)
+    return configio.loads(configio.dumps(document)) == document
+
+
+@pytest.mark.parametrize("name,text", [
+    ("plain tables", '[app]\nloop_hz = 12.0\n'),
+    ("a quoted display key", '[app]\nloop_hz = 1.0\n["display"."G1000 PFD"]\nwindow_title = "x"\n'),
+    ("a key with a dot in it", '[app]\nloop_hz = 1.0\n["display"."pfd.2"]\nenabled = true\n'),
+    ("non-ascii text", '[display.pfd]\nwindow_title = "G1000 PFD \u2014 C172"\n'),
+    ("nested arrays", '[ocr]\nsharpen_ladder = [[0.0, 0.0], [0.5, 1.0]]\n'),
+    ("an empty array", '[ocr]\nsharpen_ladder = []\n'),
+    ("an unknown table", '[something_new]\na = 1\nb = "two"\n'),
+])
+def test_these_round_trip_exactly(name, text):
+    assert _round_trips(text), name
+
+
+def test_a_display_whose_name_needs_quoting_survives(tmp_path):
+    """It produced `[display.G1000 PFD]`, which does not parse -- so the file
+    the GUI had just saved could not be opened again."""
+    from g1000_softkey.config import load_config
+
+    text = '[app]\nloop_hz = 1.0\n["display"."G1000 PFD"]\nwindow_title = "left"\n'
+    path = tmp_path / "config.toml"
+    configio.save(path, configio.loads(text), backup=False)
+    assert [d.key for d in load_config(path).displays] == ["G1000 PFD"]
+
+
+@pytest.mark.parametrize("name,text,expected", [
+    ("an array of tables", '[app]\nloop_hz = 1.0\n[[screen]]\nname = "x"\n', "array of tables"),
+    ("a top-level value", 'title = "mine"\n[app]\nloop_hz = 1.0\n', "top level"),
+    ("a table inside a table", '[extra]\na = 1\n[extra.deeper]\nb = 2\n', "table inside a table"),
+    ("a datetime", '[extra]\nwhen = 1979-05-27T07:32:00Z\n', "datetime"),
+])
+def test_these_are_refused_by_name_rather_than_dropped(name, text, expected):
+    with pytest.raises(configio.ConfigIoError) as exc:
+        configio.dumps(configio.loads(text))
+    assert expected in str(exc.value), name
+    assert "Raw file tab" in str(exc.value)
+
+
+def test_a_refusal_leaves_the_previous_file_untouched(tmp_path):
+    """All of it or none of it: a writer that stopped where it got surprised
+    would leave a truncated config behind."""
+    path = tmp_path / "config.toml"
+    original = "[app]\nloop_hz = 3.0\n"
+    path.write_text(original, encoding="utf-8")
+    with pytest.raises(configio.ConfigIoError):
+        configio.save(path, configio.loads('[[screen]]\nname = "x"\n'), backup=False)
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_the_geometry_subsection_is_still_allowed():
+    """The one nested table the writer does understand."""
+    assert configio.unsupported(configio.default_document()) == ""
+
+
+def test_an_unset_optional_setting_is_not_a_refusal():
+    document = configio.default_document()
+    assert document["ocr"]["tessdata_path"] is None
+    assert configio.unsupported(document) == ""
+
+
 def test_a_table_the_gui_does_not_know_about_is_kept(tmp_path):
     document = configio.default_document()
     document["something_new"] = {"a": 1}
