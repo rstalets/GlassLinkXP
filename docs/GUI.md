@@ -79,6 +79,49 @@ bar with a count and the traceback kept on the app (`poll_failures`,
 | Settings | -- | Every setting in the config file, as a form, plus a raw TOML editor. |
 | Tools | `bench`, `synth` | Timings, and synthetic frames. |
 
+## The Cells tab: true resolution over density
+
+The prep picture is shown at its true pixel size (or an integer multiple),
+never shrunk to fit its box: `ImageView(allow_shrink=False)` skips the
+LANCZOS-shrink branch in `_load_scaled` entirely, so a box smaller than the
+picture overflows rather than blurring it. That is not a stylistic choice --
+`CLAUDE.md` records that this project's hardest bug (a closed counter filling
+in during thresholding) was found only once someone saw a picture of the
+preprocessed cell, and a smoothed-down preview of a strictly binary image can
+hide exactly that. The tab used to shrink this preview to 34% of native size
+to fit six columns in the window; that made it decorative rather than
+diagnostic.
+
+True resolution does not fit twelve cells in one screen, so the grid, the
+tuner controls and the output pane all live inside one `ScrollableFrame`
+rather than being packed directly into the tab. That is deliberate beyond
+just "it doesn't fit": with three things below the top controls each wanting
+their own minimum height and no way to tell `pack` which one may give space
+back, an oversubscribed tab does not shrink its content gracefully -- it
+picks something to squeeze, arbitrarily, and previously that was the output
+pane and (once its overflow reached the window's own packing) the status bar,
+both crushed to a 1px sliver. Scrolling the lot together removes the fight
+instead of trying to referee it, and the same failure mode is why the status
+bar is now packed *before* the notebook in `GuiApp._build` -- pack gives
+space to slaves in the order they were packed, and a widget asked for after
+one with `expand=True` gets whatever that one left, which for an overflowing
+tab is nothing.
+
+## Queueing a page for the sharpening tuner
+
+**Add this page** copies the cells you typed an expected label for into their
+own folder under `tuning/queue/` rather than recording the live `dump-cells`
+output folder directly. Reading a different page overwrites that same
+`{display}_{cell:02d}_raw.png` files in place -- it is the same folder every
+time, on purpose, so **Open folder** always shows the latest capture -- and a
+queued case that pointed at it directly would silently start being checked
+against a *different* page's pixels the moment a second page was captured,
+while still carrying the first page's expected labels. That shipped once:
+three pages queued, and the search reported no improvement possible no matter
+what, because most of the labelled cells were being compared against the
+wrong picture. **Clear queue** removes the snapshot folder along with the
+in-memory queue.
+
 ## The calibration editor
 
 This is the one tab that does something the CLI cannot, and it is the tab the

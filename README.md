@@ -546,20 +546,29 @@ says:
   into `config.toml` and they loaded back. Over-trimming the cells turned the
   offending boxes amber and made Save ask before writing; at a correct
   geometry it asked nothing, on every frame in the offline corpus.
-* **Cells** showed all 24 cell pictures; typing an expected label into two of
-  them, queuing the page and pressing **Run tuning** shelled out to a real
-  `tune --truth ...` (real Tesseract, the full psm/threshold/upscale/ladder
-  search over the synthetic corpus, in a few seconds), reported "everything
-  already reads correctly at baseline", and Save suggested settings wrote the
-  settings it found into `config.toml` and read back the same values.
+* **Cells** showed all 24 cell pictures, at their true pixel size rather than
+  shrunk to fit; typing an expected label into two of them, queuing the page
+  and pressing **Run tuning** shelled out to a real `tune --truth ...` (real
+  Tesseract, the full psm/threshold/upscale/ladder search over the synthetic
+  corpus, in a few seconds), reported "everything already reads correctly at
+  baseline", and Save suggested settings wrote the settings it found into
+  `config.toml` and read back the same values. Queuing three different pages
+  captured one after another into the same `dump-cells` output folder --
+  which overwrites it every time, by design -- left each queued page checked
+  against its own snapshot rather than whichever page was captured last (all
+  9 labelled cells across the three pages read correctly). At the documented
+  `minsize(940, 640)`, with real `dump-cells` output loaded, the tab's own
+  content -- more than twice the window's height once the grid, the tuner and
+  the output pane are all accounted for -- scrolls instead of squeezing the
+  output pane and the status bar to nothing, which is what it did before.
   **Colours** parsed 24 measurements and drew each row in the colour it was
   classified as; **Pages** captured a `[[screen]]` block; **Tools** ran the
   benchmark.
 * **Find windows** failed as it must on Linux, and the tab showed the command
   that failed and the daemon's own explanation of why.
-* The tests cover this without a display too: 358 of them, of which the 100 that
-  need Tk skip themselves when there is no display (`607 passed` with one,
-  `507 passed, 100 skipped` without). Several are there to stop the GUI
+* The tests cover this without a display too: 368 of them, of which the 110 that
+  need Tk skip themselves when there is no display (`617 passed` with one,
+  `507 passed, 110 skipped` without). Several are there to stop the GUI
   drifting from the daemon -- every argv the GUI can build is parsed by
   `main.build_parser()`, every parser in `gui/logparse.py` is fed the output of
   the command it reads (the softkey board from `main._format_row()`, the window

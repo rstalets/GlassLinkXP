@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import os
+import shutil
 import subprocess
 import sys
 import tkinter as tk
@@ -1236,27 +1237,59 @@ class CellsTab(Tab):
             "Top row of each pair is the cell as it reaches Tesseract: it should be black "
             "text on a white background, with the letters filling most of the height, and "
             "it should look that way for the highlighted softkey too. Bottom row is the "
-            "raw crop. If a cell is clipped or has its neighbour's label in it, go back to "
-            "Calibrate -- that is a geometry problem and no amount of OCR tuning will fix "
-            "it. If a cell looks right but reads wrong, type what it should say in the box "
-            "below it and use the sharpening tuner underneath.",
+            "raw crop. It is shown at the true size Tesseract received, not shrunk to fit -- "
+            "a smoothed-down preview of a binary image is how the last closed-counter bug "
+            "hid, so scroll rather than trust a blurrier picture. If a cell is clipped or has "
+            "its neighbour's label in it, go back to Calibrate -- that is a geometry problem "
+            "and no amount of OCR tuning will fix it. If a cell looks right but reads wrong, "
+            "type what it should say in the box below it and use the sharpening tuner "
+            "underneath.",
             width=900,
         ).pack(anchor="w", pady=(6, 8))
 
-        self.grid_frame = ttk.Frame(self)
-        self.grid_frame.pack(fill="both", expand=True)
-        for column in range(6):
+        # Everything below this point -- the grid, the tuner controls and the
+        # output pane -- lives inside one scrollable body, rather than being
+        # packed directly into the tab. Twelve cells shown at true resolution
+        # cannot fit the window's minsize, and neither, on top of that, can
+        # the tuner section and the output pane both keep their own minimum
+        # size: pack has no way to say "shrink the grid before the output
+        # pane", so once the tab's total content exceeds what it is given,
+        # *something* is squeezed arbitrarily -- which is exactly how the
+        # output pane and the status bar ended up squeezed to nothing before
+        # this tab had a scrollbar at all. Scrolling the lot together sidesteps
+        # that fight rather than trying to referee it.
+        scroll = ScrollableFrame(self)
+        scroll.pack(fill="both", expand=True)
+        body = scroll.body
+
+        #: Native prep size across the offline corpus is up to ~320x152 (a
+        #: ~76x34 raw crop, 4x upscaled, plus an 8px border). Two columns of
+        #: boxes that size fit the window's own minsize width with room to
+        #: spare and no horizontal scrollbar -- this widget only scrolls
+        #: vertically, so a column width tight enough to need one would just
+        #: clip the rightmost column instead. More, narrower columns is the
+        #: shrink-to-fit this tab used to do and the reason its prep picture
+        #: could not be trusted.
+        self.grid_frame = ttk.Frame(body)
+        self.grid_frame.pack(fill="x")
+        columns = 2
+        for column in range(columns):
             self.grid_frame.columnconfigure(column, weight=1)
+        for row in range(-(-12 // columns)):
+            self.grid_frame.rowconfigure(row, weight=1)
         for index in range(12):
-            row, column = divmod(index, 6)
+            row, column = divmod(index, columns)
             block = ttk.LabelFrame(self.grid_frame, text=f" {index + 1} ")
             block.grid(row=row, column=column, sticky="nsew", padx=3, pady=3)
-            prep = ImageView(block, "-")
-            prep.configure(width=170, height=52)
+            # allow_shrink=False on both: the raw crop is small enough that it
+            # never needs to shrink at these box sizes, but a taller block one
+            # display's geometry produced would otherwise silently blur it.
+            prep = ImageView(block, "-", allow_shrink=False)
+            prep.configure(width=320, height=152)
             prep.pack_propagate(False)
             prep.pack(fill="x")
-            raw = ImageView(block, "-")
-            raw.configure(width=170, height=40)
+            raw = ImageView(block, "-", allow_shrink=False)
+            raw.configure(width=90, height=45)
             raw.pack_propagate(False)
             raw.pack(fill="x")
             caption = ttk.Label(block, text="", foreground=HELP_COLOR, anchor="center")
@@ -1265,7 +1298,7 @@ class CellsTab(Tab):
                       justify="center").pack(fill="x", pady=(0, 3), padx=2)
             self._views.append((prep, raw, caption))
 
-        tuner = ttk.LabelFrame(self, text="  Sharpening tuner  ", padding=PAD)
+        tuner = ttk.LabelFrame(body, text="  Sharpening tuner  ", padding=PAD)
         tuner.pack(fill="x", pady=(10, 0))
         row = ttk.Frame(tuner)
         row.pack(fill="x")
@@ -1282,16 +1315,18 @@ class CellsTab(Tab):
                    command=self.run_tuning).pack(side="right", padx=(0, 10))
         help_label(
             tuner,
-            "Type what a cell should read above, leave the rest blank, then Add this page. "
-            "Read a different page (or point Display at the other one) and add that too, to "
-            "cover more than one page in the same search. Run tuning then searches sharpening, "
+            "Type what a cell should read above, leave the rest blank, then Add this page -- "
+            "it copies out the cells you typed against, so reading a different page afterwards "
+            "cannot change what an already-queued page is checked against. Read a different "
+            "page (or point Display at the other one) and add that too, to cover more than one "
+            "page in the same search. Run tuning then searches sharpening, "
             "upscaling and thresholding settings and keeps only a change that fixes a queued "
             "cell without making any other queued cell -- on any page -- read wrong. Save "
             "suggested settings writes what it found into config.toml.",
             width=900,
         ).pack(anchor="w", pady=(6, 0))
 
-        self.output = OutputPane(self, height=8)
+        self.output = OutputPane(body, height=8)
         self.output.pack(fill="both", expand=True, pady=(10, 0))
         app.on_config_changed(self.refresh)
 
@@ -1340,7 +1375,19 @@ class CellsTab(Tab):
                 "Read the cells first -- there is no picture for this display yet.", "warning"
             )
             return
-        self._tuning_cases.append({"dir": str(folder.resolve()), "display": key, "expect": expect})
+        # Copied out now, into a folder of this page's own: "Read the cells"
+        # for a second page overwrites the same out/{key}_{cell:02d}_raw.png
+        # files in place (that is what makes it "the" cells folder rather
+        # than one per capture), so a case still pointing at out/ would
+        # silently start being judged against a *different* page's pixels
+        # the moment the next page was captured -- this page's expected
+        # labels, that page's cells. Queuing this page has to freeze what it
+        # looked like at the moment it was added.
+        snapshot = self.app.project_root / "tuning" / "queue" / f"page{len(self._tuning_cases) + 1}"
+        snapshot.mkdir(parents=True, exist_ok=True)
+        for cell in expect:
+            shutil.copy2(folder / f"{key}_{cell:02d}_raw.png", snapshot / f"{key}_{cell:02d}_raw.png")
+        self._tuning_cases.append({"dir": str(snapshot), "display": key, "expect": expect})
         for v in self._expect:
             v.set("")
         self._update_queue_label()
@@ -1354,6 +1401,7 @@ class CellsTab(Tab):
         self._suggested = None
         self.save_button.configure(state="disabled")
         self._update_queue_label()
+        shutil.rmtree(self.app.project_root / "tuning" / "queue", ignore_errors=True)
 
     def _update_queue_label(self) -> None:
         if not self._tuning_cases:

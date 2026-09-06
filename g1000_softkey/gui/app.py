@@ -129,11 +129,17 @@ class GuiApp:
             variable=self.verbose,
         ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
-        self.notebook = ttk.Notebook(self.root, padding=(8, 6))
-        self.notebook.pack(fill="both", expand=True)
-
+        # Packed before the notebook, and that order is load-bearing: pack
+        # gives space to slaves in the order they were packed, so a widget
+        # packed after one with expand=True gets whatever that one left --
+        # which, for a tab that wants more height than the window has, is
+        # nothing. Claiming the status bar's strip along the bottom first
+        # guarantees it one no matter how much the notebook overflows by.
         self.status = StatusBar(self.root)
         self.status.pack(fill="x", side="bottom")
+
+        self.notebook = ttk.Notebook(self.root, padding=(8, 6))
+        self.notebook.pack(fill="both", expand=True)
 
     def add_tab(self, widget: tk.Widget, title: str) -> None:
         self.notebook.add(widget, text=f" {title} ")
