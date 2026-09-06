@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
+from tkinter import font as tkfont
 from tkinter import messagebox, simpledialog, ttk
 from typing import Any
 
@@ -597,6 +598,16 @@ class CalibrateTab(Tab):
         self._ocr = None
         self._clips: list[checks.CellClip] = []
         self._clip_check: str | None = None
+        #: Whether the displays after the first take their strip position from
+        #: it. Kept in the GUI's own preferences rather than in config.toml:
+        #: the daemon needs explicit numbers for every display and gains
+        #: nothing from knowing where they came from, and a config file that
+        #: says what it means is worth more than one that has to be resolved.
+        self.follow = tk.BooleanVar(value=True)
+        #: Which of the tab's two views is packed. None until the first
+        #: refresh, so the mode is set once rather than re-packed on every
+        #: configuration change -- re-packing with `before=` reorders the tab.
+        self._showing_follow: bool | None = None
         #: Guards the two-way binding between the boxes and the entry boxes.
         #: Without it, updating a field from a drag would fire the field's own
         #: handler, which would re-set the geometry, which would redraw...
@@ -619,9 +630,16 @@ class CalibrateTab(Tab):
         self.auto_button.pack(side="left", padx=(6, 0))
         ttk.Button(controls, text="Open folder", width=12,
                    command=self._open_folder).pack(side="right")
+        self.follow_box = ttk.Checkbutton(
+            controls, variable=self.follow, command=self._follow_changed, text="",
+        )
 
-        body = ttk.Frame(self)
+        # Two views of this tab, one packed at a time: the editor, and the
+        # panel shown for a display that is simply copying another's numbers.
+        self.editor = ttk.Frame(self)
+        body = self.editor
         body.pack(fill="both", expand=True, pady=(8, 0))
+        self.following_panel = self._build_following_panel()
         pictures = ttk.Frame(body)
         pictures.pack(side="left", fill="both", expand=True)
 
@@ -671,6 +689,131 @@ class CalibrateTab(Tab):
                           lambda e, i=edge, s=sign: self._arrow(e, i, s, 5), add="+")
 
         app.on_config_changed(self.refresh)
+
+    # -- following another display -------------------------------------------
+
+    def _build_following_panel(self) -> ttk.Frame:
+        frame = ttk.Frame(self, padding=(0, 20, 0, 0))
+        self.following_title = section_heading(frame, "")
+        self.following_title.pack(anchor="w")
+        self.following_text = help_label(frame, "", width=820)
+        self.following_text.pack(anchor="w", pady=(6, 10))
+        self.following_numbers = ttk.Label(frame, text="", foreground=HELP_COLOR,
+                                           font=tkfont.nametofont("TkFixedFont"))
+        self.following_numbers.pack(anchor="w", pady=(0, 14))
+        buttons = ttk.Frame(frame)
+        buttons.pack(anchor="w")
+        self.copy_button = ttk.Button(buttons, text="", command=self.save)
+        self.copy_button.pack(side="left")
+        ttk.Button(buttons, text="Calibrate this display separately",
+                   command=self._stop_following).pack(side="left", padx=(8, 0))
+        return frame
+
+    def source_display(self) -> str:
+        """The display others copy: the first one in the configuration."""
+        keys = self.app.display_keys()
+        return keys[0] if keys else ""
+
+    def follower_displays(self) -> list[str]:
+        return self.app.display_keys()[1:]
+
+    def is_following(self) -> bool:
+        """Whether the selected display is currently copying another."""
+        return bool(self.follow.get()) and self.display.get() in self.follower_displays()
+
+    def _follow_changed(self) -> None:
+        self.app.prefs["follow_first_display"] = bool(self.follow.get())
+        self._update_mode()
+        source = self.source_display().upper()
+        if self.follow.get():
+            self.app.set_status(
+                f"The other displays will use the {source} strip position. Saving writes it "
+                "to all of them."
+            )
+        else:
+            self.app.set_status("Each display is calibrated on its own now.")
+
+    def _stop_following(self) -> None:
+        self.follow.set(False)
+        self._follow_changed()
+
+    def _update_mode(self) -> None:
+        """Show either the editor or the "this one copies another" panel."""
+        followers = self.follower_displays()
+        if followers:
+            self.follow_box.configure(
+                text=f"Use the {self.source_display().upper()} strip position "
+                     f"for {', '.join(k.upper() for k in followers)}"
+            )
+            self.follow_box.pack(side="left", padx=(16, 0))
+        else:
+            self.follow_box.pack_forget()
+
+        following = self.is_following()
+        # The editing buttons live in the controls row, which stays visible in
+        # both views, so they have to be turned off by hand -- otherwise they
+        # act on an editor that is not on screen.
+        for button in (self.draw_button, self.auto_button):
+            button.configure(state="disabled" if following else "normal")
+        if not following and self.display.get() not in self._suggested:
+            self.auto_button.configure(state="disabled")
+        if following:
+            self._show_following()
+        if following != self._showing_follow:
+            self._showing_follow = following
+            if following:
+                self.editor.pack_forget()
+                self.following_panel.pack(fill="both", expand=True, before=self.output)
+            else:
+                self.following_panel.pack_forget()
+                self.editor.pack(fill="both", expand=True, pady=(8, 0), before=self.output)
+        self._update_save_button()
+
+    def _show_following(self) -> None:
+        source = self.source_display()
+        key = self.display.get()
+        geometry = configio.geometry_of(self.app.document, source)
+        self.following_title.configure(
+            text=f"{key.upper()} is using the {source.upper()} strip position"
+        )
+        self.following_text.configure(
+            text=f"The pop-out windows are usually the same size and the same shape, so the "
+                 f"position that works for the {source.upper()} normally works for the "
+                 f"{key.upper()} too -- and calibrating one display well is enough work "
+                 f"without doing it twice. Calibrate the {source.upper()}, and these numbers "
+                 f"are written to {key.upper()} when you save.\n\n"
+                 f"If the two windows are not the same size, or the {key.upper()} reads badly "
+                 f"while the {source.upper()} reads well, untick the box above (or press the "
+                 f"button below) and this display gets its own calibration."
+        )
+        self.following_numbers.configure(
+            text="   ".join(f"{name}={getattr(geometry, name)}" for name in GEOMETRY_KEYS)
+        )
+        self.copy_button.configure(
+            text=f"Copy the {source.upper()} position to {key.upper()} and save"
+        )
+
+    def _update_save_button(self) -> None:
+        targets = self.save_targets()
+        names = " and ".join(k.upper() for k in targets)
+        self.save_button.configure(
+            text=f"Save to the configuration ({names})" if len(targets) > 1
+            else "Save to the configuration"
+        )
+
+    def save_targets(self) -> list[str]:
+        """Which displays a save from here writes the geometry to.
+
+        With following on that is every display, whichever one is selected:
+        there is only one strip position, and the copy button on the panel and
+        Save on the editor are then the same action reached from two places.
+        """
+        key = self.display.get()
+        if not key:
+            return []
+        if not self.follow.get():
+            return [key]
+        return [self.source_display(), *self.follower_displays()]
 
     # -- the step panel ------------------------------------------------------
 
@@ -765,8 +908,9 @@ class CalibrateTab(Tab):
 
         self.pixels = help_label(frame, "", width=270)
         self.pixels.pack(anchor="w", pady=(8, 0))
-        ttk.Button(frame, text="Save to the configuration",
-                   command=self.save).pack(fill="x", pady=(8, 0))
+        self.save_button = ttk.Button(frame, text="Save to the configuration",
+                                      command=self.save)
+        self.save_button.pack(fill="x", pady=(8, 0))
         ttk.Button(frame, text="Undo my changes", command=self.refresh).pack(fill="x", pady=(4, 0))
 
     # -- the model -----------------------------------------------------------
@@ -877,12 +1021,35 @@ class CalibrateTab(Tab):
             self._ocr = configio.validate(self.app.document).ocr
         except Exception:  # noqa: BLE001 - a bad config is the Settings tab's problem
             self._ocr = None
-        stored = configio.get_in(self.app.document, ("display", self.display.get(), "geometry"), {})
-        known = {f for f in StripGeometry.__dataclass_fields__}
-        self.set_geometry(StripGeometry(**{k: v for k, v in stored.items() if k in known}))
+        self._resolve_follow()
+        # A follower shows the source's numbers, because those are the ones it
+        # will be given; showing its own stale values would be showing
+        # something that is about to stop being true.
+        shown = self.source_display() if self.is_following() else self.display.get()
+        self.set_geometry(configio.geometry_of(self.app.document, shown))
+        self._update_mode()
         self._load_picture()
         self.auto_button.configure(
             state="normal" if self.display.get() in self._suggested else "disabled"
+        )
+
+    def _resolve_follow(self) -> None:
+        """Decide whether the followers are following, if nobody has said.
+
+        An unset preference is answered from the configuration itself: if the
+        second display's geometry already matches the first's, it was never
+        calibrated separately and linking them changes nothing. If it differs,
+        somebody did the work, and the box starts unticked rather than
+        offering to overwrite it.
+        """
+        stored = self.app.prefs.get("follow_first_display")
+        if isinstance(stored, bool):
+            self.follow.set(stored)
+            return
+        source = self.source_display()
+        followers = self.follower_displays()
+        self.follow.set(
+            all(configio.same_geometry(self.app.document, source, key) for key in followers)
         )
 
     def _load_picture(self) -> None:
@@ -945,15 +1112,17 @@ class CalibrateTab(Tab):
 
     def save(self) -> None:
         key = self.display.get()
-        if not self._confirm_clipping(key):
+        targets = self.save_targets()
+        if not targets:
+            return
+        if not self.is_following() and not self._confirm_clipping(key):
             return
         # Edited on a copy and only adopted once it validates. Writing into
         # the live document first would leave the window holding a geometry
         # the daemon will not accept, with nothing on screen saying so.
         document = copy.deepcopy(self.app.document)
-        for name in GEOMETRY_KEYS:
-            configio.set_in(document, ("display", key, "geometry", name),
-                            float(getattr(self._geometry, name)))
+        for target in targets:
+            configio.set_geometry(document, target, self._geometry)
         base = self.app.config_path.parent if self.app.config_path else None
         try:
             configio.validate(document, base_dir=base)
@@ -978,7 +1147,7 @@ class CalibrateTab(Tab):
         self.app.document = document
         self.app.notify_config_changed()
         self.app.set_status(
-            f"Saved the {key.upper()} strip position"
+            f"Saved the strip position for {' and '.join(t.upper() for t in targets)}"
             + (f" (previous version kept as {backup.name})" if backup else "")
             + ". Check it on the Cells tab, then restart the daemon."
         )

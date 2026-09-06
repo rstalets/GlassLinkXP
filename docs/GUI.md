@@ -59,7 +59,7 @@ running daemon.
 | Start here | `synth` | The six steps of setting this up, each with a button to the tab that does it. And a way to try the whole thing with no X-Plane. |
 | Run | `run` | Start/stop, the publisher, the rate, debug output, and a live board of the twelve softkeys per display. |
 | Find windows | `list-windows` | Pick the pop-out windows off a list; applying one writes `window_title` into the config. Windows only. |
-| Calibrate | `calibrate` | Draw the strip on the captured frame with the mouse, judge it in a magnified close-up, and work through three steps. See below. |
+| Calibrate | `calibrate` | Draw the strip on the captured frame with the mouse, judge it in a magnified close-up, and work through three steps. The MFD copies the PFD unless told otherwise. See below. |
 | Cells | `dump-cells`, `tune` | Every cell as Tesseract receives it, next to the raw crop. Tune searches preprocessing settings against one cell that reads wrongly. |
 | Colours | `dump-colors` | Each cell's ring BGR/HSV and how it classified, with the rows drawn in the colour they were called. |
 | Pages | `screen-template`, `learn` | Record a softkey page into `screens.toml`; learn glyph shapes into `signatures.json`. |
@@ -117,6 +117,34 @@ with the thing it calibrates, and the user would line the boxes up carefully
 against a picture that was lying to them. `tests/test_gui_canvas.py` reads the
 green rectangles back off the canvas and compares them with `cell_rects` for
 several geometries.
+
+### One calibration for both displays
+
+The PFD and MFD pop-outs are normally the same size and shape, so the strip
+position that works for one works for the other -- and calibrating a display
+well is enough work without doing it twice. So the displays after the first
+one default to copying it: their Calibrate screen shows no editor, just a
+panel saying whose numbers they are using and a tickbox to stop. Untick it and
+that display gets the full editor and its own entry in the config.
+
+With the box ticked, a save from the Calibrate tab writes the same geometry to
+every display, whichever one is selected -- which is what makes the panel's
+copy button and the editor's Save the same action reached from two places.
+
+The choice lives in the GUI's preferences, not in `config.toml`. The daemon
+needs explicit numbers for every display and gains nothing from knowing where
+they came from, and a config file that says what it means is worth more than
+one that has to be resolved. That does mean the choice can be missing -- a
+config written before this existed, or a fresh install -- and an unset choice
+is answered from the numbers themselves: linked only if the geometries already
+match. Somebody who calibrated their MFD separately does not get it silently
+overwritten the first time they open the window. It is also self-healing: if
+the preference is ever lost, the same comparison recovers the right answer,
+because saving is what makes the geometries match or differ in the first place.
+
+One thing it does not police: the Settings tab still shows a geometry group
+per display and will happily let you edit a follower's numbers directly. The
+next save from the Calibrate tab will overwrite them.
 
 ### The clipping warning
 
@@ -206,7 +234,8 @@ g1000_softkey/gui/
   logparse.py   the daemon's log rows back into labels and colours
   schema.py     every config setting, with the text that explains it
   configio.py   config.toml in and out, including the small TOML writer
-  prefs.py      which config file was open last; not stored in config.toml
+  prefs.py      which config file was open last, and whether the displays share
+                a calibration; not stored in config.toml
 ```
 
 Nothing outside `app.py`, `tabs.py` and `widgets.py` imports Tk, which is why

@@ -157,7 +157,7 @@ python -m g1000_softkey.main run --once --image frames/xpdr.png --publisher cons
 python -m g1000_softkey.main gui                       # the window
 ```
 
-The GUI's own tests need a display; without one the 67 that build widgets skip
+The GUI's own tests need a display; without one the 78 that build widgets skip
 themselves and the rest still run. To run all of them here:
 
 ```

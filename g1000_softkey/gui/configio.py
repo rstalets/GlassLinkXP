@@ -26,7 +26,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, Mapping
 
-from ..config import AppConfig, default_config, from_mapping
+from ..config import AppConfig, StripGeometry, default_config, from_mapping
 from . import schema
 
 #: Sections in the order they are written, matching config.example.toml so a
@@ -353,6 +353,41 @@ def format_field(setting: schema.Setting, value: Any) -> str:
     if setting.kind == "float":
         return repr(float(value))
     return str(value)
+
+
+# ---------------------------------------------------------------------------
+# strip geometry, shared between displays
+# ---------------------------------------------------------------------------
+
+#: The keys a strip geometry is made of, in the order the form shows them.
+GEOMETRY_FIELDS = tuple(StripGeometry.__dataclass_fields__)
+
+
+def geometry_of(document: Mapping[str, Any], display: str) -> StripGeometry:
+    """One display's strip geometry, with the built-in defaults filled in."""
+    stored = get_in(document, ("display", display, "geometry"), {})
+    if not isinstance(stored, Mapping):
+        return StripGeometry()
+    return StripGeometry(**{k: v for k, v in stored.items() if k in GEOMETRY_FIELDS})
+
+
+def same_geometry(document: Mapping[str, Any], one: str, other: str) -> bool:
+    """Whether two displays are already reading the same part of their window.
+
+    Used to work out, for a configuration file written before the GUI offered
+    to link them, whether the second display was in fact being calibrated
+    separately. Getting that wrong in the permissive direction would silently
+    overwrite somebody's second calibration, so it is asked of the numbers
+    rather than assumed.
+    """
+    return geometry_of(document, one) == geometry_of(document, other)
+
+
+def set_geometry(document: dict[str, Any], display: str, geometry: StripGeometry) -> None:
+    """Write a strip geometry into a document, field by field."""
+    for field in GEOMETRY_FIELDS:
+        set_in(document, ("display", display, "geometry", field),
+               _plain(getattr(geometry, field)))
 
 
 def get_in(document: Mapping[str, Any], path: tuple[str, ...], default: Any = None) -> Any:

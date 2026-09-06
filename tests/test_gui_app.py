@@ -461,6 +461,156 @@ def test_a_geometry_off_the_edge_of_the_frame_is_refused(gui, tmp_path, monkeypa
     assert errors
 
 
+# -- one calibration for both displays -------------------------------------
+
+
+@pytest.fixture
+def calibrated(gui, tmp_path):
+    """The Calibrate tab, with a real config file open."""
+    path = tmp_path / "config.toml"
+    configio.save(path, configio.default_document(), backup=False)
+    gui.config_path = path
+    gui.load_config(quiet=True)
+    return gui, _tab(gui, "CalibrateTab"), path
+
+
+def test_a_fresh_configuration_links_the_displays(calibrated):
+    _gui, calibrate, _path = calibrated
+    assert calibrate.follow.get() is True
+    assert calibrate.source_display() == "pfd"
+    assert calibrate.follower_displays() == ["mfd"]
+
+
+def test_the_follower_shows_a_panel_instead_of_the_editor(calibrated):
+    _gui, calibrate, _path = calibrated
+    calibrate.display.set("mfd")
+    calibrate.refresh()
+    assert calibrate.is_following()
+    assert calibrate.following_panel.winfo_manager() == "pack"
+    assert calibrate.editor.winfo_manager() == ""
+    assert "PFD" in calibrate.following_title.cget("text")
+
+
+def test_the_source_display_still_gets_the_editor(calibrated):
+    _gui, calibrate, _path = calibrated
+    calibrate.display.set("pfd")
+    calibrate.refresh()
+    assert not calibrate.is_following()
+    assert calibrate.editor.winfo_manager() == "pack"
+
+
+def test_saving_the_source_writes_the_follower_too(calibrated):
+    from g1000_softkey.config import load_config
+
+    _gui, calibrate, path = calibrated
+    calibrate.display.set("pfd")
+    calibrate.refresh()
+    assert calibrate.save_targets() == ["pfd", "mfd"]
+    calibrate.set_geometry(replace(StripGeometry(), x=0.0273, w=0.9461))
+    calibrate.save()
+
+    config = load_config(path)
+    assert config.display("pfd").geometry == config.display("mfd").geometry
+    assert config.display("mfd").geometry.x == 0.0273
+
+
+def test_the_save_button_says_where_it_is_going(calibrated):
+    _gui, calibrate, _path = calibrated
+    calibrate.display.set("pfd")
+    calibrate.refresh()
+    assert "PFD and MFD" in calibrate.save_button.cget("text")
+    calibrate._stop_following()
+    assert calibrate.save_button.cget("text") == "Save to the configuration"
+
+
+def test_unticking_gives_the_follower_its_own_calibration(calibrated):
+    from g1000_softkey.config import load_config
+
+    _gui, calibrate, path = calibrated
+    calibrate.display.set("pfd")
+    calibrate.refresh()
+    calibrate.set_geometry(replace(StripGeometry(), x=0.0273))
+    calibrate.save()
+
+    calibrate.display.set("mfd")
+    calibrate.refresh()
+    calibrate._stop_following()
+    assert not calibrate.is_following()
+    assert calibrate.editor.winfo_manager() == "pack"
+    assert calibrate.save_targets() == ["mfd"]
+
+    calibrate.set_geometry(replace(StripGeometry(), x=0.10))
+    calibrate.save()
+    config = load_config(path)
+    assert config.display("pfd").geometry.x == 0.0273
+    assert config.display("mfd").geometry.x == 0.10
+
+
+def test_the_choice_is_remembered(calibrated):
+    gui, calibrate, _path = calibrated
+    calibrate._stop_following()
+    assert gui.prefs["follow_first_display"] is False
+    calibrate.follow.set(True)
+    calibrate._follow_changed()
+    assert gui.prefs["follow_first_display"] is True
+
+
+def test_a_configuration_already_calibrated_apart_is_not_linked(gui, tmp_path):
+    """The safety net: with no stored choice, the numbers decide.
+
+    Somebody who calibrated their MFD separately before this existed must not
+    have that work quietly overwritten the first time they open the window.
+    """
+    document = configio.default_document()
+    configio.set_geometry(document, "mfd", StripGeometry(x=0.2, y=0.8, w=0.5, h=0.1))
+    path = tmp_path / "config.toml"
+    configio.save(path, document, backup=False)
+    gui.prefs["follow_first_display"] = None
+    gui.config_path = path
+    gui.load_config(quiet=True)
+
+    calibrate = _tab(gui, "CalibrateTab")
+    assert calibrate.follow.get() is False
+    calibrate.display.set("mfd")
+    calibrate.refresh()
+    assert not calibrate.is_following()
+
+
+def test_a_stored_choice_beats_the_guess(gui, tmp_path):
+    document = configio.default_document()
+    configio.set_geometry(document, "mfd", StripGeometry(x=0.2, w=0.5))
+    path = tmp_path / "config.toml"
+    configio.save(path, document, backup=False)
+    gui.prefs["follow_first_display"] = True
+    gui.config_path = path
+    gui.load_config(quiet=True)
+    assert _tab(gui, "CalibrateTab").follow.get() is True
+
+
+def test_the_editing_buttons_are_off_while_following(calibrated):
+    """They would act on an editor that is not on screen."""
+    _gui, calibrate, _path = calibrated
+    calibrate.display.set("mfd")
+    calibrate.refresh()
+    assert str(calibrate.draw_button.cget("state")) == "disabled"
+    calibrate.display.set("pfd")
+    calibrate.refresh()
+    assert str(calibrate.draw_button.cget("state")) == "normal"
+
+
+def test_a_single_display_configuration_offers_no_checkbox(gui, tmp_path):
+    document = configio.default_document()
+    del document["display"]["mfd"]
+    path = tmp_path / "config.toml"
+    configio.save(path, document, backup=False)
+    gui.config_path = path
+    gui.load_config(quiet=True)
+    calibrate = _tab(gui, "CalibrateTab")
+    assert calibrate.follower_displays() == []
+    assert calibrate.follow_box.winfo_manager() == ""
+    assert calibrate.save_targets() == ["pfd"]
+
+
 def test_the_colour_table_is_parsed(gui):
     colors = _tab(gui, "ColorsTab")
     colors._parse(0, [

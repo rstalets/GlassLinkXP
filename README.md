@@ -275,6 +275,12 @@ expressed as *fractions* of the client area and has to be set once per setup.
    boundaries) and, when the coarse auto-detect finds the dark band at the
    bottom of the frame, `<display>_overlay_auto.png` plus a TOML snippet on
    stdout.
+   The GUI does this once for both displays. The pop-outs are normally the
+   same size, so the MFD copies the PFD's strip position unless you untick
+   **Use the PFD strip position for MFD** -- at which point it gets its own
+   editor and its own numbers. From the command line, calibrate each
+   `[display.<key>.geometry]` separately.
+
 4. Paste the suggested numbers into the config, re-run `calibrate`, and look
    at `<display>_overlay.png`: each green box must sit around exactly one
    label, with no bleed into the neighbouring cell and none of the bezel or
@@ -533,9 +539,9 @@ says:
   `[[screen]]` block; **Tools** ran the benchmark.
 * **Find windows** failed as it must on Linux, and the tab showed the command
   that failed and the daemon's own explanation of why.
-* The tests cover this without a display too: 253 of them, of which the 67 that
-  need Tk skip themselves when there is no display (`472 passed` with one,
-  `405 passed, 67 skipped` without). Four of them are there to stop the GUI
+* The tests cover this without a display too: 270 of them, of which the 78 that
+  need Tk skip themselves when there is no display (`489 passed` with one,
+  `411 passed, 78 skipped` without). Four of them are there to stop the GUI
   drifting from the daemon -- every argv the GUI can build is parsed by
   `main.build_parser()`, the softkey board's parser is fed
   `main._format_row()`'s own output, the settings form is checked against the

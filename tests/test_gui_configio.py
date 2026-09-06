@@ -173,6 +173,50 @@ def test_floats_keep_their_decimal_point():
     assert configio.format_field(schema.setting("app", "loop_hz"), 12) == "12.0"
 
 
+# -- geometry shared between displays --------------------------------------
+
+
+def test_a_displays_geometry_comes_back_with_the_defaults_filled_in():
+    document = {"display": {"pfd": {"geometry": {"x": 0.25}}}}
+    geometry = configio.geometry_of(document, "pfd")
+    assert geometry.x == 0.25
+    assert geometry.cells == StripGeometry().cells
+
+
+def test_a_display_with_no_geometry_at_all_is_the_defaults():
+    assert configio.geometry_of({}, "pfd") == StripGeometry()
+
+
+def test_a_fresh_configuration_has_both_displays_in_the_same_place():
+    """Which is why linking them can be the default without overwriting work."""
+    assert configio.same_geometry(configio.default_document(), "pfd", "mfd")
+
+
+def test_displays_calibrated_apart_are_seen_to_differ():
+    document = configio.default_document()
+    configio.set_geometry(document, "mfd", StripGeometry(x=0.2, w=0.5))
+    assert not configio.same_geometry(document, "pfd", "mfd")
+
+
+def test_writing_a_geometry_writes_every_field(tmp_path):
+    from g1000_softkey.config import load_config
+
+    document = configio.default_document()
+    source = StripGeometry(x=0.0273, y=0.915, w=0.9461, h=0.0675,
+                           cells=6, cell_pad_x=0.2, cell_pad_y=0.3)
+    configio.set_geometry(document, "mfd", source)
+    path = tmp_path / "config.toml"
+    configio.save(path, document, backup=False)
+    assert load_config(path).display("mfd").geometry == source
+
+
+def test_copying_one_display_onto_another_makes_them_match():
+    document = configio.default_document()
+    configio.set_geometry(document, "pfd", StripGeometry(x=0.0273, w=0.9461))
+    configio.set_geometry(document, "mfd", configio.geometry_of(document, "pfd"))
+    assert configio.same_geometry(document, "pfd", "mfd")
+
+
 def test_setting_a_nested_key_creates_the_tables():
     document: dict = {}
     configio.set_in(document, ("display", "pfd", "geometry", "x"), 0.5)

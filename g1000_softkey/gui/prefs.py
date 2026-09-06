@@ -23,6 +23,12 @@ DEFAULTS: dict[str, Any] = {
     "publisher": "",
     "window": "",
     "tab": 0,
+    #: Whether the displays after the first one take their strip position
+    #: from it. None means the user has not said, and the answer is worked
+    #: out from whether the geometries already match -- so a configuration
+    #: written before this existed, with a second display calibrated
+    #: separately, is not silently overwritten the first time the GUI opens it.
+    "follow_first_display": None,
 }
 
 
