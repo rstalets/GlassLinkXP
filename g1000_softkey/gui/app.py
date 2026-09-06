@@ -211,12 +211,28 @@ class GuiApp:
         return str(self.config_path.resolve()) if self.config_path else None
 
     def validate_document(self) -> str:
-        """An empty string if the current document is usable, else why not."""
+        """An empty string if the current document is usable, else why not.
+
+        Every failure is a message to show, which is what the Settings tab's
+        three call sites of ``configio.validate`` already say for themselves.
+        This one used to catch ``ConfigError`` and ``ValueError`` only, and a
+        document can raise neither: a config file holding ``loop_hz = "12"``
+        -- a string where a number belongs, which the Raw file tab writes
+        through untouched -- reaches a comparison inside the daemon's own
+        validation and comes back out as a ``TypeError``. That escaped, Tk
+        caught it, and Start did nothing at all with no dialog to say why.
+
+        A ``ConfigError`` is a sentence written for the user, so it is shown
+        as it is. Anything else is a bug or a mistyped value, and its class is
+        worth having in front of whoever is reading the message.
+        """
         try:
             base = self.config_path.parent if self.config_path else None
             configio.validate(self.document, base_dir=base)
-        except (ConfigError, ValueError) as exc:
+        except ConfigError as exc:
             return str(exc)
+        except Exception as exc:  # noqa: BLE001 - every failure is a message to show
+            return f"{type(exc).__name__}: {exc}"
         return ""
 
     def display_keys(self) -> list[str]:

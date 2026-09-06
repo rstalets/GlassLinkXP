@@ -259,6 +259,51 @@ def test_the_daemon_and_a_one_shot_command_are_separate_processes(gui):
     assert gui.daemon is not gui.task
 
 
+# -- validating before starting --------------------------------------------
+
+
+def test_a_string_where_a_number_belongs_does_not_raise_ConfigError(gui):
+    """The premise of the test below, taken from the daemon rather than assumed.
+
+    A hand-edited `loop_hz = "12"` reaches a comparison inside `from_mapping`
+    and comes back out as a TypeError, which is neither a ConfigError nor a
+    ValueError -- so a validator that catches only those two lets it escape.
+    """
+    from g1000_softkey.config import ConfigError, from_mapping
+
+    with pytest.raises(Exception) as raised:
+        from_mapping({"app": {"loop_hz": "12"}})
+    assert not isinstance(raised.value, (ConfigError, ValueError))
+
+
+def test_a_document_the_daemon_cannot_read_at_all_is_a_message_not_a_crash(gui):
+    gui.document = {"app": {"loop_hz": "12"}}
+    problem = gui.validate_document()
+    assert problem
+    assert "TypeError" in problem
+
+
+def test_a_config_error_is_shown_as_the_sentence_it_is(gui):
+    gui.document = configio.default_document()
+    gui.document["app"]["loop_hz"] = 0
+    assert "loop_hz" in gui.validate_document()
+    assert "ConfigError" not in gui.validate_document()
+
+
+def test_start_says_why_rather_than_doing_nothing(gui, monkeypatch):
+    """Start went quiet: the dialog is raised from the escaping exception's place."""
+    errors = []
+    monkeypatch.setattr("tkinter.messagebox.showerror",
+                        lambda title, message, **k: errors.append(message))
+    started = []
+    monkeypatch.setattr(gui.daemon, "start", lambda *a, **k: started.append(a))
+    gui.document = {"app": {"loop_hz": "12"}}
+
+    _tab(gui, "RunTab").start()
+
+    assert errors and not started
+
+
 # -- the poll loop ---------------------------------------------------------
 #
 # The loop is what makes every other event in this file arrive at all: the
