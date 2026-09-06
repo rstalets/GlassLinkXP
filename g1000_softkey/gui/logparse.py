@@ -20,6 +20,7 @@ wondering why the board went blank.
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
 
@@ -92,6 +93,76 @@ def parse_row(line: str) -> LabelRow | None:
             backgrounds[index] = BACKGROUND_VALUES.get(entry.group("name"), BLACK)
 
     return LabelRow(match.group("display"), tuple(labels), tuple(backgrounds))
+
+
+# ---------------------------------------------------------------------------
+# `list-windows`
+# ---------------------------------------------------------------------------
+
+#: A quoted string as ``repr`` writes one -- either quote character, with its
+#: own escapes inside. Which one repr picks depends on the *contents*: it
+#: prefers single quotes and switches to double as soon as the string holds a
+#: single quote of its own. That is the whole reason this parser is here.
+_QUOTED = r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\""
+
+#: One line of ``list-windows`` output, as ``capture.WindowInfo.__str__``
+#: writes it:
+#:
+#:     hwnd=0x00010F42 pid=1234   1288x832 class='X-Plane' title='G1000 PFD'
+#:
+#: The class and title come from ``repr()``, so a window called
+#: ``Cirrus SR22's PFD`` is printed in double quotes instead. A pattern with a
+#: single quote typed into it therefore skipped exactly those windows, and the
+#: Find windows tab told the user "No windows matched" with the line they were
+#: looking for visible in the pane above it.
+_WINDOW = re.compile(
+    rf"hwnd=(?P<hwnd>\S+)\s+pid=(?P<pid>\d+)\s+(?P<width>\d+)x(?P<height>\d+)\s+"
+    rf"class=(?P<cls>{_QUOTED})\s+title=(?P<title>{_QUOTED})\s*$"
+)
+
+
+@dataclass(frozen=True)
+class WindowLine:
+    """One window the daemon listed."""
+
+    hwnd: str
+    pid: int
+    width: int
+    height: int
+    class_name: str
+    title: str
+
+    @property
+    def size(self) -> str:
+        return f"{self.width}x{self.height}"
+
+
+def parse_window(line: str) -> WindowLine | None:
+    """One listed window out of a log line, or None if it is not one.
+
+    The quoted halves are turned back into strings by ``ast.literal_eval``,
+    which is the exact inverse of the ``repr`` that wrote them -- so a title
+    containing a quote, a backslash or a tab arrives as the title, rather than
+    as the source text that spells it.
+    """
+    match = _WINDOW.search(line)
+    if match is None:
+        return None
+    try:
+        class_name = ast.literal_eval(match.group("cls"))
+        title = ast.literal_eval(match.group("title"))
+    except (SyntaxError, ValueError):  # not a repr after all
+        return None
+    if not isinstance(class_name, str) or not isinstance(title, str):
+        return None
+    return WindowLine(
+        hwnd=match.group("hwnd"),
+        pid=int(match.group("pid")),
+        width=int(match.group("width")),
+        height=int(match.group("height")),
+        class_name=class_name,
+        title=title,
+    )
 
 
 #: Log levels as the daemon's format string writes them, longest first so

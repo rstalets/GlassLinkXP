@@ -125,3 +125,73 @@ def test_a_recovering_display_is_noticed():
 
 def test_an_ordinary_line_says_nothing_about_health():
     assert logparse.parse_health("18:04:11 INFO    g1000_softkey: [pfd] 1:INSET") is None
+
+
+# -- the window list -------------------------------------------------------
+#
+# The Find windows tab reads `list-windows` output, and that parser lived in
+# tabs.py with its quotes typed in by hand. WindowInfo.__str__ formats the
+# class and title with repr(), which uses double quotes as soon as the string
+# contains a single one -- so a window called "Cirrus SR22's PFD" did not
+# match, and the user was told "No windows matched" with the line visible in
+# the pane above. Tested here the way the label rows are: by formatting a real
+# WindowInfo and reading it back, never from a sample typed into the test.
+
+
+def _window(title="G1000 PFD", class_name="X-Plane"):
+    from g1000_softkey.capture import WindowInfo
+
+    return WindowInfo(hwnd=0x10F42, title=title, class_name=class_name,
+                      width=1288, height=832, pid=1234)
+
+
+def _listed(window):
+    """The line `cmd_list_windows` prints for a window, indent and all."""
+    return f"  {window}"
+
+
+def test_a_window_round_trips():
+    window = _window()
+    parsed = logparse.parse_window(_listed(window))
+    assert parsed is not None
+    assert parsed.title == window.title
+    assert parsed.class_name == window.class_name
+    assert parsed.pid == window.pid
+    assert parsed.width == window.width
+    assert parsed.height == window.height
+    assert parsed.size == f"{window.width}x{window.height}"
+    assert parsed.hwnd == f"0x{window.hwnd:08X}"
+
+
+@pytest.mark.parametrize("title", [
+    "G1000 PFD",
+    "Cirrus SR22's PFD",          # repr switches to double quotes for this one
+    'a "quoted" window',
+    """both ' and " in one title""",
+    "C:\\Users\\pilot\\X-Plane 12",
+    "Ünïcöde ✈",
+    "trailing spaces   ",
+    "",
+])
+def test_every_kind_of_title_survives_the_round_trip(title):
+    window = _window(title=title)
+    parsed = logparse.parse_window(_listed(window))
+    assert parsed is not None, f"{window} did not parse"
+    assert parsed.title == title
+
+
+def test_a_class_name_with_a_quote_survives_too():
+    window = _window(class_name="X-Plane's window class")
+    parsed = logparse.parse_window(_listed(window))
+    assert parsed is not None
+    assert parsed.class_name == window.class_name
+
+
+@pytest.mark.parametrize("line", [
+    "",
+    "12 of 40 visible top-level windows",
+    "18:04:11 INFO    g1000_softkey: [pfd] 1:INSET",
+    "hwnd=0x1 pid=2 3x4 class='X' title=unquoted",
+])
+def test_lines_that_are_not_windows_are_ignored(line):
+    assert logparse.parse_window(line) is None

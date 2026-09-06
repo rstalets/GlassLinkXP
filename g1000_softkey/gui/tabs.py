@@ -25,7 +25,7 @@ from dataclasses import replace
 from ..color import BACKGROUND_NAMES, BLACK
 from ..config import StripGeometry
 from . import checks, commands, configio, geometry, schema
-from .logparse import classify, parse_health, parse_row
+from .logparse import classify, parse_health, parse_row, parse_window
 from .runner import Event, Failed, Finished, Line, Started
 from .widgets import (
     CELL_COLORS,
@@ -378,14 +378,6 @@ class RunTab(Tab):
 # ---------------------------------------------------------------------------
 
 
-#: A line of `list-windows` output:
-#:   hwnd=0x00010F42 pid=1234   1288x832 class='X-Plane' title='G1000 PFD'
-_WINDOW_LINE = re.compile(
-    r"hwnd=(?P<hwnd>\S+)\s+pid=(?P<pid>\d+)\s+(?P<size>\d+x\d+)\s+"
-    r"class='(?P<cls>.*?)'\s+title='(?P<title>.*)'\s*$"
-)
-
-
 class WindowsTab(Tab):
     """List the open windows and put one into the config as a display."""
 
@@ -454,13 +446,12 @@ class WindowsTab(Tab):
             return
         found = 0
         for line in lines:
-            match = _WINDOW_LINE.search(line)
-            if match is None:
+            window = parse_window(line)
+            if window is None:
                 continue
             found += 1
             self.tree.insert("", "end", values=(
-                match.group("title"), match.group("size"),
-                match.group("cls"), match.group("pid"),
+                window.title, window.size, window.class_name, window.pid,
             ))
         self.app.set_status(
             f"{found} window(s) listed. Select one and apply it to a display."

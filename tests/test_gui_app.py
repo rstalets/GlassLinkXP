@@ -669,6 +669,26 @@ def test_the_window_list_is_parsed_and_can_be_applied(gui):
     assert gui.document["display"]["pfd"]["window_title"] == "G1000 PFD (Cessna)"
 
 
+def test_a_window_whose_title_has_an_apostrophe_is_listed(gui):
+    """It was dropped, and the tab said "No windows matched" with the line
+    plainly visible above it. Built from a real WindowInfo, because a sample
+    typed into a test is what hid this in the first place."""
+    from g1000_softkey.capture import WindowInfo
+
+    window = WindowInfo(hwnd=0x10F42, title="Cirrus SR22's PFD", class_name="X-Plane",
+                        width=1288, height=832, pid=1234)
+    windows = _tab(gui, "WindowsTab")
+    windows._parse(0, ["1 of 40 visible top-level windows", f"  {window}"])
+
+    rows = windows.tree.get_children()
+    assert len(rows) == 1
+    assert windows.tree.item(rows[0], "values")[0] == window.title
+    windows.tree.selection_set(rows[0])
+    windows.target.set("pfd")
+    windows.apply()
+    assert gui.document["display"]["pfd"]["window_title"] == window.title
+
+
 def test_the_calibration_suggestion_is_read_from_the_output(gui):
     calibrate = _tab(gui, "CalibrateTab")
     calibrate._parse(0, [
