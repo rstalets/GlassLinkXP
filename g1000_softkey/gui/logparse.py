@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import ast
 import re
+import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 from ..color import BACKGROUND_NAMES, BLACK
 
@@ -295,6 +297,43 @@ def parse_screen_block(lines: Iterable[str]) -> list[str]:
     while block and not block[-1].strip():
         block.pop()
     return block
+
+
+# ---------------------------------------------------------------------------
+# `tune`
+# ---------------------------------------------------------------------------
+
+#: The block ``tuning.result_block`` prints -- valid TOML on its own, so it is
+#: parsed with the real parser rather than a pattern invented here. These are
+#: exactly the values the Settings form already edits (psm, threshold,
+#: upscale, sharpen_ladder), and a second notation for them would be one more
+#: way to disagree with the file they end up in.
+TUNING_MARKER = "[tuning_result]"
+
+
+def parse_tuning_result(lines: Iterable[str]) -> dict[str, Any] | None:
+    """The settings ``tune`` suggested, or None if it found nothing to suggest.
+
+    The block runs from the marker to the next blank line -- ``tune`` always
+    prints it last when it runs at all, but a bad truth file makes it exit
+    before printing anything, and there is nothing to parse then.
+    """
+    block: list[str] = []
+    for line in lines:
+        if line.strip() == TUNING_MARKER:
+            block = [line.rstrip()]
+        elif block:
+            if not line.strip():
+                break
+            block.append(line.rstrip())
+    if not block:
+        return None
+    try:
+        data = tomllib.loads("\n".join(block))
+    except tomllib.TOMLDecodeError:
+        return None
+    result = data.get("tuning_result")
+    return result if isinstance(result, dict) else None
 
 
 #: Log levels as the daemon's format string writes them, longest first so

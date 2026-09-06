@@ -325,22 +325,23 @@ def test_the_frame_source_is_passed_to_every_command_that_takes_one(gui, monkeyp
 
 
 def test_tune_is_not_given_the_shared_frame_source(gui, monkeypatch):
-    """Its --image is one cell picture, not the whole frame."""
+    """It reads a truth file, not a live frame -- the shared --image must
+    never appear on its command line even though the frame source is set."""
     started = {}
     monkeypatch.setattr(gui.task, "start", lambda command, cwd=None: started.update(
         command=command))
     gui.image_source.set("/frames")
-    gui.run_task(commands.TUNE, {"image": "/cells/pfd_01_raw.png", "expect": "0"},
-                 include_image=False)
+    gui.run_task(commands.TUNE, {"truth": "/cells/truth.toml"}, include_image=False)
     assert "/frames" not in started["command"]
-    assert "/cells/pfd_01_raw.png" in started["command"]
+    assert "--image" not in started["command"]
+    assert "/cells/truth.toml" in started["command"]
 
 
 def test_a_missing_required_option_is_refused_before_spawning(gui, monkeypatch):
     monkeypatch.setattr("tkinter.messagebox.showwarning", lambda *a, **k: None)
     spawned = []
     monkeypatch.setattr(gui.task, "start", lambda *a, **k: spawned.append(a))
-    assert gui.run_task(commands.TUNE, {"image": "x.png"}, include_image=False) is False
+    assert gui.run_task(commands.TUNE, {}, include_image=False) is False
     assert not spawned
 
 

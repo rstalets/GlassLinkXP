@@ -125,6 +125,15 @@ grows strokes instead, turning a 0 into a B. The amount that works depends on
 the font and the capture scale, so each rung is tried and the answer the
 vocabulary agrees with wins. The first rung is no sharpening at all.
 
+Picking those rungs from a single cell is exactly what caused the regression
+this paragraph is about: a rung strong enough to open up a 0 also, in one real
+capture, turned a 6 into a 5 and a 7 into nothing -- because the rung that
+fixed one cell was never checked against any other, and the ladder is the same
+one every cell on every frame is read with. `tune --truth <file>` (see
+`tuning.py`) now searches against every labelled cell on every page it is
+given and keeps a candidate only when it fixes something without making
+anything else, on any page, read wrong.
+
 **Confidence gates the early exit.** Landing on a known label is not proof:
 every digit 0-7 is a valid softkey, so a 0 misread as 2 still matches exactly.
 Only a hit that is also confident ends the search.

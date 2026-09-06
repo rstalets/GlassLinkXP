@@ -72,7 +72,7 @@ bar with a count and the traceback kept on the app (`poll_failures`,
 | Run | `run` | Start/stop, the publisher, the rate, debug output, and a live board of the twelve softkeys per display. |
 | Find windows | `list-windows` | Pick the pop-out windows off a list; applying one writes `window_title` into the config. Windows only. |
 | Calibrate | `calibrate` | Draw the strip on the captured frame with the mouse, judge it in a magnified close-up, and work through three steps. The MFD copies the PFD unless told otherwise. See below. |
-| Cells | `dump-cells`, `tune` | Every cell as Tesseract receives it, next to the raw crop. Tune searches preprocessing settings against one cell that reads wrongly. |
+| Cells | `dump-cells`, `tune` | Every cell as Tesseract receives it, next to the raw crop. Type what a cell should read, queue the page, repeat on other pages, then Run tuning searches sharpening/upscale/threshold settings that fix a queued cell without breaking another. See below. |
 | Colours | `dump-colors` | Each cell's ring BGR/HSV and how it classified, with the rows drawn in the colour they were called. |
 | Pages | `screen-template` | Record a softkey page into `screens.toml`. |
 | Vocabulary | -- | `labels.txt` in an editor. |
@@ -231,6 +231,7 @@ change to either fails the suite rather than the user's window:
 | the daemon's `[pfd] 1:INSET \| ...` log rows | `main._format_row()` | `tests/test_gui_logparse.py` formats a `DisplayResult` with `_format_row` and parses it back |
 | the `list-windows` lines the Find windows tab lists | `capture.WindowInfo.__str__()` | `tests/test_gui_logparse.py` formats a real `WindowInfo` and parses it back, over titles with quotes, backslashes and non-ASCII in them |
 | what `calibrate`, `dump-colors` and `screen-template` print | `main.cmd_calibrate` / `cmd_dump_colors` / `cmd_screen_template` | `tests/test_gui_logparse.py` runs each command over the synthetic frames and parses exactly what it printed |
+| the `[tuning_result]` block `tune` prints | `tuning.result_block` | `tests/test_gui_logparse.py` and `tests/test_tuning.py` both round-trip it through the real TOML parser |
 | every config setting | the dataclasses in `config.py` | `tests/test_gui_schema.py` fails if a field is neither in `gui/schema.py` nor in `NOT_IN_THE_FORM` with a reason |
 | where the strip and its cells are | `strip.strip_rect` / `strip.cell_rects` | `tests/test_gui_geometry.py` compares the editor's pixels with theirs; `tests/test_gui_canvas.py` reads the drawn boxes back off the canvas |
 | whether a crop cuts a label | `strip.clipped_edges` | shared outright: the editor's amber boxes and `run -v`'s `CLIPPED?` are the same function |
@@ -243,6 +244,16 @@ window-list parser was written from a sample typed into a comment beside it,
 the sample had no apostrophe in it, and so the parser and its test agreed with
 each other while disagreeing with the producer for every aircraft whose name
 has one.
+
+One coupling runs the other way: the Cells tab *writes* a `tune --truth` file
+for `tuning.load_truth` to read, rather than parsing anything the CLI printed.
+That writer (`configio.dumps_truth`) deliberately does not live in `tuning.py`
+-- that module imports the pipeline (cv2, Tesseract) to do the searching, and
+the GUI must never pull that into its own process just to serialise a form's
+queued pages, the same reason `cmd_run` is a child rather than a function
+call. `tests/test_tuning.py` holds the coupling the same way as the ones
+above: it feeds `dumps_truth`'s actual output through the real
+`tuning.load_truth` rather than asserting on a hand-typed TOML fixture.
 
 The alternative to parsing the log rows was a second, machine-readable output
 mode on `run`. That would be a second thing to keep correct, and a board fed

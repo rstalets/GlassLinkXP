@@ -20,7 +20,7 @@ def _sample(option: commands.Option):
         return option.choices[0]
     if option.default is not None:
         return option.default
-    return {"labels": "A,B,C", "expect": "0", "hz": "8"}.get(option.key, "value")
+    return {"labels": "A,B,C", "hz": "8"}.get(option.key, "value")
 
 
 @pytest.mark.parametrize("spec", commands.COMMANDS, ids=lambda s: s.name)
@@ -66,7 +66,7 @@ def test_config_and_verbose_come_first():
 
 def test_a_required_option_left_empty_is_refused():
     with pytest.raises(commands.MissingOption):
-        commands.build_argv(commands.TUNE, {"image": "cell.png"})
+        commands.build_argv(commands.TUNE, {})
 
 
 def test_a_value_outside_the_choices_is_refused():

@@ -16,7 +16,7 @@ import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import font as tkfont
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import messagebox, ttk
 from typing import Any
 
 from dataclasses import replace
@@ -31,6 +31,7 @@ from .logparse import (
     parse_health,
     parse_row,
     parse_screen_block,
+    parse_tuning_result,
     parse_window,
 )
 from .runner import Event, Failed, Finished, Line, Started
@@ -1192,7 +1193,16 @@ class CalibrateTab(Tab):
 
 
 class CellsTab(Tab):
-    """What Tesseract is actually given, cell by cell."""
+    """What Tesseract is actually given, cell by cell, and the sharpening tuner.
+
+    Tuning used to search against one cell picture at a time, which found a
+    setting that fixed the cell it was aimed at and, in one real capture,
+    quietly turned a different cell's 6 into a 5. So instead of a Tune button
+    per cell, the boxes here are typed into (leave the rest blank) and queued
+    with **Add this page** -- across as many pages, and as many displays, as
+    the run should be checked against -- before **Run tuning** searches for a
+    change that fixes something without breaking anything already queued.
+    """
 
     tab_title = "Cells"
 
@@ -1201,6 +1211,14 @@ class CellsTab(Tab):
         self.display = tk.StringVar(value="")
         self.out = tk.StringVar(value=str(app.project_root / "cells"))
         self._views: list[tuple[ImageView, ImageView, ttk.Label]] = []
+        self._expect: list[tk.StringVar] = [tk.StringVar() for _ in range(12)]
+        #: Pages queued for the tuner: {"dir", "display", "expect"} snapshots
+        #: taken by add_tuning_page(), one per press. Plain dicts rather than
+        #: tuning.TuningCase so this module never has to import the pipeline
+        #: (cv2, Tesseract) that module needs to search them -- the GUI only
+        #: ever shells out to that search, the same as everything else here.
+        self._tuning_cases: list[dict[str, Any]] = []
+        self._suggested: dict[str, Any] | None = None
 
         controls = ttk.Frame(self)
         controls.pack(fill="x")
@@ -1220,7 +1238,8 @@ class CellsTab(Tab):
             "it should look that way for the highlighted softkey too. Bottom row is the "
             "raw crop. If a cell is clipped or has its neighbour's label in it, go back to "
             "Calibrate -- that is a geometry problem and no amount of OCR tuning will fix "
-            "it. If a cell looks right but reads wrong, use Tune on it.",
+            "it. If a cell looks right but reads wrong, type what it should say in the box "
+            "below it and use the sharpening tuner underneath.",
             width=900,
         ).pack(anchor="w", pady=(6, 8))
 
@@ -1242,9 +1261,35 @@ class CellsTab(Tab):
             raw.pack(fill="x")
             caption = ttk.Label(block, text="", foreground=HELP_COLOR, anchor="center")
             caption.pack(fill="x")
-            ttk.Button(block, text="Tune", width=6,
-                       command=lambda i=index: self.tune(i + 1)).pack(pady=(0, 3))
+            HintEntry(block, hint="should read", textvariable=self._expect[index],
+                      justify="center").pack(fill="x", pady=(0, 3), padx=2)
             self._views.append((prep, raw, caption))
+
+        tuner = ttk.LabelFrame(self, text="  Sharpening tuner  ", padding=PAD)
+        tuner.pack(fill="x", pady=(10, 0))
+        row = ttk.Frame(tuner)
+        row.pack(fill="x")
+        ttk.Button(row, text="Add this page", width=14,
+                   command=self.add_tuning_page).pack(side="left")
+        ttk.Button(row, text="Clear queue", width=11,
+                   command=self.clear_tuning_queue).pack(side="left", padx=(6, 0))
+        self.queue_label = ttk.Label(row, text="No pages queued yet.")
+        self.queue_label.pack(side="left", padx=(12, 0))
+        self.save_button = ttk.Button(row, text="Save suggested settings",
+                                      command=self.save_tuning_result, state="disabled")
+        self.save_button.pack(side="right")
+        ttk.Button(row, text="Run tuning", width=11,
+                   command=self.run_tuning).pack(side="right", padx=(0, 10))
+        help_label(
+            tuner,
+            "Type what a cell should read above, leave the rest blank, then Add this page. "
+            "Read a different page (or point Display at the other one) and add that too, to "
+            "cover more than one page in the same search. Run tuning then searches sharpening, "
+            "upscaling and thresholding settings and keeps only a change that fixes a queued "
+            "cell without making any other queued cell -- on any page -- read wrong. Save "
+            "suggested settings writes what it found into config.toml.",
+            width=900,
+        ).pack(anchor="w", pady=(6, 0))
 
         self.output = OutputPane(self, height=8)
         self.output.pack(fill="both", expand=True, pady=(10, 0))
@@ -1271,33 +1316,110 @@ class CellsTab(Tab):
             raw.show(raw_path if raw_path.is_file() else None)
             caption.configure(text="prep / raw" if prep_path.is_file() else "")
 
-    def tune(self, cell: int) -> None:
-        key = self.display.get()
-        path = Path(self.out.get()) / f"{key}_{cell:02d}_raw.png"
-        if not path.is_file():
-            self.app.set_status("Read the cells first -- there is no picture to tune against.",
-                                "warning")
-            return
-        expected = simpledialog.askstring(
-            "Tune cell",
-            f"What does cell {cell} actually say?\n\n"
-            "Type it exactly as the sim draws it, in capitals -- for example 0, or TMR/REF. "
-            "Every combination of upscaling, sharpening and thresholding is then tried "
-            "against this one picture, and the ones that read it correctly are listed, "
-            "most confident first.",
-            parent=self.app.root,
-        )
-        if not expected:
-            return
-        self.app.run_task(
-            commands.TUNE, {"image": str(path), "expect": expected}, self.output,
-            include_image=False,
-        )
-
     def _open_folder(self) -> None:
         self.show_output_folder(
             commands.DUMP_CELLS, {"out": self.out.get()},
             "There is nothing there yet -- read the cells first.",
+        )
+
+    # -- the sharpening tuner --------------------------------------------
+
+    def add_tuning_page(self) -> None:
+        key = self.display.get()
+        folder = Path(self.out.get())
+        expect = {i + 1: v.get().strip().upper() for i, v in enumerate(self._expect)
+                 if v.get().strip()}
+        if not expect:
+            self.app.set_status(
+                "Type what at least one cell should read before adding this page.", "warning"
+            )
+            return
+        missing = [i for i in expect if not (folder / f"{key}_{i:02d}_raw.png").is_file()]
+        if missing:
+            self.app.set_status(
+                "Read the cells first -- there is no picture for this display yet.", "warning"
+            )
+            return
+        self._tuning_cases.append({"dir": str(folder.resolve()), "display": key, "expect": expect})
+        for v in self._expect:
+            v.set("")
+        self._update_queue_label()
+        self.app.set_status(
+            f"Queued {key} ({len(expect)} cell(s)). Capture a different page and add it too, "
+            "or press Run tuning."
+        )
+
+    def clear_tuning_queue(self) -> None:
+        self._tuning_cases = []
+        self._suggested = None
+        self.save_button.configure(state="disabled")
+        self._update_queue_label()
+
+    def _update_queue_label(self) -> None:
+        if not self._tuning_cases:
+            self.queue_label.configure(text="No pages queued yet.")
+            return
+        cells = sum(len(case["expect"]) for case in self._tuning_cases)
+        pages = len(self._tuning_cases)
+        self.queue_label.configure(
+            text=f"{pages} page{'s' if pages != 1 else ''} queued, {cells} cell(s)."
+        )
+
+    def run_tuning(self) -> None:
+        if not self._tuning_cases:
+            self.app.set_status("Add at least one page to the queue first.", "warning")
+            return
+        truth_path = self.app.project_root / "tuning" / "truth.toml"
+        try:
+            configio.save_text(truth_path, configio.dumps_truth(self._tuning_cases), backup=False)
+        except configio.ConfigIoError as exc:
+            self.app.set_status(str(exc), "error")
+            return
+        self._suggested = None
+        self.save_button.configure(state="disabled")
+        self.app.run_task(
+            commands.TUNE, {"truth": str(truth_path)}, self.output,
+            include_image=False, on_finish=self._tuning_finished,
+        )
+
+    def _tuning_finished(self, _code: int, lines: list[str]) -> None:
+        self._suggested = parse_tuning_result(lines)
+        self.save_button.configure(state="normal" if self._suggested else "disabled")
+
+    def save_tuning_result(self) -> None:
+        if not self._suggested:
+            return
+        document = copy.deepcopy(self.app.document)
+        for key in ("psm", "threshold", "upscale", "sharpen_ladder"):
+            if key in self._suggested:
+                configio.set_in(document, ("ocr", key), self._suggested[key])
+        base = self.app.config_path.parent if self.app.config_path else None
+        try:
+            configio.validate(document, base_dir=base)
+        except Exception as exc:  # noqa: BLE001 - every failure is a message to show
+            messagebox.showerror("G1000 softkey labels",
+                                 f"Those settings will not load:\n\n{exc}",
+                                 parent=self.app.root)
+            return
+        if self.app.config_path is None:
+            messagebox.showinfo(
+                "G1000 softkey labels",
+                "There is no configuration file open yet. Press New... at the top of the "
+                "window to make one, then run tuning again.",
+                parent=self.app.root,
+            )
+            return
+        try:
+            backup = configio.save(self.app.config_path, document)
+        except configio.ConfigIoError as exc:
+            self.app.set_status(str(exc), "error")
+            return
+        self.app.document = document
+        self.app.notify_config_changed()
+        self.app.set_status(
+            "Saved the suggested OCR settings"
+            + (f" (previous version kept as {backup.name})" if backup else "")
+            + ". Restart the daemon to use them."
         )
 
 

@@ -35,7 +35,7 @@ import json
 import shutil
 import tomllib
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from ..config import AppConfig, StripGeometry, default_config, from_mapping
 from . import schema
@@ -382,6 +382,40 @@ def _toml_literal(value: Any) -> str:
     single-line box in the first place.
     """
     return json.dumps(_plain(value))
+
+
+# ---------------------------------------------------------------------------
+# tune --truth files
+# ---------------------------------------------------------------------------
+
+
+def dumps_truth(cases: Sequence[Mapping[str, Any]]) -> str:
+    """Serialise sharpening-tuner cases as a ``tune --truth`` file.
+
+    Lives beside :func:`dumps` rather than in ``tuning.py``, which is where
+    the search this file feeds actually runs: that module imports the
+    pipeline (cv2, Tesseract) to do the searching, and the GUI must never pull
+    that into its own process just to write a form's queued cases out to a
+    file -- it only ever shells out to the search, the same as everything
+    else it runs. ``tests/test_tuning.py`` checks the round trip through the
+    real ``tuning.load_truth`` instead.
+    """
+    try:
+        import tomli_w
+    except ImportError as exc:  # pragma: no cover - depends on the install
+        raise ConfigIoError(
+            "tomli-w is needed to write a tuning file and is not installed. "
+            "Run: pip install tomli-w"
+        ) from exc
+    document = {"case": [
+        {
+            "dir": str(case["dir"]),
+            "display": str(case["display"]),
+            "expect": {str(cell): str(label) for cell, label in sorted(case["expect"].items())},
+        }
+        for case in cases
+    ]}
+    return tomli_w.dumps(document)
 
 
 def get_in(document: Mapping[str, Any], path: tuple[str, ...], default: Any = None) -> Any:
