@@ -306,7 +306,18 @@ def parse_field(setting: schema.Setting, text: str) -> Any:
 
 
 def format_field(setting: schema.Setting, value: Any) -> str:
-    """A config value as the text to put in the form field."""
+    """A config value as the text to put in the form field.
+
+    The ``int`` branch mirrors the ``float`` one above it, and it is not
+    cosmetic. TOML has two number types, and the daemon takes either for a
+    whole-number setting: ``change_tolerance = 6.0`` is legal and loads
+    exactly like ``6``. Without this the form put ``6.0`` in the box,
+    ``parse_field`` refused it as "not a whole number", and because
+    ``_collect`` gives up on the first bad field that one number made the
+    whole form unsaveable -- with an error naming a setting the user had not
+    touched. A float that is not a whole number is still shown as it is and
+    still refused: that one really is not an integer.
+    """
     if value is None:
         return ""
     if setting.kind == "bool":
@@ -315,6 +326,12 @@ def format_field(setting: schema.Setting, value: Any) -> str:
         return _toml_literal(value)
     if setting.kind == "float":
         return repr(float(value))
+    if setting.kind == "int":
+        if isinstance(value, bool):
+            return str(int(value))
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return str(value)
     return str(value)
 
 

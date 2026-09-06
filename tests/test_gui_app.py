@@ -534,6 +534,33 @@ def test_clearing_the_box_is_the_way_back_to_the_packages_file(gui, tmp_path):
     assert load_config(path).ocr.screens_file == OcrConfig().screens_file
 
 
+def test_a_whole_number_written_as_a_float_does_not_block_the_whole_form(gui, tmp_path,
+                                                                        monkeypatch):
+    """One legal `change_tolerance = 6.0` used to fail Save for every field:
+    the form rendered it as "6.0" and then refused its own text."""
+    from g1000_softkey.config import load_config
+
+    warnings = []
+    monkeypatch.setattr("tkinter.messagebox.showwarning",
+                        lambda title, message, **k: warnings.append(message))
+    path = tmp_path / "config.toml"
+    document = configio.default_document()
+    document["app"]["change_tolerance"] = 6.0
+    configio.save(path, document, backup=False)
+    gui.config_path = path
+    gui.load_config(quiet=True)
+
+    settings = _tab(gui, "SettingsTab")
+    for field_path, _setting, variable in settings._fields:
+        if field_path == ("app", "loop_hz"):
+            variable.set("7.5")
+    settings.save()
+
+    assert not warnings
+    assert load_config(path).loop_hz == 7.5
+    assert load_config(path).change_tolerance == 6
+
+
 def test_a_value_the_daemon_would_reject_is_not_written(gui, tmp_path, monkeypatch):
     errors = []
     monkeypatch.setattr("tkinter.messagebox.showerror",

@@ -328,6 +328,33 @@ def test_floats_keep_their_decimal_point():
     assert configio.format_field(schema.setting("app", "loop_hz"), 12) == "12.0"
 
 
+def test_a_whole_number_written_as_a_float_still_fills_its_box():
+    """`change_tolerance = 6.0` is legal TOML and the daemon loads it. Without
+    an int branch the form showed "6.0", parse_field refused it as "not a
+    whole number", and one untouched setting made the whole form unsaveable."""
+    setting = schema.setting("app", "change_tolerance")
+    assert configio.format_field(setting, 6.0) == "6"
+    assert configio.parse_field(setting, configio.format_field(setting, 6.0)) == 6
+
+
+@pytest.mark.parametrize("section,key", [
+    ("app", "change_tolerance"), ("ocr", "psm"), ("ocr", "blank_contrast"),
+    ("color", "value_max"), ("publish", "field_width"), ("geometry", "cells"),
+])
+def test_every_whole_number_setting_survives_a_float_in_the_file(section, key):
+    setting = schema.setting(section, key)
+    assert configio.parse_field(setting, configio.format_field(setting, 8.0)) == 8
+
+
+def test_a_number_that_is_not_whole_is_still_shown_and_still_refused():
+    """It is not an integer, and pretending it is by truncating would change
+    the user's setting behind their back."""
+    setting = schema.setting("app", "change_tolerance")
+    assert configio.format_field(setting, 6.5) == "6.5"
+    with pytest.raises(configio.ConfigIoError):
+        configio.parse_field(setting, "6.5")
+
+
 # -- geometry shared between displays --------------------------------------
 
 
