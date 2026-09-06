@@ -176,9 +176,17 @@ class ImageView(ttk.Frame):
     the tab working if Pillow was built without its Tk bridge.
     """
 
-    def __init__(self, parent: tk.Misc, placeholder: str = "Nothing to show yet") -> None:
+    def __init__(
+        self, parent: tk.Misc, placeholder: str = "Nothing to show yet", allow_shrink: bool = True,
+    ) -> None:
         super().__init__(parent)
         self.placeholder = placeholder
+        #: False for a view whose whole point is showing the true pixels
+        #: Tesseract received (the Cells tab's prep preview): shrinking that
+        #: below native size is a second, LANCZOS-smoothed version of the
+        #: closed-counter bug this tab exists to catch, so it is shown at
+        #: native size or an integer multiple even if that overflows the box.
+        self.allow_shrink = allow_shrink
         self._path: Path | None = None
         self._image = None  # a reference Tk does not keep for us
         self.label = ttk.Label(self, anchor="center", justify="center",
@@ -207,7 +215,7 @@ class ImageView(ttk.Frame):
         width = max(self.winfo_width() - 8, 64)
         height = max(self.winfo_height() - 8, 64)
         try:
-            self._image = _load_scaled(self._path, width, height)
+            self._image = _load_scaled(self._path, width, height, allow_shrink=self.allow_shrink)
         except Exception as exc:  # noqa: BLE001 - a bad PNG is a message, not a crash
             self._image = None
             self.label.configure(image="", text=f"could not show {self._path.name}: {exc}")
@@ -215,11 +223,13 @@ class ImageView(ttk.Frame):
         self.label.configure(image=self._image, text="")
 
 
-def _load_scaled(path: Path, width: int, height: int):
+def _load_scaled(path: Path, width: int, height: int, allow_shrink: bool = True):
     try:
         from PIL import Image, ImageTk  # noqa: PLC0415 - optional at import time
     except ImportError:
         image = tk.PhotoImage(file=str(path))
+        if not allow_shrink:
+            return image
         factor = max(1, -(-image.width() // max(width, 1)), -(-image.height() // max(height, 1)))
         return image.subsample(factor) if factor > 1 else image
     with Image.open(path) as source:
@@ -228,8 +238,12 @@ def _load_scaled(path: Path, width: int, height: int):
         # Only ever shrunk, or enlarged by a whole number: a cell image
         # smoothed up by 1.7x would show interpolation artefacts that are not
         # in the pixels Tesseract was given, which is precisely the confusion
-        # this tab exists to remove.
-        if scale < 1.0:
+        # this tab exists to remove. A view with allow_shrink=False forgoes
+        # the shrink branch entirely -- native size or an integer multiple,
+        # even if that means overflowing whatever box it is asked to fit,
+        # because a smoothed-down view of a strictly binary image is not the
+        # picture this tab exists to show.
+        if allow_shrink and scale < 1.0:
             size = (max(1, int(source.width * scale)), max(1, int(source.height * scale)))
             resized = source.resize(size, Image.LANCZOS)
         elif scale >= 2.0:

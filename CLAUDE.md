@@ -157,7 +157,8 @@ None of these couplings is visible to the type checker:
 | a subcommand or a flag in `main.py` | `test_gui_commands.py` -- every argv the GUI can build is parsed by `build_parser()`, and it asserts the GUI covers every subcommand |
 | what `_format_row` prints | `test_gui_logparse.py` -- it formats a `DisplayResult` and parses it back |
 | `WindowInfo.__str__` | `test_gui_logparse.py` -- `parse_window` is fed a formatted `WindowInfo`, over quoting, backslashes and non-ASCII |
-| what `calibrate`, `dump-colors` or `screen-template` print | `test_gui_logparse.py` -- `parse_calibration` / `parse_colors` / `parse_screen_block` are fed the real commands' output over synthetic frames |
+| what `calibrate`, `dump-colors`, `screen-template` or `tune` print | `test_gui_logparse.py` -- `parse_calibration` / `parse_colors` / `parse_screen_block` / `parse_tuning_result` are fed the real commands' output over synthetic frames or a scripted search |
+| the shape of a `tune --truth` file | `test_tuning.py` -- the GUI's `configio.dumps_truth` (which cannot import `tuning.py`: that pulls in cv2 and Tesseract, and the GUI must never run the pipeline in its own process) is fed through the real `tuning.load_truth` |
 | a field on any config dataclass | `test_gui_schema.py` -- a field must be in `gui/schema.py` or in `NOT_IN_THE_FORM` with a reason |
 | `strip_rect` or `cell_rects` | `test_gui_geometry.py` and `test_gui_canvas.py` -- the calibration editor draws what `cell_rects` returns, and both check it against the real thing |
 | `clipped_edges` or `CLIP_MARGIN` | `test_gui_checks.py` -- the margin is 0 because the ink extents were measured across the corpus, and a test keeps that measurement true; the calibration editor and `run -v` share the function |

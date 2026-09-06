@@ -80,6 +80,42 @@ def test_dump_cells_writes_every_cell(frames, tmp_path):
     assert len(list(tmp_path.glob("pfd_*_prep.png"))) == 12
 
 
+def test_tune_reports_success_when_the_queued_cells_already_read_correctly(frames, tmp_path, capsys):
+    """A CLI-level smoke test of the whole truth-file -> search -> report path.
+
+    Uses the synthetic corpus, which this project's own docs say never to
+    tune *thresholds* against -- but every cell in it already reads correctly
+    under the shipped defaults, so this only exercises the plumbing (loading
+    the truth file, reading dump-cells' own output, printing the report), not
+    a sharpening value, which is exactly what a synthetic frame is good for.
+    """
+    cells = tmp_path / "cells"
+    assert main(["dump-cells", "--image", str(frames / "xpdr.png"), "--out", str(cells)]) == 0
+
+    truth = tmp_path / "truth.toml"
+    truth.write_text(
+        f'[[case]]\ndir = "{cells.as_posix()}"\ndisplay = "pfd"\n'
+        'expect = { 1 = "STBY", 7 = "IDENT" }\n',
+        encoding="utf-8",
+    )
+    assert main(["tune", "--truth", str(truth)]) == 0
+    out = capsys.readouterr().out
+    assert "2 labelled cell(s)" in out
+    assert "2/2 correct" in out
+    assert "nothing to fix" in out
+    assert "[tuning_result]" in out
+
+
+def test_tune_returns_2_for_a_truth_file_that_is_not_there():
+    assert main(["tune", "--truth", "/nonexistent/truth.toml"]) == 2
+
+
+def test_tune_returns_2_for_a_case_with_no_expect(tmp_path):
+    truth = tmp_path / "truth.toml"
+    truth.write_text('[[case]]\ndir = "cells"\n', encoding="utf-8")
+    assert main(["tune", "--truth", str(truth)]) == 2
+
+
 def test_bench_runs(frames, capsys):
     assert main(["bench", "--image", str(frames / "pfd_menu.png"), "-n", "3"]) == 0
     out = capsys.readouterr().out

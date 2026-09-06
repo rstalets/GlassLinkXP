@@ -72,12 +72,63 @@ bar with a count and the traceback kept on the app (`poll_failures`,
 | Run | `run` | Start/stop, the publisher, the rate, debug output, and a live board of the twelve softkeys per display. |
 | Find windows | `list-windows` | Pick the pop-out windows off a list; applying one writes `window_title` into the config. Windows only. |
 | Calibrate | `calibrate` | Draw the strip on the captured frame with the mouse, judge it in a magnified close-up, and work through three steps. The MFD copies the PFD unless told otherwise. See below. |
-| Cells | `dump-cells`, `tune` | Every cell as Tesseract receives it, next to the raw crop. Tune searches preprocessing settings against one cell that reads wrongly. |
+| Cells | `dump-cells`, `tune` | Every cell as Tesseract receives it, next to the raw crop. Type what a cell should read, queue the page, repeat on other pages, then Run tuning searches sharpening/upscale/threshold settings that fix a queued cell without breaking another. See below. |
 | Colours | `dump-colors` | Each cell's ring BGR/HSV and how it classified, with the rows drawn in the colour they were called. |
 | Pages | `screen-template` | Record a softkey page into `screens.toml`. |
 | Vocabulary | -- | `labels.txt` in an editor. |
 | Settings | -- | Every setting in the config file, as a form, plus a raw TOML editor. |
 | Tools | `bench`, `synth` | Timings, and synthetic frames. |
+
+## The Cells tab: true resolution over density
+
+The prep picture is shown at its true pixel size (or an integer multiple),
+never shrunk to fit its box: `ImageView(allow_shrink=False)` skips the
+LANCZOS-shrink branch in `_load_scaled` entirely. That is not a stylistic
+choice -- `CLAUDE.md` records that this project's hardest bug (a closed
+counter filling in during thresholding) was found only once someone saw a
+picture of the preprocessed cell, and a smoothed-down preview of a strictly
+binary image can hide exactly that. The tab used to shrink this preview to
+34% of native size to fit six columns in the window; that made it decorative
+rather than diagnostic.
+
+The box itself has no configured size, and is not `pack_propagate(False)`: it
+sizes to whatever picture it is given, rather than the picture being made to
+fit a size guessed from one geometry. A first version fixed the box at
+~320x152 -- this project's own default `StripGeometry` -- and combined with
+`allow_shrink=False` that clipped the bottom of a real, differently
+calibrated strip's taller cells instead of blurring them, which is the same
+failure in a new shape. There is no size that is right for every geometry;
+letting the box follow the picture is.
+
+True resolution does not fit twelve cells in one screen, so the grid, the
+tuner controls and the output pane all live inside one `ScrollableFrame`
+rather than being packed directly into the tab. That is deliberate beyond
+just "it doesn't fit": with three things below the top controls each wanting
+their own minimum height and no way to tell `pack` which one may give space
+back, an oversubscribed tab does not shrink its content gracefully -- it
+picks something to squeeze, arbitrarily, and previously that was the output
+pane and (once its overflow reached the window's own packing) the status bar,
+both crushed to a 1px sliver. Scrolling the lot together removes the fight
+instead of trying to referee it, and the same failure mode is why the status
+bar is now packed *before* the notebook in `GuiApp._build` -- pack gives
+space to slaves in the order they were packed, and a widget asked for after
+one with `expand=True` gets whatever that one left, which for an overflowing
+tab is nothing.
+
+## Queueing a page for the sharpening tuner
+
+**Add this page** copies the cells you typed an expected label for into their
+own folder under `tuning/queue/` rather than recording the live `dump-cells`
+output folder directly. Reading a different page overwrites that same
+`{display}_{cell:02d}_raw.png` files in place -- it is the same folder every
+time, on purpose, so **Open folder** always shows the latest capture -- and a
+queued case that pointed at it directly would silently start being checked
+against a *different* page's pixels the moment a second page was captured,
+while still carrying the first page's expected labels. That shipped once:
+three pages queued, and the search reported no improvement possible no matter
+what, because most of the labelled cells were being compared against the
+wrong picture. **Clear queue** removes the snapshot folder along with the
+in-memory queue.
 
 ## The calibration editor
 
@@ -231,6 +282,7 @@ change to either fails the suite rather than the user's window:
 | the daemon's `[pfd] 1:INSET \| ...` log rows | `main._format_row()` | `tests/test_gui_logparse.py` formats a `DisplayResult` with `_format_row` and parses it back |
 | the `list-windows` lines the Find windows tab lists | `capture.WindowInfo.__str__()` | `tests/test_gui_logparse.py` formats a real `WindowInfo` and parses it back, over titles with quotes, backslashes and non-ASCII in them |
 | what `calibrate`, `dump-colors` and `screen-template` print | `main.cmd_calibrate` / `cmd_dump_colors` / `cmd_screen_template` | `tests/test_gui_logparse.py` runs each command over the synthetic frames and parses exactly what it printed |
+| the `[tuning_result]` block `tune` prints | `tuning.result_block` | `tests/test_gui_logparse.py` and `tests/test_tuning.py` both round-trip it through the real TOML parser |
 | every config setting | the dataclasses in `config.py` | `tests/test_gui_schema.py` fails if a field is neither in `gui/schema.py` nor in `NOT_IN_THE_FORM` with a reason |
 | where the strip and its cells are | `strip.strip_rect` / `strip.cell_rects` | `tests/test_gui_geometry.py` compares the editor's pixels with theirs; `tests/test_gui_canvas.py` reads the drawn boxes back off the canvas |
 | whether a crop cuts a label | `strip.clipped_edges` | shared outright: the editor's amber boxes and `run -v`'s `CLIPPED?` are the same function |
@@ -243,6 +295,16 @@ window-list parser was written from a sample typed into a comment beside it,
 the sample had no apostrophe in it, and so the parser and its test agreed with
 each other while disagreeing with the producer for every aircraft whose name
 has one.
+
+One coupling runs the other way: the Cells tab *writes* a `tune --truth` file
+for `tuning.load_truth` to read, rather than parsing anything the CLI printed.
+That writer (`configio.dumps_truth`) deliberately does not live in `tuning.py`
+-- that module imports the pipeline (cv2, Tesseract) to do the searching, and
+the GUI must never pull that into its own process just to serialise a form's
+queued pages, the same reason `cmd_run` is a child rather than a function
+call. `tests/test_tuning.py` holds the coupling the same way as the ones
+above: it feeds `dumps_truth`'s actual output through the real
+`tuning.load_truth` rather than asserting on a hand-typed TOML fixture.
 
 The alternative to parsing the log rows was a second, machine-readable output
 mode on `run`. That would be a second thing to keep correct, and a board fed

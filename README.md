@@ -517,6 +517,14 @@ On Linux/CPython 3.11, Tesseract 5.3.4 (system) with `tesserocr` 2.11:
 * Vocabulary snapping fixed 1 of 49 labels in the offline corpus
   (`TMRIREF` -> `TMR/REF`), and is unit-tested against the usual confusions
   (`lNSET`, `DCLTP`, `0BS`, `STDBARO`).
+* The sharpening tuner's no-regression guarantee -- a rung strong enough to
+  fix one cell must not read a different, already-correct cell wrongly -- is
+  tested against a scripted OCR engine reproducing the exact failure this
+  tool exists for (a rung that opens up a `0` and also flips a `6` into a
+  `5`), and the search finds the rung that fixes the first without the
+  second. `tune --truth <file>` was also run for real, over the synthetic
+  corpus with real Tesseract: the search of ~7,200 candidate ladders across
+  32 psm/threshold/upscale combinations took a few seconds.
 
 ### The GUI, offline
 
@@ -538,20 +546,40 @@ says:
   into `config.toml` and they loaded back. Over-trimming the cells turned the
   offending boxes amber and made Save ask before writing; at a correct
   geometry it asked nothing, on every frame in the offline corpus.
-* **Cells** showed all 24 cell pictures; **Colours** parsed 24 measurements and
-  drew each row in the colour it was classified as; **Pages** captured a
-  `[[screen]]` block; **Tools** ran the benchmark.
+* **Cells** showed all 24 cell pictures, at their true pixel size rather than
+  shrunk to fit; typing an expected label into two of them, queuing the page
+  and pressing **Run tuning** shelled out to a real `tune --truth ...` (real
+  Tesseract, the full psm/threshold/upscale/ladder search over the synthetic
+  corpus, in a few seconds), reported "everything already reads correctly at
+  baseline", and Save suggested settings wrote the settings it found into
+  `config.toml` and read back the same values. Queuing three different pages
+  captured one after another into the same `dump-cells` output folder --
+  which overwrites it every time, by design -- left each queued page checked
+  against its own snapshot rather than whichever page was captured last (all
+  9 labelled cells across the three pages read correctly). At the documented
+  `minsize(940, 640)`, with real `dump-cells` output loaded, the tab's own
+  content -- more than twice the window's height once the grid, the tuner and
+  the output pane are all accounted for -- scrolls instead of squeezing the
+  output pane and the status bar to nothing, which is what it did before. A
+  box fixed at this project's own default geometry's ~320x152 still clipped a
+  taller, differently-calibrated strip's cells instead of blurring them; the
+  box now takes its size from the picture it is given rather than the other
+  way around, checked against a strip geometry more than twice as tall.
+  **Colours** parsed 24 measurements and drew each row in the colour it was
+  classified as; **Pages** captured a `[[screen]]` block; **Tools** ran the
+  benchmark.
 * **Find windows** failed as it must on Linux, and the tab showed the command
   that failed and the daemon's own explanation of why.
-* The tests cover this without a display too: 358 of them, of which the 100 that
-  need Tk skip themselves when there is no display (`594 passed` with one,
-  `494 passed, 100 skipped` without). Several are there to stop the GUI
+* The tests cover this without a display too: 369 of them, of which the 111 that
+  need Tk skip themselves when there is no display (`618 passed` with one,
+  `507 passed, 111 skipped` without). Several are there to stop the GUI
   drifting from the daemon -- every argv the GUI can build is parsed by
   `main.build_parser()`, every parser in `gui/logparse.py` is fed the output of
   the command it reads (the softkey board from `main._format_row()`, the window
-  list from a real `WindowInfo`, and the calibrate, dump-colors and
-  screen-template parsers from those commands run over synthetic frames), the
-  settings form is checked against the
+  list from a real `WindowInfo`, the calibrate, dump-colors and
+  screen-template parsers from those commands run over synthetic frames, and
+  the tuning-result parser from a real `tune` search), the settings form is
+  checked against the
   config dataclasses field by field, and the calibration editor's boxes are
   compared with the rectangles `strip.py` crops.
 

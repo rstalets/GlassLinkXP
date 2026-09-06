@@ -311,6 +311,177 @@ def test_the_output_pane_does_not_grow_without_limit(gui):
     assert "line 99" in run.output.contents()
 
 
+# -- layout at the documented minsize ---------------------------------------
+
+
+def _cell_pngs(tmp_path):
+    """A real dump-cells folder, the way the Cells tab actually gets one."""
+    from g1000_softkey import synth
+    from g1000_softkey.main import main as cli_main
+
+    frames = tmp_path / "frames"
+    synth.write_menus(frames)
+    cells = tmp_path / "cells"
+    assert cli_main(["dump-cells", "--image", str(frames / "pfd_top.png"),
+                     "--out", str(cells)]) == 0
+    return cells
+
+
+def test_status_bar_keeps_its_own_space_when_a_tab_overflows(gui):
+    """Whole-window bug, not specific to any one tab: the status bar is
+    packed after the notebook, so a tab wanting more height than the window
+    has left it nothing -- it showed as a 1px sliver, or vanished outright."""
+    gui.root.deiconify()
+    gui.root.geometry("940x640")
+    gui.root.update_idletasks()
+    assert gui.status.winfo_height() > 1
+    assert gui.status.winfo_reqheight() == gui.status.winfo_height()
+
+
+def test_cells_tab_does_not_clip_at_the_documented_minsize(gui, tmp_path):
+    """The report this pins: at minsize(940, 640) with real dump-cells output,
+    the tab used to request ~2x the height it was given, and Tk resolved the
+    shortfall by squeezing the output pane and the status bar to nothing
+    rather than by showing less of the grid. Nothing below the top controls
+    should be squeezed now -- it should be reachable by scrolling instead."""
+    cells = _cell_pngs(tmp_path)
+    tab = _tab(gui, "CellsTab")
+    tab.display.set("pfd")
+    tab.out.set(str(cells))
+    tab._show()
+
+    gui.root.deiconify()
+    gui.root.geometry("940x640")
+    gui.root.update_idletasks()
+
+    assert gui.status.winfo_height() > 1, "the status bar was squeezed to nothing"
+    assert tab.output.winfo_height() == tab.output.winfo_reqheight(), \
+        "the output pane did not get its own requested height"
+
+    # Everything the tab wants to show has to be *reachable*, even if it does
+    # not all fit on screen at once -- that is what makes scrolling different
+    # from clipping.
+    body = tab.grid_frame.master        # grid_frame's parent is the ScrollableFrame's body
+    canvas = body.master                # body's parent is the ScrollableFrame's canvas
+    canvas.update_idletasks()
+    region = canvas.bbox("all")
+    body_height = body.winfo_reqheight()
+    assert region is not None
+    assert region[3] - region[1] >= body_height - 2, \
+        "the scrollregion does not cover everything the tab packed into it"
+
+
+def test_cells_tab_boxes_are_never_shorter_than_the_picture_they_show(gui, tmp_path):
+    """Reported live: the raw crop was still clipped along the bottom after
+    the fix above. The box sizes (320x152 prep, 90x45 raw) were picked to fit
+    *this* project's default StripGeometry -- a taller one (a real
+    calibration, not the synthetic default) produces a bigger native picture,
+    and a fixed box combined with allow_shrink=False clips whatever does not
+    fit rather than blurring it. The box must size itself to the picture, not
+    the other way around."""
+    from g1000_softkey import synth
+    from g1000_softkey.main import main as cli_main
+
+    tall = StripGeometry(y=0.80, h=0.10, cell_pad_y=0.03)
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    import cv2
+    cv2.imwrite(str(frames / "pfd_top.png"), synth.render_menu("pfd_top", geom=tall))
+    cells = tmp_path / "cells"
+
+    document = configio.default_document()
+    document["display"]["pfd"]["geometry"] = dict(tall.as_dict())
+    config_path = tmp_path / "config.toml"
+    configio.save(config_path, document, backup=False)
+    gui.config_path = config_path
+    gui.load_config()
+
+    assert cli_main(["-c", str(config_path), "dump-cells",
+                     "--image", str(frames / "pfd_top.png"), "--out", str(cells)]) == 0
+
+    tab = _tab(gui, "CellsTab")
+    tab.display.set("pfd")
+    tab.out.set(str(cells))
+    tab._show()
+    gui.root.deiconify()
+    gui.root.update_idletasks()
+
+    prep, raw, _caption = tab._views[0]
+    assert prep._image is not None and raw._image is not None
+    assert prep.winfo_height() >= prep._image.height(), \
+        f"prep box ({prep.winfo_height()}) is shorter than its picture ({prep._image.height()})"
+    assert raw.winfo_height() >= raw._image.height(), \
+        f"raw box ({raw.winfo_height()}) is shorter than its picture ({raw._image.height()})"
+
+
+def test_add_tuning_page_snapshots_pixels_so_a_later_capture_cannot_overwrite_them(gui, tmp_path):
+    """Reported live: three pages queued, and the search reported settings
+    that stayed on the baseline no matter what, because every queued page's
+    ``dir`` pointed at the same dump-cells output folder -- ``Read the
+    cells`` for the next page overwrites that folder's
+    ``{key}_{cell:02d}_raw.png`` files in place, so an earlier page's queued
+    *labels* ended up checked against a *different* page's pixels the moment
+    a second page was captured."""
+    from g1000_softkey import synth
+    from g1000_softkey.main import main as cli_main
+
+    frames = tmp_path / "frames"
+    synth.write_menus(frames)
+    out = tmp_path / "cells"
+
+    tab = _tab(gui, "CellsTab")
+    tab.display.set("pfd")
+    tab.out.set(str(out))
+
+    assert cli_main(["dump-cells", "--image", str(frames / "xpdr.png"), "--out", str(out)]) == 0
+    tab._expect[0].set("stby")
+    tab.add_tuning_page()
+    assert len(tab._tuning_cases) == 1
+    page1_dir = Path(tab._tuning_cases[0]["dir"])
+    page1_pixels = (page1_dir / "pfd_01_raw.png").read_bytes()
+
+    # A second page, captured into the same out/ folder -- overwriting
+    # out/pfd_01_raw.png is exactly what a second "Read the cells" does.
+    assert cli_main(["dump-cells", "--image", str(frames / "pfd_top.png"), "--out", str(out)]) == 0
+    tab._expect[0].set("inset")
+    tab.add_tuning_page()
+    assert len(tab._tuning_cases) == 2
+    page2_dir = Path(tab._tuning_cases[1]["dir"])
+
+    assert page1_dir != page2_dir
+    assert (page1_dir / "pfd_01_raw.png").read_bytes() == page1_pixels, \
+        "page 1's queued snapshot changed after page 2 was captured"
+    assert (page1_dir / "pfd_01_raw.png").read_bytes() != (page2_dir / "pfd_01_raw.png").read_bytes()
+    assert tab._tuning_cases[0]["expect"] == {1: "STBY"}
+    assert tab._tuning_cases[1]["expect"] == {1: "INSET"}
+
+
+def test_clear_tuning_queue_removes_the_snapshots_it_made(gui, tmp_path):
+    cells = _cell_pngs(tmp_path)
+    tab = _tab(gui, "CellsTab")
+    tab.display.set("pfd")
+    tab.out.set(str(cells))
+    tab._expect[0].set("inset")
+    tab.add_tuning_page()
+    snapshot_root = gui.project_root / "tuning" / "queue"
+    assert snapshot_root.is_dir()
+
+    tab.clear_tuning_queue()
+    assert not tab._tuning_cases
+    assert not snapshot_root.exists()
+
+
+def test_cells_tab_prep_view_is_wired_to_never_shrink(gui):
+    """The mechanism (ImageView(allow_shrink=False)) has its own unit tests in
+    test_gui_widgets.py; this just pins that the Cells tab actually asks for
+    it, for both the prep and the raw view -- a future edit that dropped the
+    flag from the constructor call would still pass those unit tests."""
+    tab = _tab(gui, "CellsTab")
+    for prep, raw, _caption in tab._views:
+        assert prep.allow_shrink is False
+        assert raw.allow_shrink is False
+
+
 # -- commands --------------------------------------------------------------
 
 
@@ -325,22 +496,23 @@ def test_the_frame_source_is_passed_to_every_command_that_takes_one(gui, monkeyp
 
 
 def test_tune_is_not_given_the_shared_frame_source(gui, monkeypatch):
-    """Its --image is one cell picture, not the whole frame."""
+    """It reads a truth file, not a live frame -- the shared --image must
+    never appear on its command line even though the frame source is set."""
     started = {}
     monkeypatch.setattr(gui.task, "start", lambda command, cwd=None: started.update(
         command=command))
     gui.image_source.set("/frames")
-    gui.run_task(commands.TUNE, {"image": "/cells/pfd_01_raw.png", "expect": "0"},
-                 include_image=False)
+    gui.run_task(commands.TUNE, {"truth": "/cells/truth.toml"}, include_image=False)
     assert "/frames" not in started["command"]
-    assert "/cells/pfd_01_raw.png" in started["command"]
+    assert "--image" not in started["command"]
+    assert "/cells/truth.toml" in started["command"]
 
 
 def test_a_missing_required_option_is_refused_before_spawning(gui, monkeypatch):
     monkeypatch.setattr("tkinter.messagebox.showwarning", lambda *a, **k: None)
     spawned = []
     monkeypatch.setattr(gui.task, "start", lambda *a, **k: spawned.append(a))
-    assert gui.run_task(commands.TUNE, {"image": "x.png"}, include_image=False) is False
+    assert gui.run_task(commands.TUNE, {}, include_image=False) is False
     assert not spawned
 
 

@@ -192,13 +192,13 @@ SCREEN_TEMPLATE = CommandSpec(
 
 TUNE = CommandSpec(
     name="tune",
-    title="Tune a cell",
-    summary="Search preprocessing settings against one cell image that reads wrongly.",
+    title="Tune sharpening",
+    summary="Search sharpening-ladder settings across every labelled cell queued on the Cells "
+            "tab, keeping only a change that fixes something without breaking anything else.",
     options=(
-        Option("image", "--image", label="Cell image", required=True,
-               help="A *_raw.png written by dump-cells."),
-        Option("expect", "--expect", label="Should read", required=True,
-               help="What that cell actually says, e.g. 0"),
+        Option("truth", "--truth", label="Truth file", required=True,
+               help="A TOML file listing the queued pages and what some of their cells should "
+                    "read. The Cells tab writes this for you."),
     ),
 )
 

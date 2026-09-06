@@ -298,19 +298,34 @@ class SoftkeyReader:
         preprocessing being about as expensive per rung as the early exit was
         saving on OCR.
         """
+        return self.pick_best(
+            (self.read(index, image) for image in images), self.config.accept_confidence
+        )
+
+    @staticmethod
+    def pick_best(results: Iterable["CellResult"], accept_confidence: float) -> "CellResult":
+        """Rank already-OCR'd rungs and keep the most trustworthy, in order.
+
+        This is the half of :meth:`read_best` that must never quietly drift,
+        because it is the part that decides which reading a real strip
+        publishes. It is factored out so the sharpening tuner can replay this
+        exact ranking, unchanged, over rungs it has cached from a previous OCR
+        pass -- comparing candidate ladders is then a matter of re-ordering
+        cached results rather than re-running Tesseract for each one, and the
+        tuner's notion of "correct" can never diverge from the pipeline's.
+        """
         best: CellResult | None = None
-        for image in images:
-            result = self.read(index, image)
-            if best is None or self._rank(result) > self._rank(best):
+        for result in results:
+            if best is None or SoftkeyReader._rank(result) > SoftkeyReader._rank(best):
                 best = result
             if (
-                self.config.accept_confidence > 0
+                accept_confidence > 0
                 and result.text
                 and result.match_score >= 1.0
-                and result.confidence >= self.config.accept_confidence
+                and result.confidence >= accept_confidence
             ):
                 break
-        assert best is not None  # images is never empty
+        assert best is not None  # results is never empty
         return best
 
     @staticmethod
