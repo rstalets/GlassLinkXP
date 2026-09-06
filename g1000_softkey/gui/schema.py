@@ -184,12 +184,6 @@ OCR = Group(
                 "it fills."),
         Setting("screens_file", "path", "Pages file",
                 "The known softkey pages. Add one with the Screen template tab."),
-        Setting("signature_confidence", "float", "Shape fallback below",
-                "Below this confidence, compare the glyph's shape against learned "
-                "signatures. Off by default (0), because page lookup covers the same cells "
-                "with a stronger signal."),
-        Setting("signatures_file", "path", "Signatures file",
-                "Where learned glyph shapes are stored. Build it with the Learn tab."),
         Setting("labels_file", "path", "Vocabulary file",
                 "The list of labels a reading is snapped to. Edit it in the Vocabulary tab; "
                 "it is aircraft and version dependent."),

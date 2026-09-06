@@ -1,5 +1,5 @@
 """CLI entry point: run | gui | list-windows | calibrate | dump-cells | dump-colors
-| bench | screen-template | learn | tune | synth."""
+| bench | screen-template | tune | synth."""
 
 from __future__ import annotations
 
@@ -499,69 +499,6 @@ def cmd_tune(args: argparse.Namespace, config: AppConfig) -> int:
     return 0
 
 
-def cmd_learn(args: argparse.Namespace, config: AppConfig) -> int:
-    """Record shape signatures for a screen whose labels you can read yourself.
-
-    OCR on a ~10 px glyph is a guess; the pixels are not. Capture a screen, say
-    what it actually says, and the shapes are stored for the cells OCR is least
-    sure about later.
-
-        g1000 learn --display pfd --labels "0,1,2,3,4,5,6,7,IDENT,BKSP,BACK,"
-
-    Trailing or repeated commas mean an empty cell and are skipped. Run it on
-    several screens to build the file up; it is additive.
-    """
-    from .signatures import SignatureStore, signature
-
-    display = config.display(args.display)
-    if display is None:
-        LOG.error("no display %r in the config", args.display)
-        return 2
-
-    labels = [part.strip().upper() for part in args.labels.split(",")]
-    if len(labels) != display.geometry.cells:
-        LOG.error(
-            "got %d labels but %s has %d cells -- use empty entries for blank keys",
-            len(labels), display.key, display.geometry.cells,
-        )
-        return 2
-
-    sources = _open_sources(config, args.image)
-    try:
-        frame = _grab(sources[display.key])
-    finally:
-        for source in sources.values():
-            source.close()
-
-    store = SignatureStore.load(config.ocr.signatures_file)
-    before = len(store)
-    added = skipped = 0
-    for index, cell in enumerate(split_cells(frame, display.geometry)):
-        label = labels[index]
-        if not label:
-            continue
-        if is_blank(cell, config.ocr.blank_ink_ratio, config.ocr.blank_contrast):
-            LOG.warning("cell %d is blank but you gave %r -- skipping", index + 1, label)
-            skipped += 1
-            continue
-        amount, radius = config.ocr.sharpen_ladder[0]
-        prep = preprocess_cell(
-            cell, config.ocr.upscale, config.ocr.threshold,
-            sharpen_amount=amount, sharpen_radius=radius,
-        )
-        if store.add(label, signature(prep)):
-            added += 1
-            LOG.info("cell %-2d learned %r", index + 1, label)
-        else:
-            LOG.info("cell %-2d %r already known", index + 1, label)
-
-    store.save(config.ocr.signatures_file)
-    print(f"\n  {added} new signature(s), {len(store)} label(s) known "
-          f"(was {before}){f', {skipped} skipped' if skipped else ''}")
-    print(f"  stored in {config.ocr.signatures_file}\n")
-    return 0
-
-
 def cmd_screen_template(args: argparse.Namespace, config: AppConfig) -> int:
     """Print a [[screen]] block for whatever is on screen right now.
 
@@ -709,18 +646,6 @@ def build_parser() -> argparse.ArgumentParser:
     template.add_argument("--display", default="pfd")
     template.add_argument("--name", default="unnamed-page", help="a name for this page")
     template.set_defaults(func=cmd_screen_template)
-
-    learn = sub.add_parser(
-        "learn", help="record shape signatures for a screen you can read yourself",
-        parents=[common],
-    )
-    add_image(learn)
-    learn.add_argument("--display", default="pfd", help="which display to learn from")
-    learn.add_argument(
-        "--labels", required=True,
-        help='comma-separated, one per cell, empty for blank: "0,1,2,...,BACK,"',
-    )
-    learn.set_defaults(func=cmd_learn)
 
     tune = sub.add_parser(
         "tune", help="search preprocessing settings against one real cell image",

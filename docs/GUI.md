@@ -62,7 +62,7 @@ running daemon.
 | Calibrate | `calibrate` | Draw the strip on the captured frame with the mouse, judge it in a magnified close-up, and work through three steps. The MFD copies the PFD unless told otherwise. See below. |
 | Cells | `dump-cells`, `tune` | Every cell as Tesseract receives it, next to the raw crop. Tune searches preprocessing settings against one cell that reads wrongly. |
 | Colours | `dump-colors` | Each cell's ring BGR/HSV and how it classified, with the rows drawn in the colour they were called. |
-| Pages | `screen-template`, `learn` | Record a softkey page into `screens.toml`; learn glyph shapes into `signatures.json`. |
+| Pages | `screen-template` | Record a softkey page into `screens.toml`. |
 | Vocabulary | -- | `labels.txt` in an editor. |
 | Settings | -- | Every setting in the config file, as a form, plus a raw TOML editor. |
 | Tools | `bench`, `synth` | Timings, and synthetic frames. |

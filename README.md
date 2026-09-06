@@ -30,7 +30,7 @@ has not been run against a live X-Plane.
 ```
 g1000_softkey/
   main.py       CLI: run | gui | list-windows | calibrate | dump-cells
-                     | dump-colors | bench | screen-template | learn | tune | synth
+                     | dump-colors | bench | screen-template | tune | synth
   gui/          the window: one tab per command, over the same CLI (see docs/GUI.md)
   capture.py    WGC backend (Windows) + PNG backend (offline dev/test)
   strip.py      strip crop, 12-cell split, per-cell preprocessing, auto-detect

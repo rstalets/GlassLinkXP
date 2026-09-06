@@ -199,18 +199,6 @@ A page is only recognised when its identifying cells all read at least this conf
 
 The known softkey pages. Add one with the Screen template tab.
 
-### `signature_confidence`
-
-*Shape fallback below* — a number. Default: `0.0`.
-
-Below this confidence, compare the glyph's shape against learned signatures. Off by default (0), because page lookup covers the same cells with a stronger signal.
-
-### `signatures_file`
-
-*Signatures file* — text (a path or a name). Default: `'/home/user/g1000-softkey/g1000_softkey/signatures.json'`.
-
-Where learned glyph shapes are stored. Build it with the Learn tab.
-
 ### `labels_file`
 
 *Vocabulary file* — text (a path or a name). Default: `'/home/user/g1000-softkey/g1000_softkey/labels.txt'`.

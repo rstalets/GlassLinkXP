@@ -1419,7 +1419,7 @@ def config_path_setting(app, key: str) -> Path:
 
 
 class PagesTab(Tab):
-    """Teach the daemon which softkey pages exist, and what the glyphs look like."""
+    """Teach the daemon which softkey pages exist."""
 
     tab_title = "Pages"
 
@@ -1427,15 +1427,14 @@ class PagesTab(Tab):
         super().__init__(app)
         self.display = tk.StringVar(value="")
         self.page_name = tk.StringVar(value="")
-        self.labels = tk.StringVar(value="")
         self._block: list[str] = []
 
         help_label(
             self,
             "Reading a ten-pixel digit is hard. Recognising which softkey page is showing, "
             "from the labels that did read cleanly, is easy -- and once the page is known, "
-            "the hard cells can simply be looked up instead of guessed at. These two tools "
-            "build that knowledge from your own display.",
+            "the hard cells can simply be looked up instead of guessed at. This tool "
+            "builds that knowledge from your own display.",
             width=900,
         ).pack(anchor="w", pady=(0, 10))
 
@@ -1460,26 +1459,6 @@ class PagesTab(Tab):
             "anything read below the confidence floor is listed for you to correct first. "
             "Check the block before adding it -- a wrong label recorded here would be "
             "filled into every later frame that matches this page.",
-            width=880,
-        ).pack(anchor="w", pady=(6, 0))
-
-        # -- learn ------------------------------------------------------------
-        learn = ttk.LabelFrame(self, text="  Learn the glyph shapes  ", padding=PAD)
-        learn.pack(fill="x", pady=(10, 0))
-        row = ttk.Frame(learn)
-        row.pack(fill="x")
-        ttk.Label(row, text="This page reads").pack(side="left")
-        ttk.Entry(row, textvariable=self.labels).pack(side="left", fill="x", expand=True, padx=4)
-        ttk.Button(row, text="Learn it", width=10, command=self.learn).pack(side="left")
-        help_label(
-            learn,
-            "One label per cell, separated by commas, with nothing between the commas for "
-            "a blank key -- for example  0,1,2,3,4,5,6,7,IDENT,BKSP,BACK,  which is the "
-            "transponder keypad. The binarised, size-normalised shape of each glyph is "
-            "stored and compared by distance later, so it survives dimming, highlighting "
-            "and a window resize. This is additive: run it on each page you care about. "
-            "It is off until you raise 'Shape fallback below' in the settings, because "
-            "page lookup above covers the same cells with a stronger signal.",
             width=880,
         ).pack(anchor="w", pady=(6, 0))
 
@@ -1546,15 +1525,6 @@ class PagesTab(Tab):
             return
         self.append_button.configure(state="disabled")
         self.app.set_status(f"Added to {path.name}.")
-
-    def learn(self) -> None:
-        text = self.labels.get().strip()
-        if not text:
-            self.app.set_status("Type what the page says first, one label per cell.", "warning")
-            return
-        self.app.run_task(
-            commands.LEARN, {"display": self.display.get(), "labels": text}, self.output
-        )
 
 
 # ---------------------------------------------------------------------------

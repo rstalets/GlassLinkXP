@@ -157,10 +157,6 @@ class OcrConfig:
     #: made from a guess would propagate that guess into every cell it fills.
     screen_match_confidence: float = 85.0
     screens_file: str = str(PACKAGE_DIR / "screens.toml")
-    #: Shape-signature fallback (see signatures.py). Off by default: page
-    #: lookup covers the same cells with a stronger signal.
-    signature_confidence: float = 0.0
-    signatures_file: str = str(PACKAGE_DIR / "signatures.json")
     sharpen_ladder: tuple[tuple[float, float], ...] = (
         (0.0, 0.0),
         (0.5, 1.0),
@@ -337,10 +333,6 @@ def from_mapping(raw: Mapping[str, Any], base_dir: Path | None = None) -> AppCon
         screens = Path(ocr_data["screens_file"])
         if not screens.is_absolute():
             ocr_data["screens_file"] = str((base_dir / screens).resolve())
-    if base_dir is not None and ocr_data.get("signatures_file"):
-        signatures = Path(ocr_data["signatures_file"])
-        if not signatures.is_absolute():
-            ocr_data["signatures_file"] = str((base_dir / signatures).resolve())
     if base_dir is not None and ocr_data.get("labels_file"):
         labels = Path(ocr_data["labels_file"])
         if not labels.is_absolute():

@@ -287,8 +287,6 @@ class DisplayPipeline:
                     detail += f" -> {result.text!r} FROM PAGE {result.by_screen!r}"
                 elif result.confirmed_by:
                     detail += f" -> CONFIRMED BY PAGE {result.confirmed_by!r}"
-                elif result.by_signature:
-                    detail += f" -> {result.text!r} FROM SIGNATURE"
                 LOG.debug("%s cell %-2d %s", self.display.key, result.index + 1, detail)
 
         self._previous_cells = gray_cells

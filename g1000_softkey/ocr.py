@@ -23,7 +23,6 @@ from typing import Protocol, Sequence
 import numpy as np
 
 from .config import OcrConfig
-from .signatures import SignatureStore, signature
 
 LOG = logging.getLogger(__name__)
 
@@ -52,7 +51,6 @@ class CellResult:
     match_score: float = 0.0  # difflib ratio of raw -> text, 0..1
     blank: bool = False
     ocr_ran: bool = True     # False when served from the change-gating cache
-    by_signature: bool = False  # resolved by shape match, not by Tesseract
     by_screen: str = ""      # value came from this known softkey page
     confirmed_by: str = ""   # page agreed with a reading OCR was unsure of
     #: Background colour class, 0=black 1=white 2=yellow 3=red (see color.py).
@@ -270,11 +268,6 @@ class SoftkeyReader:
         self.config = config
         self.engine = engine or create_engine(config)
         self.vocabulary = LabelVocabulary.from_file(config.labels_file, config.fuzzy_cutoff)
-        self.signatures = (
-            SignatureStore.load(config.signatures_file)
-            if config.signature_confidence > 0
-            else SignatureStore()
-        )
 
     def read(self, index: int, image: np.ndarray) -> CellResult:
         text, confidence = self.engine.recognize(image)
@@ -312,24 +305,6 @@ class SoftkeyReader:
             ):
                 break
         assert best is not None  # images is never empty
-
-        if (
-            self.config.signature_confidence > 0
-            and len(self.signatures)
-            and best.confidence < self.config.signature_confidence
-        ):
-            # OCR is unsure. Ask what the shape looks like instead.
-            shape = signature(images[0])
-            label, dist = self.signatures.match(shape)
-            if label is not None and label != best.text:
-                LOG.debug(
-                    "cell %d: signature says %r (d=%.3f), overriding OCR %r at %.0f%%",
-                    index, label, dist, best.text, best.confidence,
-                )
-                return CellResult(
-                    index=index, text=label, raw=best.raw,
-                    confidence=best.confidence, match_score=1.0, by_signature=True,
-                )
         return best
 
     @staticmethod

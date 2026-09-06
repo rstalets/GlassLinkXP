@@ -47,7 +47,7 @@ def test_a_thoroughly_non_default_config_round_trips(tmp_path):
             psm=10, whitelist="ABC/-\\", upscale=6.5,
             sharpen_ladder=((0.0, 0.0), (0.9, 1.7)), threshold="adaptive",
             accept_confidence=55.0, screen_confidence=44.0,
-            screen_match_confidence=91.0, signature_confidence=33.0,
+            screen_match_confidence=91.0,
             fuzzy_cutoff=0.5, blank_ink_ratio=0.02, blank_contrast=21,
         ),
         color=ColorConfig(enabled=False, ring_fraction=0.22, value_max=70,

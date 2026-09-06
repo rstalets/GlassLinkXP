@@ -183,21 +183,6 @@ SCREEN_TEMPLATE = CommandSpec(
     ),
 )
 
-LEARN = CommandSpec(
-    name="learn",
-    title="Learn shapes",
-    summary="Record the glyph shapes of a screen whose labels you can read yourself.",
-    needs_windows=True,
-    options=(
-        IMAGE,
-        Option("display", "--display", label="Display", default="pfd",
-               help="Which display to learn from."),
-        Option("labels", "--labels", label="Labels", required=True,
-               help='One per cell, comma separated, empty for a blank key: '
-                    '"0,1,2,3,4,5,6,7,IDENT,BKSP,BACK,"'),
-    ),
-)
-
 TUNE = CommandSpec(
     name="tune",
     title="Tune a cell",
@@ -223,7 +208,7 @@ SYNTH = CommandSpec(
 
 COMMANDS: tuple[CommandSpec, ...] = (
     RUN, LIST_WINDOWS, CALIBRATE, DUMP_CELLS, DUMP_COLORS,
-    BENCH, SCREEN_TEMPLATE, LEARN, TUNE, SYNTH,
+    BENCH, SCREEN_TEMPLATE, TUNE, SYNTH,
 )
 
 BY_NAME: dict[str, CommandSpec] = {spec.name: spec for spec in COMMANDS}
