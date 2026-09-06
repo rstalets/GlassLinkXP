@@ -207,6 +207,14 @@ line and is therefore fixed for the life of that child -- toggling it while the
 daemon is running says so in the status bar rather than appearing to do
 nothing.
 
+The three settings that are remembered between sessions -- the frame source,
+debug output and the publisher -- are Tk variables on the app rather than on
+the tab that shows them, because `app.on_close` is what writes the
+preferences file and a tab-local copy is a copy that can disagree. Anything a
+command writes a *folder* of is declared once, as `output_option` on the
+`CommandSpec`, so the "Open folder" buttons and the child cannot end up
+looking in different places.
+
 The frame source at the top of the window is the shared `--image` argument. Set
 it to a PNG or a folder of PNGs and every tab reads from saved pictures instead
 of a live window, which is how the whole GUI can be used -- and is tested --
@@ -248,8 +256,9 @@ g1000_softkey/gui/
                 list-windows lines back into windows
   schema.py     every config setting, with the text that explains it
   configio.py   config.toml in and out, including the small TOML writer
-  prefs.py      which config file was open last, and whether the displays share
-                a calibration; not stored in config.toml
+  prefs.py      which config file was open last, the frame source, the debug
+                flag, the publisher, and whether the displays share a
+                calibration; not stored in config.toml
 ```
 
 Nothing outside `app.py`, `tabs.py` and `widgets.py` imports Tk, which is why

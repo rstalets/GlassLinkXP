@@ -9,6 +9,7 @@ Run them headlessly with:  xvfb-run -a python -m pytest tests/test_gui_app.py
 """
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -396,6 +397,66 @@ def test_start_says_why_rather_than_doing_nothing(gui, monkeypatch):
     _tab(gui, "RunTab").start()
 
     assert errors and not started
+
+
+def test_the_open_folder_buttons_use_the_folder_the_command_writes_into(gui,
+                                                                       monkeypatch,
+                                                                       tmp_path):
+    """Each tab had its own copy of this, and CommandSpec.output_option -- the
+    declaration of which box holds the folder -- was read nowhere."""
+    from g1000_softkey.gui import tabs
+
+    opened = []
+    monkeypatch.setattr(tabs, "open_folder", lambda path: opened.append(Path(path)) or "")
+
+    for class_name, spec in (("CalibrateTab", commands.CALIBRATE),
+                             ("CellsTab", commands.DUMP_CELLS)):
+        tab = _tab(gui, class_name)
+        folder = tmp_path / spec.name
+        folder.mkdir()
+        tab.out.set(str(folder))
+        tab._open_folder()
+        assert opened[-1] == folder
+
+
+def test_open_folder_says_so_when_there_is_nothing_there_yet(gui, monkeypatch, tmp_path):
+    from g1000_softkey.gui import tabs
+
+    opened = []
+    monkeypatch.setattr(tabs, "open_folder", lambda path: opened.append(path) or "")
+    tab = _tab(gui, "CellsTab")
+    tab.out.set(str(tmp_path / "never-written"))
+    tab._open_folder()
+    assert not opened
+    assert "nothing there yet" in gui.status._text.get()
+
+
+def test_the_publisher_choice_is_remembered(tmp_path, monkeypatch):
+    """It was read out of the preferences at startup and never written back,
+    so "console" -- the setting somebody deliberately picks while they are
+    still checking the readings -- was forgotten every time."""
+    from g1000_softkey.gui.app import build
+
+    monkeypatch.setattr(prefs, "prefs_path", lambda: tmp_path / "gui.json")
+    monkeypatch.setattr(prefs, "project_root", lambda: tmp_path)
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:  # pragma: no cover
+        pytest.skip(f"no display available for Tk ({exc})")
+    root.withdraw()
+    app = build(root, None)
+    run = _tab(app, "RunTab")
+    assert run.publisher is app.publisher  # one setting, not two variables
+    run.publisher.set("console")
+    app.on_close()  # writes the preferences, and destroys its own root
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        reopened = build(root, None)
+        assert _tab(reopened, "RunTab").publisher.get() == "console"
+    finally:
+        root.destroy()
 
 
 # -- the poll loop ---------------------------------------------------------

@@ -70,6 +70,23 @@ class Tab(ttk.Frame):
     def refresh(self) -> None:
         """Called when the configuration document changes."""
 
+    def show_output_folder(self, spec: commands.CommandSpec, values: dict[str, Any],
+                           nothing_yet: str) -> None:
+        """Open the folder ``spec`` writes into, in the file manager.
+
+        Which folder that is comes from ``spec.output_option`` rather than
+        from each tab knowing which of its own boxes holds it -- the tabs had
+        a copy of this each, and the declared option was read nowhere.
+        """
+        where = commands.output_folder(spec, values)
+        folder = Path(where) if where else None
+        if folder is None or not folder.is_dir():
+            self.app.set_status(nothing_yet, "warning")
+            return
+        error = open_folder(folder)
+        if error:
+            self.app.set_status(error, "error")
+
 
 # ---------------------------------------------------------------------------
 # Start here
@@ -186,7 +203,11 @@ class RunTab(Tab):
 
     def __init__(self, app) -> None:
         super().__init__(app)
-        self.publisher = tk.StringVar(value=str(app.prefs.get("publisher") or ""))
+        # The app's own variable, not a copy: it is what gets written back to
+        # the preferences when the window closes, and two variables that could
+        # disagree about one setting would be worse than none -- the same
+        # reasoning as the two debug-output checkboxes below.
+        self.publisher = app.publisher
         self.hz = tk.StringVar(value="")
         self.once = tk.BooleanVar(value=False)
         self.timing = tk.BooleanVar(value=False)
@@ -1166,13 +1187,10 @@ class CalibrateTab(Tab):
         ))
 
     def _open_folder(self) -> None:
-        folder = Path(self.out.get())
-        if not folder.is_dir():
-            self.app.set_status("There is nothing there yet -- take a picture first.", "warning")
-            return
-        error = open_folder(folder)
-        if error:
-            self.app.set_status(error, "error")
+        self.show_output_folder(
+            commands.CALIBRATE, {"out": self.out.get()},
+            "There is nothing there yet -- take a picture first.",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1284,13 +1302,10 @@ class CellsTab(Tab):
         )
 
     def _open_folder(self) -> None:
-        folder = Path(self.out.get())
-        if not folder.is_dir():
-            self.app.set_status("There is nothing there yet -- read the cells first.", "warning")
-            return
-        error = open_folder(folder)
-        if error:
-            self.app.set_status(error, "error")
+        self.show_output_folder(
+            commands.DUMP_CELLS, {"out": self.out.get()},
+            "There is nothing there yet -- read the cells first.",
+        )
 
 
 # ---------------------------------------------------------------------------

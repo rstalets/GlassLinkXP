@@ -63,6 +63,13 @@ class GuiApp:
 
         self.image_source = tk.StringVar(value=str(self.prefs.get("image_source") or ""))
         self.verbose = tk.BooleanVar(value=bool(self.prefs.get("verbose")))
+        #: Which publisher the Run tab starts the daemon with. Held here, like
+        #: the frame source and the debug flag, because it is remembered
+        #: between sessions and on_close is what writes the preferences: it was
+        #: read at startup and never written back, so the choice was forgotten
+        #: every time -- and "console" is a deliberate choice somebody makes
+        #: while they are still checking the readings.
+        self.publisher = tk.StringVar(value=str(self.prefs.get("publisher") or ""))
         self.config_display = tk.StringVar(value="")
 
         self._build()
@@ -434,6 +441,7 @@ class GuiApp:
             "config_path": str(self.config_path) if self.config_path else "",
             "image_source": self.image_source.get(),
             "verbose": bool(self.verbose.get()),
+            "publisher": self.publisher.get(),
             "window": self.root.winfo_geometry(),
             "tab": self.notebook.index("current") if self.notebook.tabs() else 0,
         })

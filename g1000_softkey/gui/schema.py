@@ -306,17 +306,6 @@ def setting(section: str, key: str) -> Setting:
     raise KeyError(f"no setting {section}.{key}")
 
 
-def kind_of(section: str, key: str) -> str:
-    """The declared kind, or "" when the setting is not one we describe."""
-    group = BY_SECTION.get(section)
-    if group is None:
-        return ""
-    for item in group.settings:
-        if item.key == key:
-            return item.kind
-    return ""
-
-
 # ---------------------------------------------------------------------------
 # the reference documentation
 # ---------------------------------------------------------------------------

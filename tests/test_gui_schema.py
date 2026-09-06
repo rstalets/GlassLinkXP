@@ -86,12 +86,6 @@ def test_a_choice_without_choices_is_refused():
         schema.Setting("x", "choice", "X", "help")
 
 
-def test_kind_of_is_quiet_about_things_it_does_not_describe():
-    assert schema.kind_of("app", "loop_hz") == "float"
-    assert schema.kind_of("app", "not_a_setting") == ""
-    assert schema.kind_of("not_a_section", "anything") == ""
-
-
 # ---------------------------------------------------------------------------
 # the generated reference
 # ---------------------------------------------------------------------------

@@ -383,10 +383,6 @@ class StatusBar(ttk.Frame):
         self.label.configure(foreground=LEVEL_COLORS.get(level, LEVEL_COLORS["info"]))
 
 
-def browse_button(parent: tk.Misc, command: Callable[[], None], text: str = "Browse...") -> ttk.Button:
-    return ttk.Button(parent, text=text, command=command, width=11)
-
-
 # ---------------------------------------------------------------------------
 # the calibration editor's canvas
 # ---------------------------------------------------------------------------
