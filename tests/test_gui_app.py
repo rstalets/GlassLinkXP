@@ -9,7 +9,6 @@ Run them headlessly with:  xvfb-run -a python -m pytest tests/test_gui_app.py
 """
 
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
