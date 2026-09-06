@@ -282,9 +282,16 @@ class LabelBoard(ttk.LabelFrame):
             box.configure(text=text, background=colours[0], foreground=colours[1])
 
     def set_idle(self, message: str = "") -> None:
+        """Every cell to the idle colour, all showing the same thing.
+
+        All of them: the message is the board saying it has no data, and it
+        used to be put on cell 1 only -- the loop blanked `message` after the
+        first box -- so "--" on one key beside eleven empty ones read as one
+        label having been read successfully, which is the opposite of what it
+        meant.
+        """
         for box in self._boxes:
             box.configure(text=message, background=CELL_IDLE[0], foreground=CELL_IDLE[1])
-            message = ""
 
 
 # ---------------------------------------------------------------------------

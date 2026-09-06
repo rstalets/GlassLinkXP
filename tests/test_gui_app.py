@@ -205,6 +205,27 @@ def test_the_board_clears_when_the_daemon_stops(gui):
     assert run.state_text.get() == "Stopped"
 
 
+def test_the_idle_board_says_the_same_thing_on_every_key(gui):
+    """It marked cell 1 and blanked the other eleven, which reads as one label
+    having been read rather than as nothing having been."""
+    run = _tab(gui, "RunTab")
+    board = run._boards["pfd"]
+    board.set_idle("--")
+    assert [box.cget("text") for box in board._boxes] == ["--"] * board.cells
+    board.set_idle("...")
+    assert [box.cget("text") for box in board._boxes] == ["..."] * board.cells
+    board.set_idle()
+    assert [box.cget("text") for box in board._boxes] == [""] * board.cells
+
+
+def test_the_whole_board_clears_when_the_daemon_stops(gui):
+    run = _tab(gui, "RunTab")
+    run.on_event(Line("[pfd] 1:INSET | 2:PFD | 3:MAP"))
+    run.on_event(Finished(0))
+    board = run._boards["pfd"]
+    assert [box.cget("text") for box in board._boxes] == ["--"] * board.cells
+
+
 def test_a_daemon_that_will_not_start_is_reported(gui):
     run = _tab(gui, "RunTab")
     run.on_event(Failed("could not start daemon: no such file"))
