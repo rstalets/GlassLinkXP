@@ -8,11 +8,13 @@ any amount of testing the modules underneath would find.
 Run them headlessly with:  xvfb-run -a python -m pytest tests/test_gui_app.py
 """
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from g1000_softkey.color import RED, WHITE
+from g1000_softkey.config import StripGeometry
 from g1000_softkey.gui import commands, configio, prefs
 from g1000_softkey.gui.runner import Failed, Finished, Line, Started
 
@@ -340,8 +342,8 @@ def test_a_rejected_geometry_leaves_the_window_holding_the_old_one(gui, tmp_path
 
     calibrate = _tab(gui, "CalibrateTab")
     calibrate.display.set("pfd")
-    calibrate._fields["y"].set("0.99")
-    calibrate._save_and_recalibrate()
+    calibrate._geometry = StripGeometry(y=0.99, h=0.5)
+    calibrate.save()
     assert gui.document["display"]["pfd"]["geometry"]["y"] == before
 
 
@@ -391,12 +393,45 @@ def test_the_calibration_suggestion_is_read_from_the_output(gui):
     assert calibrate._suggested["pfd"]["w"] == 0.9461
     assert "mfd" not in calibrate._suggested
     calibrate.display.set("pfd")
-    calibrate._parse(0, ["[pfd] frame 1x1", "  auto-detect: x=0.1 y=0.2 w=0.3 h=0.4"])
     calibrate._apply_suggestion()
-    assert calibrate._fields["x"].get() == "0.1"
+    assert calibrate._fields["x"].get() == "0.0273"
+    assert calibrate._geometry.w == 0.9461
 
 
-def test_applying_a_suggestion_and_saving_updates_the_geometry(gui, tmp_path):
+def test_the_auto_detect_button_is_dead_until_there_is_a_suggestion(gui):
+    calibrate = _tab(gui, "CalibrateTab")
+    assert str(calibrate.auto_button.cget("state")) == "disabled"
+    calibrate.display.set("pfd")
+    calibrate._parse(0, ["[pfd] frame 1280x800",
+                         "  auto-detect: x=0.1 y=0.2 w=0.3 h=0.4"])
+    assert str(calibrate.auto_button.cget("state")) == "normal"
+
+
+def test_typing_a_number_moves_the_boxes(gui):
+    calibrate = _tab(gui, "CalibrateTab")
+    calibrate._fields["x"].set("0.25")
+    calibrate._from_fields()
+    assert calibrate._geometry.x == 0.25
+    assert calibrate.picture._geometry.x == 0.25
+    assert calibrate.closeup._geometry.x == 0.25
+
+
+def test_moving_the_boxes_updates_the_numbers(gui):
+    calibrate = _tab(gui, "CalibrateTab")
+    calibrate.set_geometry(replace(calibrate._geometry, y=0.5))
+    assert calibrate._fields["y"].get() == "0.5"
+
+
+def test_a_number_that_is_not_a_number_is_refused_not_swallowed(gui):
+    calibrate = _tab(gui, "CalibrateTab")
+    before = calibrate._geometry
+    calibrate._fields["x"].set("left a bit")
+    calibrate._from_fields()
+    assert calibrate._geometry == before
+    assert "not a number" in gui.status._text.get()
+
+
+def test_saving_writes_the_geometry_that_is_on_screen(gui, tmp_path):
     from g1000_softkey.config import load_config
 
     path = tmp_path / "config.toml"
@@ -405,14 +440,14 @@ def test_applying_a_suggestion_and_saving_updates_the_geometry(gui, tmp_path):
     gui.load_config(quiet=True)
     calibrate = _tab(gui, "CalibrateTab")
     calibrate.display.set("pfd")
-    calibrate._fields["x"].set("0.0273")
-    calibrate._fields["w"].set("0.9461")
-    calibrate._save_and_recalibrate()
+    calibrate.set_geometry(replace(calibrate._geometry, x=0.0273, w=0.9461))
+    calibrate.save()
     geometry = load_config(path).display("pfd").geometry
     assert (geometry.x, geometry.w) == (0.0273, 0.9461)
 
 
 def test_a_geometry_off_the_edge_of_the_frame_is_refused(gui, tmp_path, monkeypatch):
+    """Clamping should make this unreachable; the check is the backstop."""
     errors = []
     monkeypatch.setattr("tkinter.messagebox.showerror",
                         lambda title, message, **k: errors.append(message))
@@ -422,8 +457,8 @@ def test_a_geometry_off_the_edge_of_the_frame_is_refused(gui, tmp_path, monkeypa
     gui.load_config(quiet=True)
     calibrate = _tab(gui, "CalibrateTab")
     calibrate.display.set("pfd")
-    calibrate._fields["y"].set("0.99")
-    calibrate._save_and_recalibrate()
+    calibrate._geometry = StripGeometry(y=0.99, h=0.5)
+    calibrate.save()
     assert errors
 
 

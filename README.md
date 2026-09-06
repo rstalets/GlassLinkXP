@@ -205,10 +205,11 @@ or `g1000 gui`, or `python -m g1000_softkey.gui`. Double-clicking
 shortcut to.
 
 Everything in this README is in there: a walkthrough of the six setup steps, a
-window picker, the calibration overlay with the twelve boxes drawn on the
-captured frame, every cell as Tesseract receives it, the colour measurements,
-a form for every setting with the reasoning beside it, and Start/Stop with a
-live board of the twelve softkeys per display.
+window picker, a calibration editor where you draw the softkey strip onto the
+captured frame with the mouse and judge it magnified, every cell as Tesseract
+receives it, the colour measurements, a form for every setting with the
+reasoning beside it, and Start/Stop with a live board of the twelve softkeys
+per display.
 
 It runs no part of the pipeline itself: every button spawns the same CLI and
 shows what it said, with the exact command printed above the output so you can
@@ -226,9 +227,14 @@ everything the window does regardless.
 
 ## Calibration workflow
 
-> **All of this is in the GUI**, one tab per step, with the pictures shown in
-> the window instead of written to a folder for you to go and find. This
-> section is the command-line equivalent.
+> **Do this in the GUI if you can.** The Calibrate tab draws the softkey strip
+> onto the captured frame with the mouse and then walks you through three
+> steps -- place the top-left corner, bring in the other two edges, trim the
+> cells -- with the corner being worked on magnified beside it, so "just
+> inside the edge" is something you can see rather than something you have to
+> arrive at by editing a fraction and re-running a command. This section is
+> the command-line equivalent, which is a slower loop: change a number, re-run
+> `calibrate`, open the PNG, look, repeat.
 
 > **Use `g1000.cmd`.** It calls the venv interpreter directly, so there is
 > nothing to activate and PowerShell's execution policy never enters into it
@@ -507,21 +513,26 @@ says:
   them; **Run** started the daemon with the console publisher and the softkey
   board filled in, with the selected cell drawn white; **Stop** ended it
   cleanly (exit code 0, through the daemon's own SIGINT handler, not a kill).
-* **Calibrate** produced the overlay picture and read the auto-detected
-  geometry back out of the output; applying it and saving wrote the numbers
+* **Calibrate** produced the picture; a simulated mouse drag from frame pixel
+  (60, 725) to (1219, 781) produced exactly that rectangle in the config, the
+  six numbers followed the drag, nudging the left edge moved it by one frame
+  pixel while holding the right edge still, and the twelve green boxes drawn
+  on the canvas matched `strip.cell_rects` -- the function `split_cells`
+  actually slices with -- for every geometry tried. Saving wrote the numbers
   into `config.toml` and they loaded back.
 * **Cells** showed all 24 cell pictures; **Colours** parsed 24 measurements and
   drew each row in the colour it was classified as; **Pages** captured a
   `[[screen]]` block; **Tools** ran the benchmark.
 * **Find windows** failed as it must on Linux, and the tab showed the command
   that failed and the daemon's own explanation of why.
-* The tests cover this without a display too: 164 of them, of which the 38 that
-  need Tk skip themselves when there is no display (`383 passed` with one,
-  `345 passed, 38 skipped` without). Three of them are there to
-  stop the GUI drifting from the daemon -- every argv the GUI can build is
-  parsed by `main.build_parser()`, the softkey board's parser is fed
-  `main._format_row()`'s own output, and the settings form is checked against
-  the config dataclasses field by field.
+* The tests cover this without a display too: 223 of them, of which the 60 that
+  need Tk skip themselves when there is no display (`442 passed` with one,
+  `382 passed, 60 skipped` without). Four of them are there to stop the GUI
+  drifting from the daemon -- every argv the GUI can build is parsed by
+  `main.build_parser()`, the softkey board's parser is fed
+  `main._format_row()`'s own output, the settings form is checked against the
+  config dataclasses field by field, and the calibration editor's boxes are
+  compared with the rectangles `strip.py` crops.
 
 ## Not verified here
 

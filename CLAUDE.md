@@ -57,8 +57,10 @@ g1000_softkey/
   screens.py    softkey page definitions (screens.toml)
   signatures.py glyph shape fallback, off by default
   config.py     frozen dataclasses + TOML loader
-  gui/          the window (see docs/GUI.md). Only app.py, tabs.py and
-                widgets.py import Tk; the rest is tested without a display
+  gui/          the window (see docs/GUI.md), including the calibration editor
+                where the strip is drawn on the frame with the mouse. Only
+                app.py, tabs.py and widgets.py import Tk; the rest, geometry.py
+                included, is tested without a display
 ```
 
 ## The lesson this codebase was built on
@@ -139,6 +141,7 @@ own code rather than from a copied sample:
 | a subcommand or a flag in `main.py` | `test_gui_commands.py` -- every argv the GUI can build is parsed by `build_parser()`, and it asserts the GUI covers every subcommand |
 | what `_format_row` prints | `test_gui_logparse.py` -- it formats a `DisplayResult` and parses it back |
 | a field on any config dataclass | `test_gui_schema.py` -- a field must be in `gui/schema.py` or in `NOT_IN_THE_FORM` with a reason |
+| `strip_rect` or `cell_rects` | `test_gui_geometry.py` and `test_gui_canvas.py` -- the calibration editor draws what `cell_rects` returns, and both check it against the real thing |
 
 Fix the GUI in the same commit; do not weaken the test. A GUI that has drifted
 from the daemon still looks like it is working, which is what makes it worth a
@@ -153,7 +156,7 @@ python -m g1000_softkey.main run --once --image frames/xpdr.png --publisher cons
 python -m g1000_softkey.main gui                       # the window
 ```
 
-The GUI's own tests need a display; without one the 38 that build widgets skip
+The GUI's own tests need a display; without one the 60 that build widgets skip
 themselves and the rest still run. To run all of them here:
 
 ```

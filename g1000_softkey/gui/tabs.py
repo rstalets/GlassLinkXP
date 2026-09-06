@@ -19,13 +19,17 @@ from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 from typing import Any
 
+from dataclasses import replace
+
 from ..color import BACKGROUND_NAMES, BLACK
-from . import commands, configio, schema
+from ..config import StripGeometry
+from . import commands, configio, geometry, schema
 from .logparse import classify, parse_health, parse_row
 from .runner import Event, Failed, Finished, Line, Started
 from .widgets import (
     CELL_COLORS,
     HELP_COLOR,
+    GeometryCanvas,
     ImageView,
     LabelBoard,
     OutputPane,
@@ -500,35 +504,96 @@ _AUTO_DETECT = re.compile(
     r"auto-detect:\s*x=(?P<x>[\d.]+)\s+y=(?P<y>[\d.]+)\s+w=(?P<w>[\d.]+)\s+h=(?P<h>[\d.]+)"
 )
 
-#: The pictures `calibrate` writes, and what each is for.
-CALIBRATION_VIEWS: tuple[tuple[str, str, str], ...] = (
-    ("overlay", "Boxes on the frame",
-     "The window as captured, with the twelve boxes the reader will use drawn on it. "
-     "Each box must sit around exactly one label, with none of the bezel or the moving "
-     "map inside it. This is the picture to judge the calibration by."),
-    ("overlay_auto", "Auto-detected boxes",
-     "The same, using the geometry the auto-detect suggested. It finds the dark band "
-     "reliably but only approximates the left and right edges, so treat it as a starting "
-     "point and then nudge the numbers."),
-    ("strip", "The strip alone", "Just the part of the frame that gets read."),
-    ("raw", "The whole frame", "Everything that was captured, before any cropping."),
-)
 
 GEOMETRY_KEYS = ("x", "y", "w", "h", "cell_pad_x", "cell_pad_y")
 
+#: The calibration, as three things to get right in order. Each step names the
+#: geometry fields it is about and the edges its buttons and the arrow keys
+#: move, so the panel, the buttons and the key bindings are all generated from
+#: one description instead of three that can disagree.
+#:
+#: The order is not arbitrary. The top-left corner is placed first because
+#: every other number is measured from it: set the width before the left edge
+#: and you have to set it again afterwards. Padding is last because it is a
+#: fraction *of a cell*, so it only means anything once the strip is right.
+CALIBRATION_STEPS: tuple[dict, ...] = (
+    {
+        "title": "Place the top-left corner",
+        "text": "Press \"Draw a new box\" and drag one roughly around the softkey strip, from "
+                "any corner to the opposite one. Then nudge the top and left edges "
+                "until they sit just INSIDE the strip: inside the dark band, with none of the "
+                "bezel caught in the red box. Watch the close-up, not the small picture -- a "
+                "pixel is a pixel there.",
+        "controls": (
+            ("Left edge", "left", "←", "→"),
+            ("Top edge", "top", "↑", "↓"),
+        ),
+        "fields": ("x", "y"),
+        "focus": "topleft",
+        "zoom": "4x",
+        "closeup": "The top-left corner, magnified. The red edges belong just inside the dark band.",
+    },
+    {
+        "title": "Bring in the other two edges",
+        "text": "Now set the width and height so the bottom and right edges also sit just "
+                "inside the strip. When this step is right all four edges are inside the dark "
+                "band: none of the bezel, none of the moving map, and no part of a softkey "
+                "label outside the box.",
+        "controls": (
+            ("Right edge", "right", "←", "→"),
+            ("Bottom edge", "bottom", "↑", "↓"),
+        ),
+        "fields": ("w", "h"),
+        "focus": "bottomright",
+        "zoom": "4x",
+        "closeup": "The bottom-right corner, magnified. Same again: just inside, on both edges.",
+    },
+    {
+        "title": "Trim the cells",
+        "text": "The green boxes are what actually gets read -- one per softkey. Trim them "
+                "until each box holds its whole label with nothing clipped on any side, and "
+                "none of the vertical bars between the cells falls inside a box. A bar caught "
+                "in a box reads as a stray character; a clipped glyph reads as nothing at all.",
+        "controls": (
+            ("Side trim", "pad_x", "−", "+"),
+            ("Top/bottom trim", "pad_y", "−", "+"),
+        ),
+        "fields": ("cell_pad_x", "cell_pad_y"),
+        "focus": "strip",
+        "zoom": "Fit",
+        "closeup": "The whole strip. Every green box should hold one label, whole, and no separator bar.",
+    },
+)
+
 
 class CalibrateTab(Tab):
-    """Show the reader where the softkey strip is."""
+    """Show the reader where the softkey strip is, by drawing it on the picture.
+
+    This used to be a picture and six numbers. The numbers are still here --
+    they are what gets saved, and sometimes typing one is the fastest way --
+    but nobody can look at ``x = 0.0273`` and say whether it is right. So the
+    box is drawn with the mouse and judged in a magnified close-up, and the
+    numbers follow along.
+
+    The auto-detect is kept as a seed and nothing more. It finds the dark band
+    reliably and the left and right edges only roughly, which is precisely the
+    part a person can do in two seconds and an edge detector cannot.
+    """
 
     tab_title = "Calibrate"
 
     def __init__(self, app) -> None:
         super().__init__(app)
         self.display = tk.StringVar(value="")
-        self.view = tk.StringVar(value="overlay")
         self.out = tk.StringVar(value=str(app.project_root / "calibration"))
+        self.step = tk.IntVar(value=0)
         self._suggested: dict[str, dict[str, float]] = {}
         self._fields: dict[str, tk.StringVar] = {}
+        self._geometry = StripGeometry()
+        #: Guards the two-way binding between the boxes and the entry boxes.
+        #: Without it, updating a field from a drag would fire the field's own
+        #: handler, which would re-set the geometry, which would redraw...
+        self._syncing = False
 
         controls = ttk.Frame(self)
         controls.pack(fill="x")
@@ -538,83 +603,255 @@ class CalibrateTab(Tab):
         self.display_box = ttk.Combobox(controls, textvariable=self.display,
                                         state="readonly", width=8)
         self.display_box.pack(side="left")
-        self.display_box.bind("<<ComboboxSelected>>", lambda _e: self._show())
-        ttk.Label(controls, text="Show").pack(side="left", padx=(16, 4))
-        self.view_box = ttk.Combobox(
-            controls, textvariable=self.view, state="readonly", width=20,
-            values=[title for _key, title, _help in CALIBRATION_VIEWS],
-        )
-        self.view_box.pack(side="left")
-        self.view_box.set(CALIBRATION_VIEWS[0][1])
-        self.view_box.bind("<<ComboboxSelected>>", lambda _e: self._show())
+        self.display_box.bind("<<ComboboxSelected>>", lambda _e: self.refresh())
+        self.draw_button = ttk.Button(controls, text="Draw a new box", width=15,
+                                      command=self._arm_draw)
+        self.draw_button.pack(side="left", padx=(16, 0))
+        self.auto_button = ttk.Button(controls, text="Use auto-detect", state="disabled",
+                                      command=self._apply_suggestion)
+        self.auto_button.pack(side="left", padx=(6, 0))
         ttk.Button(controls, text="Open folder", width=12,
                    command=self._open_folder).pack(side="right")
 
-        self.view_help = help_label(self, CALIBRATION_VIEWS[0][2], width=900)
-        self.view_help.pack(anchor="w", pady=(6, 6))
+        body = ttk.Frame(self)
+        body.pack(fill="both", expand=True, pady=(8, 0))
+        pictures = ttk.Frame(body)
+        pictures.pack(side="left", fill="both", expand=True)
 
-        middle = ttk.Frame(self)
-        middle.pack(fill="both", expand=True)
-        self.image = ImageView(middle, "Press \"Take a picture\" to capture the display "
-                                       "and see where the reader is looking.")
-        self.image.pack(side="left", fill="both", expand=True)
+        self.picture = GeometryCanvas(
+            pictures, on_change=self._from_canvas, allow_draw=True, height=300,
+            placeholder="Press \"Take a picture\" to capture the display, then drag a box "
+                        "around the softkey strip.",
+        )
+        self.picture.pack(fill="both", expand=True)
+        caption_row = ttk.Frame(pictures)
+        caption_row.pack(fill="x", pady=(6, 2))
+        self.closeup_caption = ttk.Label(caption_row, text="", foreground=HELP_COLOR)
+        self.closeup_caption.pack(side="left")
+        ttk.Label(caption_row, text="Zoom").pack(side="right", padx=(8, 4))
+        self.zoom = tk.StringVar(value="4x")
+        zoom_box = ttk.Combobox(caption_row, textvariable=self.zoom, state="readonly", width=5,
+                                values=("Fit", "2x", "4x", "8x", "16x"))
+        zoom_box.pack(side="right")
+        zoom_box.bind("<<ComboboxSelected>>", lambda _e: self._apply_zoom())
+        self.closeup = GeometryCanvas(
+            pictures, on_change=self._from_canvas, allow_draw=False, zoom_to_strip=True,
+            height=240, placeholder="The strip, magnified, once there is a picture to show.",
+        )
+        self.closeup.pack(fill="x")
+        self._apply_zoom()
 
-        side = ttk.Frame(middle, padding=(PAD, 0, 0, 0))
+        side = ttk.Frame(body, padding=(PAD, 0, 0, 0))
         side.pack(side="right", fill="y")
-        section_heading(side, "Strip position").pack(anchor="w")
-        help_label(side, "Fractions of the window, so a resize does not undo it.",
-                   width=240).pack(anchor="w", pady=(0, 6))
-        form = ttk.Frame(side)
-        form.pack(fill="x")
+        self._build_steps(side)
+        self._build_numbers(side)
+
+        self.output = OutputPane(self, height=6)
+        self.output.pack(fill="both", expand=True, pady=(8, 0))
+
+        # Arrow keys nudge whatever the current step is about, which is the
+        # fastest way to move one pixel and the only way to do it without
+        # taking your eye off the close-up.
+        for key, edge, sign in (("Left", 0, -1), ("Right", 0, 1),
+                                ("Up", 1, -1), ("Down", 1, 1)):
+            self.bind_all(f"<KeyPress-{key}>",
+                          lambda e, i=edge, s=sign: self._arrow(e, i, s), add="+")
+            self.bind_all(f"<Shift-KeyPress-{key}>",
+                          lambda e, i=edge, s=sign: self._arrow(e, i, s, 5), add="+")
+
+        app.on_config_changed(self.refresh)
+
+    # -- the step panel ------------------------------------------------------
+
+    def _build_steps(self, parent: tk.Misc) -> None:
+        self.step_frame = ttk.LabelFrame(parent, text="  Step 1 of 3  ", padding=PAD)
+        self.step_frame.pack(fill="x")
+        self.step_title = section_heading(self.step_frame, "")
+        self.step_title.pack(anchor="w")
+        self.step_text = help_label(self.step_frame, "", width=270)
+        self.step_text.pack(anchor="w", pady=(2, 8))
+
+        self.step_buttons = ttk.Frame(self.step_frame)
+        self.step_buttons.pack(fill="x")
+
+        move = ttk.Frame(self.step_frame)
+        move.pack(fill="x", pady=(8, 0))
+        self.back_button = ttk.Button(move, text="Back", width=8, command=self.previous_step)
+        self.back_button.pack(side="left")
+        self.next_button = ttk.Button(move, text="Next", width=8, command=self.next_step)
+        self.next_button.pack(side="right")
+        help_label(
+            self.step_frame,
+            "Arrow keys move one pixel, with Shift five. Drag the white squares to resize the "
+            "red box, or drag inside it to slide the whole thing.",
+            width=270,
+        ).pack(anchor="w", pady=(8, 0))
+        self._show_step()
+
+    def _show_step(self) -> None:
+        index = max(0, min(self.step.get(), len(CALIBRATION_STEPS) - 1))
+        step = CALIBRATION_STEPS[index]
+        self.step_frame.configure(text=f"  Step {index + 1} of {len(CALIBRATION_STEPS)}  ")
+        self.step_title.configure(text=step["title"])
+        self.step_text.configure(text=step["text"])
+        self.closeup.set_focus(step["focus"])
+        # Each step wants a different magnification: a corner is judged a
+        # pixel at a time, while the cells are checked by looking at all
+        # twelve at once and only then zooming in on the one that looks wrong.
+        # Set as the step's default rather than left alone, because carrying
+        # 8x from step 2 into step 3 shows two cells out of twelve.
+        self.zoom.set(step["zoom"])
+        self._apply_zoom()
+        self.closeup_caption.configure(text=step["closeup"])
+        self.back_button.configure(state="disabled" if index == 0 else "normal")
+        self.next_button.configure(
+            state="disabled" if index == len(CALIBRATION_STEPS) - 1 else "normal")
+
+        for child in self.step_buttons.winfo_children():
+            child.destroy()
+        for row, (label, target, minus, plus) in enumerate(step["controls"]):
+            ttk.Label(self.step_buttons, text=label).grid(row=row, column=0, sticky="w", pady=2)
+            for column, (glyph, sign) in enumerate(((minus, -1), (plus, 1)), start=1):
+                # tk.Button rather than ttk: only the plain one autorepeats
+                # when held, and holding is how you move an edge ten pixels
+                # without clicking ten times.
+                tk.Button(
+                    self.step_buttons, text=glyph, width=2, repeatdelay=400, repeatinterval=60,
+                    command=lambda t=target, s=sign: self._nudge(t, s),
+                ).grid(row=row, column=column, padx=2)
+
+    def next_step(self) -> None:
+        self.step.set(min(self.step.get() + 1, len(CALIBRATION_STEPS) - 1))
+        self._show_step()
+
+    def previous_step(self) -> None:
+        self.step.set(max(self.step.get() - 1, 0))
+        self._show_step()
+
+    # -- the numbers ---------------------------------------------------------
+
+    def _build_numbers(self, parent: tk.Misc) -> None:
+        frame = ttk.LabelFrame(parent, text="  The numbers  ", padding=PAD)
+        frame.pack(fill="x", pady=(10, 0))
+        help_label(
+            frame,
+            "Fractions of the window, so a resize does not undo the calibration. Type here if "
+            "you would rather, or to copy a setting between displays.",
+            width=270,
+        ).pack(anchor="w", pady=(0, 6))
+        grid = ttk.Frame(frame)
+        grid.pack(fill="x")
         for row, key in enumerate(GEOMETRY_KEYS):
             variable = tk.StringVar(value="")
             self._fields[key] = variable
-            ttk.Label(form, text=schema.setting("geometry", key).label).grid(
+            ttk.Label(grid, text=schema.setting("geometry", key).label).grid(
                 row=row, column=0, sticky="w", pady=1
             )
-            ttk.Entry(form, textvariable=variable, width=10).grid(row=row, column=1, padx=(8, 0))
-        self.suggestion = help_label(side, "", width=240)
-        self.suggestion.pack(anchor="w", pady=(8, 4))
-        self.apply_button = ttk.Button(side, text="Use the suggestion", state="disabled",
-                                       command=self._apply_suggestion)
-        self.apply_button.pack(fill="x")
-        ttk.Button(side, text="Save and take another",
-                   command=self._save_and_recalibrate).pack(fill="x", pady=(6, 0))
+            entry = ttk.Entry(grid, textvariable=variable, width=10)
+            entry.grid(row=row, column=1, padx=(8, 0))
+            entry.bind("<Return>", lambda _e: self._from_fields())
+            entry.bind("<FocusOut>", lambda _e: self._from_fields())
 
-        self.output = OutputPane(self, height=7)
-        self.output.pack(fill="both", expand=True, pady=(10, 0))
-        app.on_config_changed(self.refresh)
+        self.pixels = help_label(frame, "", width=270)
+        self.pixels.pack(anchor="w", pady=(8, 0))
+        ttk.Button(frame, text="Save to the configuration",
+                   command=self.save).pack(fill="x", pady=(8, 0))
+        ttk.Button(frame, text="Undo my changes", command=self.refresh).pack(fill="x", pady=(4, 0))
+
+    # -- the model -----------------------------------------------------------
+
+    def set_geometry(self, value: StripGeometry, from_canvas: bool = False) -> None:
+        """One place where the working geometry changes, whatever moved it."""
+        self._geometry = geometry.clamp(value)
+        self._syncing = True
+        try:
+            for key, variable in self._fields.items():
+                variable.set(repr(round(float(getattr(self._geometry, key)), 4)))
+            self.picture.set_geometry(self._geometry)
+            self.closeup.set_geometry(self._geometry)
+        finally:
+            self._syncing = False
+        self._show_pixels()
+
+    def _show_pixels(self) -> None:
+        """The same numbers in pixels, which is the unit being judged."""
+        width, height = self.picture.frame_size
+        if not width:
+            self.pixels.configure(text="")
+            return
+        x, y, w, h = geometry.strip_pixels(self._geometry, width, height)
+        cell_w = w / max(1, self._geometry.cells)
+        self.pixels.configure(
+            text=f"On a {width}x{height} frame: the strip is {w}x{h} pixels at ({x}, {y}), "
+                 f"and each cell is about {cell_w:.0f} wide before trimming."
+        )
+
+    def _from_canvas(self, value: StripGeometry) -> None:
+        self.set_geometry(value, from_canvas=True)
+
+    def _from_fields(self) -> None:
+        if self._syncing:
+            return
+        values = {}
+        for key, variable in self._fields.items():
+            try:
+                values[key] = configio.parse_field(schema.setting("geometry", key),
+                                                   variable.get())
+            except configio.ConfigIoError as exc:
+                self.app.set_status(str(exc), "error")
+                return
+        self.set_geometry(replace(self._geometry, **values))
+
+    def _nudge(self, target: str, sign: int, pixels: float = 1.0) -> None:
+        width, height = self.picture.frame_size
+        if target in ("pad_x", "pad_y"):
+            self.set_geometry(geometry.nudge_padding(self._geometry, target[-1], sign))
+        elif width:
+            self.set_geometry(
+                geometry.nudge_edge(self._geometry, target, sign * pixels, width, height)
+            )
+
+    def _arrow(self, event: tk.Event, axis: int, sign: int, pixels: float = 1.0) -> None:
+        """Arrow keys, but only when this tab is the one on screen.
+
+        Bound with bind_all because the focus is usually on the canvas or on
+        nothing in particular; the guard is what stops them stealing the arrow
+        keys from an entry box on another tab.
+        """
+        if self.app.notebook.select() != str(self):
+            return
+        if isinstance(event.widget, (ttk.Entry, tk.Entry)):
+            return
+        index = max(0, min(self.step.get(), len(CALIBRATION_STEPS) - 1))
+        controls = CALIBRATION_STEPS[index]["controls"]
+        if axis < len(controls):
+            self._nudge(controls[axis][1], sign, pixels)
+
+    # -- running the command -------------------------------------------------
 
     def refresh(self) -> None:
         keys = self.app.display_keys()
         self.display_box.configure(values=keys)
         if self.display.get() not in keys:
             self.display.set(keys[0] if keys else "")
-        self._load_geometry()
-        self._show()
+        stored = configio.get_in(self.app.document, ("display", self.display.get(), "geometry"), {})
+        known = {f for f in StripGeometry.__dataclass_fields__}
+        self.set_geometry(StripGeometry(**{k: v for k, v in stored.items() if k in known}))
+        self._load_picture()
+        self.auto_button.configure(
+            state="normal" if self.display.get() in self._suggested else "disabled"
+        )
 
-    def _load_geometry(self) -> None:
-        key = self.display.get()
-        for name, variable in self._fields.items():
-            value = configio.get_in(self.app.document, ("display", key, "geometry", name))
-            setting = schema.setting("geometry", name)
-            variable.set(configio.format_field(setting, value) if value is not None else "")
-
-    def _collect_geometry(self) -> dict[str, float] | None:
-        values: dict[str, float] = {}
-        for name, variable in self._fields.items():
-            try:
-                values[name] = configio.parse_field(schema.setting("geometry", name),
-                                                    variable.get())
-            except configio.ConfigIoError as exc:
-                self.app.set_status(str(exc), "error")
-                return None
-        return values
+    def _load_picture(self) -> None:
+        raw = Path(self.out.get()) / f"{self.display.get()}_raw.png"
+        path = raw if raw.is_file() else None
+        self.picture.set_frame(path)
+        self.closeup.set_frame(path)
+        self.set_geometry(self._geometry)
 
     def calibrate(self) -> None:
         self._suggested = {}
-        self.apply_button.configure(state="disabled")
-        self.suggestion.configure(text="")
+        self.auto_button.configure(state="disabled")
         self.app.run_task(
             commands.CALIBRATE, {"out": self.out.get()}, self.output, on_finish=self._parse
         )
@@ -629,45 +866,48 @@ class CalibrateTab(Tab):
             auto = _AUTO_DETECT.search(line)
             if auto and current:
                 self._suggested[current] = {k: float(auto.group(k)) for k in ("x", "y", "w", "h")}
-        self._show()
-        key = self.display.get()
-        if key in self._suggested:
-            values = self._suggested[key]
-            self.suggestion.configure(
-                text="Auto-detect suggests  " + "  ".join(
-                    f"{name}={values[name]:.4f}" for name in ("x", "y", "w", "h")
-                ) + ". It gets the band right and the left and right edges only roughly, "
-                    "so check the picture afterwards."
-            )
-            self.apply_button.configure(state="normal")
-        elif code == 0:
-            self.suggestion.configure(
-                text="No dark softkey band was found, so there is nothing to suggest. "
-                     "Set the numbers by hand against the picture."
-            )
+        self._load_picture()
+        self.auto_button.configure(
+            state="normal" if self.display.get() in self._suggested else "disabled"
+        )
         if code == 0:
+            self.step.set(0)
+            self._show_step()
             self.app.set_status(
-                "Calibration pictures written. Check that every box sits around exactly "
-                "one label."
+                "Picture taken. Drag a box around the softkey strip, then work through the "
+                "three steps on the right."
             )
+
+    def _apply_zoom(self) -> None:
+        choice = self.zoom.get()
+        self.closeup.set_zoom(0.0 if choice == "Fit" else float(choice.rstrip("x")))
+
+    def _arm_draw(self) -> None:
+        self.picture.arm_draw()
+        self.app.set_status(
+            "Drag a box around the softkey strip on the picture -- from any corner to the "
+            "opposite one. Rough is fine; the three steps are for making it exact."
+        )
 
     def _apply_suggestion(self) -> None:
-        key = self.display.get()
-        for name, value in self._suggested.get(key, {}).items():
-            self._fields[name].set(repr(round(value, 4)))
-        self.app.set_status("Suggestion filled in. Save and take another picture to check it.")
-
-    def _save_and_recalibrate(self) -> None:
-        values = self._collect_geometry()
-        if values is None:
+        found = self._suggested.get(self.display.get())
+        if not found:
             return
+        self.set_geometry(replace(self._geometry, **found))
+        self.app.set_status(
+            "Auto-detect applied. It gets the dark band right and the left and right edges "
+            "only roughly, so check all four in the close-up."
+        )
+
+    def save(self) -> None:
         key = self.display.get()
         # Edited on a copy and only adopted once it validates. Writing into
         # the live document first would leave the window holding a geometry
         # the daemon will not accept, with nothing on screen saying so.
         document = copy.deepcopy(self.app.document)
-        for name, value in values.items():
-            configio.set_in(document, ("display", key, "geometry", name), value)
+        for name in GEOMETRY_KEYS:
+            configio.set_in(document, ("display", key, "geometry", name),
+                            float(getattr(self._geometry, name)))
         base = self.app.config_path.parent if self.app.config_path else None
         try:
             configio.validate(document, base_dir=base)
@@ -676,34 +916,26 @@ class CalibrateTab(Tab):
                                  f"That geometry will not load:\n\n{exc}",
                                  parent=self.app.root)
             return
-        if self.app.config_path is not None:
-            try:
-                configio.save(self.app.config_path, document)
-            except configio.ConfigIoError as exc:
-                self.app.set_status(str(exc), "error")
-                return
+        if self.app.config_path is None:
+            messagebox.showinfo(
+                "G1000 softkey labels",
+                "There is no configuration file open yet. Press New... at the top of the "
+                "window to make one, then save again.",
+                parent=self.app.root,
+            )
+            return
+        try:
+            backup = configio.save(self.app.config_path, document)
+        except configio.ConfigIoError as exc:
+            self.app.set_status(str(exc), "error")
+            return
         self.app.document = document
         self.app.notify_config_changed()
-        self.calibrate()
-
-    def _view_key(self) -> str:
-        title = self.view_box.get()
-        for key, name, text in CALIBRATION_VIEWS:
-            if name == title:
-                self.view_help.configure(text=text)
-                return key
-        return "overlay"
-
-    def _show(self) -> None:
-        key = self.display.get()
-        view = self._view_key()
-        path = Path(self.out.get()) / f"{key}_{view}.png"
-        self.image.show(path if path.is_file() else None)
-        if not path.is_file() and view == "overlay_auto":
-            self.image.label.configure(
-                text="No auto-detected picture for this display -- the dark softkey band "
-                     "was not found, so there was nothing to draw."
-            )
+        self.app.set_status(
+            f"Saved the {key.upper()} strip position"
+            + (f" (previous version kept as {backup.name})" if backup else "")
+            + ". Check it on the Cells tab, then restart the daemon."
+        )
 
     def _open_folder(self) -> None:
         folder = Path(self.out.get())

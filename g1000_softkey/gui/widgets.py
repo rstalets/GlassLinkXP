@@ -321,3 +321,378 @@ class StatusBar(ttk.Frame):
 
 def browse_button(parent: tk.Misc, command: Callable[[], None], text: str = "Browse...") -> ttk.Button:
     return ttk.Button(parent, text=text, command=command, width=11)
+
+
+# ---------------------------------------------------------------------------
+# the calibration editor's canvas
+# ---------------------------------------------------------------------------
+
+#: Colours for the boxes drawn over the captured frame. Red for the strip
+#: because it is the thing being placed; green for the cells because they are
+#: the consequence of that placement, and the eye needs to tell at a glance
+#: which one it is dragging.
+STRIP_COLOR = "#ff3b30"
+CELL_COLOR = "#31d158"
+HANDLE_FILL = "#ffffff"
+
+#: How the pointer changes over each resize handle, so it is obvious the box
+#: can be grabbed there at all.
+HANDLE_CURSORS = {
+    "nw": "top_left_corner", "n": "top_side", "ne": "top_right_corner",
+    "e": "right_side", "se": "bottom_right_corner", "s": "bottom_side",
+    "sw": "bottom_left_corner", "w": "left_side",
+}
+
+
+class GeometryCanvas(ttk.Frame):
+    """The captured frame with the strip and cell boxes drawn on it, editable.
+
+    Two instances of this make up the Calibrate tab: one showing the whole
+    frame, where the strip is drawn out with the mouse, and one showing only
+    the strip and a small margin, magnified, where it is judged. They differ
+    only in which part of the frame they are told to show -- every coordinate
+    goes through :class:`geometry.View`, so the same drag code serves both.
+
+    The cell boxes are **not** computed here. They come from
+    ``strip.cell_rects``, which is the function ``split_cells`` slices with, so
+    what is on screen is what the reader will read. Anything else would be a
+    calibration editor capable of disagreeing with the thing it calibrates.
+    """
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        on_change: Callable[[object], None] | None = None,
+        allow_draw: bool = True,
+        zoom_to_strip: bool = False,
+        margin: int = 12,
+        placeholder: str = "Take a picture first.",
+        height: int = 320,
+    ) -> None:
+        super().__init__(parent)
+        self.on_change = on_change
+        self.allow_draw = allow_draw
+        self.zoom_to_strip = zoom_to_strip
+        self.margin = margin
+        self.placeholder = placeholder
+        #: Which part of the strip the close-up shows: the whole thing, or one
+        #: corner. Showing the whole strip is what a close-up obviously ought
+        #: to do and is nearly useless for the job -- a 1159 pixel strip in a
+        #: 1000 pixel panel comes out *smaller* than life, and the question
+        #: being asked is whether an edge is one pixel inside another. Framing
+        #: one corner instead gets it to eight times life size, where the
+        #: answer is simply visible.
+        self.focus = "strip"
+        #: Magnification for the close-up. 0 means "fit whatever the focus
+        #: covers"; anything else is that many screen pixels per frame pixel.
+        #: A control rather than a constant because the right value depends on
+        #: how big the pop-out was when the picture was taken, which is not
+        #: knowable from here -- the same guess that has cost this project the
+        #: most time everywhere else.
+        self.zoom = 0.0
+
+        self.canvas = tk.Canvas(self, height=height, highlightthickness=0,
+                                background="#20242a", cursor="crosshair")
+        self.canvas.pack(fill="both", expand=True)
+
+        self._source_image = None        # the PIL image, loaded once per capture
+        self._photo = None               # the PhotoImage Tk is showing
+        self._photo_key: tuple | None = None
+        self._geometry = None            # a StripGeometry
+        self._drag: tuple[str, float, float] | None = None
+        self._pending: str | None = None
+        #: Set by arm_draw(). A box already on screen swallows presses near it
+        #: -- within a few pixels of an edge is a resize, inside it is a move --
+        #: so with the default geometry sitting over the strip there is nowhere
+        #: left to start a fresh one. This makes "draw a new box" an explicit
+        #: thing to ask for rather than a gap to find.
+        self._armed = False
+
+        self.canvas.bind("<Configure>", self._on_configure)
+        self.canvas.bind("<Button-1>", self._on_press)
+        self.canvas.bind("<B1-Motion>", self._on_motion)
+        self.canvas.bind("<ButtonRelease-1>", self._on_release)
+        self.canvas.bind("<Motion>", self._on_hover)
+
+    # -- what is being shown -------------------------------------------------
+
+    @property
+    def frame_size(self) -> tuple[int, int]:
+        if self._source_image is None:
+            return (0, 0)
+        return (self._source_image.width, self._source_image.height)
+
+    def set_frame(self, path: str | Path | None) -> None:
+        """Load the captured PNG this editor works on."""
+        self._source_image = None
+        self._photo_key = None
+        if path is not None and Path(path).is_file():
+            try:
+                from PIL import Image  # noqa: PLC0415 - optional at import time
+
+                image = Image.open(path)
+                image.load()
+                self._source_image = image.convert("RGB")
+            except Exception:  # noqa: BLE001 - a bad PNG is a message, not a crash
+                self._source_image = None
+        self.redraw()
+
+    def set_geometry(self, geometry) -> None:
+        self._geometry = geometry
+        self.redraw()
+
+    def _zoomed_rect(self, x: int, y: int, w: int, h: int,
+                     frame_w: int, frame_h: int) -> tuple[int, int, int, int]:
+        """A window of the frame at a fixed magnification, around the focus.
+
+        The anchor sits a third of the way in from the near side rather than
+        in the middle, so a corner is shown with more of the strip than of
+        what lies outside it -- the strip is what the edge is being judged
+        against.
+        """
+        span_w = max(8, int(round(max(self.canvas.winfo_width(), 1) / self.zoom)))
+        span_h = max(8, int(round(max(self.canvas.winfo_height(), 1) / self.zoom)))
+        if self.focus == "topleft":
+            left, top = x - span_w // 3, y - span_h // 3
+        elif self.focus == "bottomright":
+            left, top = x + w - 2 * span_w // 3, y + h - 2 * span_h // 3
+        else:
+            left, top = x + w // 2 - span_w // 2, y + h // 2 - span_h // 2
+        left = max(0, min(left, max(0, frame_w - span_w)))
+        top = max(0, min(top, max(0, frame_h - span_h)))
+        return (left, top, min(span_w, frame_w - left), min(span_h, frame_h - top))
+
+    def set_zoom(self, zoom: float) -> None:
+        if zoom != self.zoom:
+            self.zoom = zoom
+            self._photo_key = None
+            self.redraw()
+
+    def set_focus(self, focus: str) -> None:
+        """Which part of the strip to magnify: strip | topleft | bottomright."""
+        if focus != self.focus:
+            self.focus = focus
+            self._photo_key = None
+            self.redraw()
+
+    def arm_draw(self) -> None:
+        """The next drag starts a new box, wherever it begins."""
+        if not self.allow_draw:
+            return
+        self._armed = True
+        self.canvas.configure(cursor="tcross")
+
+    @property
+    def armed(self) -> bool:
+        return self._armed
+
+    # -- drawing -------------------------------------------------------------
+
+    def _source_rect(self) -> tuple[int, int, int, int]:
+        from . import geometry as geo  # noqa: PLC0415 - avoids a cycle at import time
+
+        width, height = self.frame_size
+        if not self.zoom_to_strip or self._geometry is None:
+            return (0, 0, width, height)
+        x, y, w, h = geo.strip_pixels(self._geometry, width, height)
+        # A margin around the strip, so the edge being aimed at has something
+        # on the far side of it to be judged against. Without it the strip
+        # fills the view and "just inside the edge" has no visible reference.
+        margin_x = max(self.margin, int(round(w * 0.02)))
+        margin_y = max(self.margin, int(round(h * 0.6)))
+        if self.zoom > 0:
+            return self._zoomed_rect(x, y, w, h, width, height)
+        if self.focus in ("topleft", "bottomright"):
+            # Enough of the strip to show a cell or two beside the corner, so
+            # the edge has the rest of the strip to be judged against.
+            span_x = max(90, int(round(w / max(1, self._geometry.cells) * 1.6)))
+            if self.focus == "topleft":
+                left, top = x - margin_x, y - margin_y
+            else:
+                left, top = x + w + margin_x - span_x, y + h + margin_y - (h + 2 * margin_y)
+            left = max(0, min(left, width - 1))
+            top = max(0, min(top, height - 1))
+            right = min(width, left + span_x)
+            bottom = min(height, top + h + 2 * margin_y)
+            return (left, top, max(1, right - left), max(1, bottom - top))
+        left = max(0, x - margin_x)
+        top = max(0, y - margin_y)
+        right = min(width, x + w + margin_x)
+        bottom = min(height, y + h + margin_y)
+        return (left, top, max(1, right - left), max(1, bottom - top))
+
+    def view(self):
+        """The current mapping between frame pixels and this canvas.
+
+        Computed on demand rather than cached from the last redraw. A cached
+        one goes stale the moment the canvas is resized -- redrawing is
+        debounced, so for a tenth of a second afterwards every press would be
+        mapped through the old scale and land somewhere the user never
+        clicked. Recomputing it is a handful of arithmetic operations.
+        """
+        from . import geometry as geo  # noqa: PLC0415
+
+        if self._source_image is None:
+            return None
+        return geo.fit_view(
+            self._source_rect(),
+            max(self.canvas.winfo_width(), 1),
+            max(self.canvas.winfo_height(), 1),
+        )
+
+    def _on_configure(self, _event: tk.Event) -> None:
+        if self._pending is not None:
+            self.after_cancel(self._pending)
+        self._pending = self.after(80, self.redraw)
+
+    def redraw(self) -> None:
+        self._pending = None
+        self.canvas.delete("all")
+        view = self.view()
+        if view is None:
+            self.canvas.create_text(
+                self.canvas.winfo_width() / 2, self.canvas.winfo_height() / 2,
+                text=self.placeholder, fill="#9aa3ad", width=420, justify="center",
+            )
+            return
+        self._draw_photo(self._source_rect(), view)
+        if self._geometry is not None:
+            self._draw_boxes(view)
+
+    def _draw_photo(self, source: tuple[int, int, int, int], view) -> None:
+        key = (source, round(view.scale, 4))
+        if key != self._photo_key:
+            self._photo = _render_region(self._source_image, source, view.scale)
+            self._photo_key = key
+        if self._photo is not None:
+            self.canvas.create_image(view.offset_x, view.offset_y, anchor="nw", image=self._photo)
+
+    def _draw_boxes(self, view) -> None:
+        from ..strip import cell_rects  # noqa: PLC0415 - pulls in cv2; not at import time
+        from . import geometry as geo  # noqa: PLC0415
+
+        frame_w, frame_h = self.frame_size
+        # The cells first, so the strip outline and its handles sit on top of
+        # them rather than being hidden behind a cell edge.
+        for rect in cell_rects((frame_h, frame_w, 3), self._geometry):
+            x0, y0, x1, y1 = view.rect_to_canvas(rect.x, rect.y, rect.w, rect.h)
+            self.canvas.create_rectangle(x0, y0, x1, y1, outline=CELL_COLOR, width=1)
+
+        x, y, w, h = geo.strip_pixels(self._geometry, frame_w, frame_h)
+        x0, y0, x1, y1 = view.rect_to_canvas(x, y, w, h)
+        self.canvas.create_rectangle(x0, y0, x1, y1, outline=STRIP_COLOR, width=2)
+        if not self.allow_draw and not self.zoom_to_strip:
+            return
+        for _name, (px, py) in geo.handle_points(x0, y0, x1 - x0, y1 - y0).items():
+            self.canvas.create_rectangle(
+                px - 4, py - 4, px + 4, py + 4,
+                outline=STRIP_COLOR, fill=HANDLE_FILL, width=1,
+            )
+
+    def strip_canvas_rect(self) -> tuple[float, float, float, float] | None:
+        from . import geometry as geo  # noqa: PLC0415
+
+        view = self.view()
+        if view is None or self._geometry is None:
+            return None
+        frame_w, frame_h = self.frame_size
+        x, y, w, h = geo.strip_pixels(self._geometry, frame_w, frame_h)
+        return view.rect_to_canvas(x, y, w, h)
+
+    # -- mouse ---------------------------------------------------------------
+
+    def _on_hover(self, event: tk.Event) -> None:
+        from . import geometry as geo  # noqa: PLC0415
+
+        if self._armed:
+            return
+        rect = self.strip_canvas_rect()
+        if rect is None:
+            return
+        handle = geo.handle_at(event.x, event.y, rect)
+        if handle:
+            self.canvas.configure(cursor=HANDLE_CURSORS.get(handle, "fleur"))
+        elif geo.inside(event.x, event.y, rect):
+            self.canvas.configure(cursor="fleur")
+        else:
+            self.canvas.configure(cursor="crosshair" if self.allow_draw else "")
+
+    def _on_press(self, event: tk.Event) -> None:
+        from . import geometry as geo  # noqa: PLC0415
+
+        view = self.view()
+        if view is None or self._geometry is None:
+            return
+        if self._armed:
+            self._armed = False
+            frame_x, frame_y = view.to_frame(event.x, event.y)
+            self._drag = ("draw", frame_x, frame_y)
+            return
+        rect = self.strip_canvas_rect()
+        handle = geo.handle_at(event.x, event.y, rect) if rect else None
+        if handle:
+            self._drag = (f"handle:{handle}", event.x, event.y)
+        elif rect and geo.inside(event.x, event.y, rect):
+            self._drag = ("move", event.x, event.y)
+        elif self.allow_draw:
+            # A fresh box. Starting it means the old one is gone, which is the
+            # point: the auto-detect is a seed, not something to nurse.
+            frame_x, frame_y = view.to_frame(event.x, event.y)
+            self._drag = ("draw", frame_x, frame_y)
+        else:
+            self._drag = None
+
+    def _on_motion(self, event: tk.Event) -> None:
+        from . import geometry as geo  # noqa: PLC0415
+
+        view = self.view()
+        if self._drag is None or view is None or self._geometry is None:
+            return
+        kind, start_x, start_y = self._drag
+        frame_w, frame_h = self.frame_size
+        frame_x, frame_y = view.to_frame(event.x, event.y)
+
+        if kind == "draw":
+            updated = geo.geometry_from_pixels(
+                self._geometry, start_x, start_y, frame_x, frame_y, frame_w, frame_h
+            )
+        elif kind == "move":
+            dx = (event.x - start_x) / view.scale
+            dy = (event.y - start_y) / view.scale
+            updated = geo.move(self._geometry, dx, dy, frame_w, frame_h)
+            self._drag = (kind, event.x, event.y)
+        else:
+            updated = geo.drag_handle(
+                self._geometry, kind.split(":", 1)[1], frame_x, frame_y, frame_w, frame_h
+            )
+        self._emit(updated)
+
+    def _on_release(self, _event: tk.Event) -> None:
+        self._drag = None
+
+    def _emit(self, geometry) -> None:
+        self._geometry = geometry
+        self.redraw()
+        if self.on_change is not None:
+            self.on_change(geometry)
+
+
+def _render_region(image, source: tuple[int, int, int, int], scale: float):
+    """Crop a region of the frame and scale it for display.
+
+    Enlarged with nearest-neighbour on purpose. The whole judgement being made
+    here is where one edge sits relative to another, a few pixels apart, and a
+    smooth interpolation would invent a soft boundary that is not in the
+    capture -- putting the user's eye on an edge the reader will never see.
+    """
+    try:
+        from PIL import Image, ImageTk  # noqa: PLC0415
+    except ImportError:
+        return None
+    x, y, w, h = source
+    region = image.crop((x, y, x + w, y + h))
+    target = (max(1, int(round(w * scale))), max(1, int(round(h * scale))))
+    if target != (region.width, region.height):
+        resample = Image.NEAREST if scale >= 1.0 else Image.LANCZOS
+        region = region.resize(target, resample)
+    return ImageTk.PhotoImage(region)
