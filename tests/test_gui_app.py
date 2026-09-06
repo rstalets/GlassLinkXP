@@ -157,6 +157,55 @@ def test_the_exact_command_is_shown_above_the_output(gui):
     assert "g1000_softkey.main run" in run.output.contents()
 
 
+def test_the_run_tab_offers_debug_output(gui):
+    """It was reported missing because it was only in the header block."""
+    run = _tab(gui, "RunTab")
+    boxes = [child for child in run.winfo_children()[0].winfo_children()
+             if child.winfo_class() == "TCheckbutton"
+             and "Debug" in str(child.cget("text"))]
+    assert boxes, "the Run tab has no debug output checkbox"
+    assert str(boxes[0].cget("variable")) == str(gui.verbose)
+
+
+def test_the_two_debug_switches_are_one_setting(gui):
+    """Two checkboxes that could disagree about one flag is worse than none."""
+    run = _tab(gui, "RunTab")
+    gui.verbose.set(True)
+    boxes = [child for child in run.winfo_children()[0].winfo_children()
+             if child.winfo_class() == "TCheckbutton"
+             and "Debug" in str(child.cget("text"))]
+    assert gui.root.getvar(str(boxes[0].cget("variable"))) in (1, True, "1")
+
+
+def test_debug_output_reaches_the_daemons_command_line(gui, monkeypatch):
+    started = {}
+    monkeypatch.setattr(gui.daemon, "start",
+                        lambda command, cwd=None: started.update(command=command))
+    run = _tab(gui, "RunTab")
+    gui.verbose.set(True)
+    run.start()
+    assert "-v" in started["command"]
+
+    started.clear()
+    gui.verbose.set(False)
+    run._set_running(False)
+    run.start()
+    assert "-v" not in started["command"]
+
+
+def test_toggling_debug_output_mid_run_says_it_needs_a_restart(gui):
+    """Silently doing nothing looks exactly like a checkbox that is broken."""
+    run = _tab(gui, "RunTab")
+    run._set_running(True)
+    gui.verbose.set(True)
+    run._verbose_changed()
+    assert "Start" in gui.status._text.get()
+
+    run._set_running(False)
+    run._verbose_changed()
+    assert gui.status._text.get() == "Debug output on."
+
+
 def test_the_output_pane_does_not_grow_without_limit(gui):
     run = _tab(gui, "RunTab")
     run.output.max_lines = 20

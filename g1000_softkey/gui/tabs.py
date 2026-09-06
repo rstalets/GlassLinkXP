@@ -213,14 +213,23 @@ class RunTab(Tab):
         ttk.Entry(controls, textvariable=self.hz, width=6).pack(side="left")
         ttk.Checkbutton(controls, text="Single pass", variable=self.once).pack(side="left", padx=(12, 0))
         ttk.Checkbutton(controls, text="Stage timings", variable=self.timing).pack(side="left", padx=(8, 0))
+        # Bound to the app's own verbose flag rather than a second variable of
+        # this tab's: the same setting is offered in the header for every other
+        # tab's commands, and two checkboxes that could disagree about one flag
+        # would be worse than none. Sharing the Tk variable keeps them in step
+        # without either having to know about the other.
+        ttk.Checkbutton(controls, text="Debug output", variable=self.app.verbose,
+                        command=self._verbose_changed).pack(side="left", padx=(8, 0))
 
         help_label(
             self,
             "Publish to: leave it empty to use whatever the configuration says. 'console' "
             "reads the labels and prints them without touching X-Plane, which is the safe "
-            "thing to watch first. The board below fills in from the daemon's own output, "
-            "so it shows exactly what is being published -- including which cells the sim "
-            "has highlighted.",
+            "thing to watch first. Debug output adds a line per cell saying what was read, "
+            "what it snapped to and how confident it was -- it is the first thing to turn "
+            "on when a label comes out wrong. The board below fills in from the daemon's "
+            "own output, so it shows exactly what is being published, including which "
+            "cells the sim has highlighted.",
             width=900,
         ).pack(anchor="w", pady=(6, 8))
 
@@ -279,6 +288,23 @@ class RunTab(Tab):
         self._health = {}
         if self.app.start_daemon(values, self.on_event):
             self._set_running(True)
+
+    def _verbose_changed(self) -> None:
+        """The flag is fixed in the child's argv, so it cannot change mid-run.
+
+        Saying so is the whole point of this callback: silently doing nothing
+        would look exactly like a checkbox that does not work, which is how
+        this one was reported in the first place.
+        """
+        state = "on" if self.app.verbose.get() else "off"
+        if self._running:
+            self.app.set_status(
+                f"Debug output {state} -- press Stop and then Start for it to take effect; "
+                "it is set on the command line when the daemon starts.",
+                "warning",
+            )
+        else:
+            self.app.set_status(f"Debug output {state}.")
 
     def _set_running(self, running: bool) -> None:
         self._running = running

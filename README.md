@@ -515,9 +515,9 @@ says:
   `[[screen]]` block; **Tools** ran the benchmark.
 * **Find windows** failed as it must on Linux, and the tab showed the command
   that failed and the daemon's own explanation of why.
-* The tests cover this without a display too: 160 of them, of which the 34 that
-  need Tk skip themselves when there is no display (`379 passed` with one,
-  `345 passed, 34 skipped` without). Three of them are there to
+* The tests cover this without a display too: 164 of them, of which the 38 that
+  need Tk skip themselves when there is no display (`383 passed` with one,
+  `345 passed, 38 skipped` without). Three of them are there to
   stop the GUI drifting from the daemon -- every argv the GUI can build is
   parsed by `main.build_parser()`, the softkey board's parser is fed
   `main._format_row()`'s own output, and the settings form is checked against

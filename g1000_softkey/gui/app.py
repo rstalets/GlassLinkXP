@@ -108,7 +108,9 @@ class GuiApp:
         ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
         ttk.Checkbutton(
-            header, text="Debug output (per cell: what was read, what it snapped to, confidence)",
+            header,
+            text="Debug output for every command (per cell: what was read, what it snapped "
+                 "to, confidence). The Run tab has its own copy of this switch.",
             variable=self.verbose,
         ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
 

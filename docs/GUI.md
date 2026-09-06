@@ -57,7 +57,7 @@ running daemon.
 | Tab | Runs | For |
 | --- | --- | --- |
 | Start here | `synth` | The six steps of setting this up, each with a button to the tab that does it. And a way to try the whole thing with no X-Plane. |
-| Run | `run` | Start/stop, the publisher and rate, and a live board of the twelve softkeys per display. |
+| Run | `run` | Start/stop, the publisher, the rate, debug output, and a live board of the twelve softkeys per display. |
 | Find windows | `list-windows` | Pick the pop-out windows off a list; applying one writes `window_title` into the config. Windows only. |
 | Calibrate | `calibrate` | The overlay picture with the twelve boxes drawn on the frame, the auto-detected geometry, and the fields to nudge it. |
 | Cells | `dump-cells`, `tune` | Every cell as Tesseract receives it, next to the raw crop. Tune searches preprocessing settings against one cell that reads wrongly. |
@@ -66,6 +66,14 @@ running daemon.
 | Vocabulary | -- | `labels.txt` in an editor. |
 | Settings | -- | Every setting in the config file, as a form, plus a raw TOML editor. |
 | Tools | `bench`, `synth` | Timings, and synthetic frames. |
+
+**Debug output** appears twice on purpose: once in the header, where it applies
+to whatever command any tab runs, and once on the Run tab beside Start, because
+that is where somebody chasing a bad label looks for it. Both are views of one
+Tk variable, so they cannot disagree. It becomes `-v` on the child's command
+line and is therefore fixed for the life of that child -- toggling it while the
+daemon is running says so in the status bar rather than appearing to do
+nothing.
 
 The frame source at the top of the window is the shared `--image` argument. Set
 it to a PNG or a folder of PNGs and every tab reads from saved pictures instead
