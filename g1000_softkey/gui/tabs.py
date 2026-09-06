@@ -1281,16 +1281,15 @@ class CellsTab(Tab):
             row, column = divmod(index, columns)
             block = ttk.LabelFrame(self.grid_frame, text=f" {index + 1} ")
             block.grid(row=row, column=column, sticky="nsew", padx=3, pady=3)
-            # allow_shrink=False on both: the raw crop is small enough that it
-            # never needs to shrink at these box sizes, but a taller block one
-            # display's geometry produced would otherwise silently blur it.
+            # allow_shrink=False on both, and no forced width/height: a fixed
+            # box sized for *this* geometry's ~320x152 prep image would have
+            # clipped the bottom of a taller one instead, since allow_shrink
+            # only refuses to blur an oversized image, it does not resize the
+            # box to fit it. Left unconfigured (and propagating, the default),
+            # the frame just takes the size of the image once it is shown.
             prep = ImageView(block, "-", allow_shrink=False)
-            prep.configure(width=320, height=152)
-            prep.pack_propagate(False)
             prep.pack(fill="x")
             raw = ImageView(block, "-", allow_shrink=False)
-            raw.configure(width=90, height=45)
-            raw.pack_propagate(False)
             raw.pack(fill="x")
             caption = ttk.Label(block, text="", foreground=HELP_COLOR, anchor="center")
             caption.pack(fill="x")

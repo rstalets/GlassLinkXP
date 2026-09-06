@@ -83,14 +83,22 @@ bar with a count and the traceback kept on the app (`poll_failures`,
 
 The prep picture is shown at its true pixel size (or an integer multiple),
 never shrunk to fit its box: `ImageView(allow_shrink=False)` skips the
-LANCZOS-shrink branch in `_load_scaled` entirely, so a box smaller than the
-picture overflows rather than blurring it. That is not a stylistic choice --
-`CLAUDE.md` records that this project's hardest bug (a closed counter filling
-in during thresholding) was found only once someone saw a picture of the
-preprocessed cell, and a smoothed-down preview of a strictly binary image can
-hide exactly that. The tab used to shrink this preview to 34% of native size
-to fit six columns in the window; that made it decorative rather than
-diagnostic.
+LANCZOS-shrink branch in `_load_scaled` entirely. That is not a stylistic
+choice -- `CLAUDE.md` records that this project's hardest bug (a closed
+counter filling in during thresholding) was found only once someone saw a
+picture of the preprocessed cell, and a smoothed-down preview of a strictly
+binary image can hide exactly that. The tab used to shrink this preview to
+34% of native size to fit six columns in the window; that made it decorative
+rather than diagnostic.
+
+The box itself has no configured size, and is not `pack_propagate(False)`: it
+sizes to whatever picture it is given, rather than the picture being made to
+fit a size guessed from one geometry. A first version fixed the box at
+~320x152 -- this project's own default `StripGeometry` -- and combined with
+`allow_shrink=False` that clipped the bottom of a real, differently
+calibrated strip's taller cells instead of blurring them, which is the same
+failure in a new shape. There is no size that is right for every geometry;
+letting the box follow the picture is.
 
 True resolution does not fit twelve cells in one screen, so the grid, the
 tuner controls and the output pane all live inside one `ScrollableFrame`

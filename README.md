@@ -560,15 +560,19 @@ says:
   `minsize(940, 640)`, with real `dump-cells` output loaded, the tab's own
   content -- more than twice the window's height once the grid, the tuner and
   the output pane are all accounted for -- scrolls instead of squeezing the
-  output pane and the status bar to nothing, which is what it did before.
+  output pane and the status bar to nothing, which is what it did before. A
+  box fixed at this project's own default geometry's ~320x152 still clipped a
+  taller, differently-calibrated strip's cells instead of blurring them; the
+  box now takes its size from the picture it is given rather than the other
+  way around, checked against a strip geometry more than twice as tall.
   **Colours** parsed 24 measurements and drew each row in the colour it was
   classified as; **Pages** captured a `[[screen]]` block; **Tools** ran the
   benchmark.
 * **Find windows** failed as it must on Linux, and the tab showed the command
   that failed and the daemon's own explanation of why.
-* The tests cover this without a display too: 368 of them, of which the 110 that
-  need Tk skip themselves when there is no display (`617 passed` with one,
-  `507 passed, 110 skipped` without). Several are there to stop the GUI
+* The tests cover this without a display too: 369 of them, of which the 111 that
+  need Tk skip themselves when there is no display (`618 passed` with one,
+  `507 passed, 111 skipped` without). Several are there to stop the GUI
   drifting from the daemon -- every argv the GUI can build is parsed by
   `main.build_parser()`, every parser in `gui/logparse.py` is fed the output of
   the command it reads (the softkey board from `main._format_row()`, the window

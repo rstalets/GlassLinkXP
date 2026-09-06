@@ -371,6 +371,49 @@ def test_cells_tab_does_not_clip_at_the_documented_minsize(gui, tmp_path):
         "the scrollregion does not cover everything the tab packed into it"
 
 
+def test_cells_tab_boxes_are_never_shorter_than_the_picture_they_show(gui, tmp_path):
+    """Reported live: the raw crop was still clipped along the bottom after
+    the fix above. The box sizes (320x152 prep, 90x45 raw) were picked to fit
+    *this* project's default StripGeometry -- a taller one (a real
+    calibration, not the synthetic default) produces a bigger native picture,
+    and a fixed box combined with allow_shrink=False clips whatever does not
+    fit rather than blurring it. The box must size itself to the picture, not
+    the other way around."""
+    from g1000_softkey import synth
+    from g1000_softkey.main import main as cli_main
+
+    tall = StripGeometry(y=0.80, h=0.10, cell_pad_y=0.03)
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    import cv2
+    cv2.imwrite(str(frames / "pfd_top.png"), synth.render_menu("pfd_top", geom=tall))
+    cells = tmp_path / "cells"
+
+    document = configio.default_document()
+    document["display"]["pfd"]["geometry"] = dict(tall.as_dict())
+    config_path = tmp_path / "config.toml"
+    configio.save(config_path, document, backup=False)
+    gui.config_path = config_path
+    gui.load_config()
+
+    assert cli_main(["-c", str(config_path), "dump-cells",
+                     "--image", str(frames / "pfd_top.png"), "--out", str(cells)]) == 0
+
+    tab = _tab(gui, "CellsTab")
+    tab.display.set("pfd")
+    tab.out.set(str(cells))
+    tab._show()
+    gui.root.deiconify()
+    gui.root.update_idletasks()
+
+    prep, raw, _caption = tab._views[0]
+    assert prep._image is not None and raw._image is not None
+    assert prep.winfo_height() >= prep._image.height(), \
+        f"prep box ({prep.winfo_height()}) is shorter than its picture ({prep._image.height()})"
+    assert raw.winfo_height() >= raw._image.height(), \
+        f"raw box ({raw.winfo_height()}) is shorter than its picture ({raw._image.height()})"
+
+
 def test_add_tuning_page_snapshots_pixels_so_a_later_capture_cannot_overwrite_them(gui, tmp_path):
     """Reported live: three pages queued, and the search reported settings
     that stayed on the baseline no matter what, because every queued page's
