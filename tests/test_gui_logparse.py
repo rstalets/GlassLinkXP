@@ -84,6 +84,42 @@ def test_lines_that_are_not_rows_are_ignored(line):
     assert logparse.parse_row(line) is None
 
 
+def test_a_cell_that_reads_as_a_pipe_does_not_stop_the_board():
+    """The row is joined with " | ", and splitting on a bare "|" was safe only
+    while the OCR whitelist excluded the character. It is the user's to edit
+    and the GUI's own settings form offers it -- and "|" is Tesseract's
+    commonest confusion for I and 1, so it is the reading most likely to be
+    let through by somebody who added the character to get an I."""
+    labels = list(LABELS)
+    labels[1] = "|"
+    labels[5] = "|"
+    row = logparse.parse_row(PREFIX + _format_row(_result(labels=labels)))
+    assert row is not None
+    assert row.labels == tuple(labels)
+
+
+def test_a_pipe_inside_a_label_is_part_of_the_label():
+    """Split on the bare character and "A|B" came back as two half cells; the
+    separator the daemon writes is " | ", spaces included."""
+    labels = list(LABELS)
+    labels[3] = "A|B"
+    row = logparse.parse_row(PREFIX + _format_row(_result(labels=labels)))
+    assert row is not None
+    assert row.labels == tuple(labels)
+
+
+def test_a_pipe_in_the_middle_of_a_label_keeps_the_row():
+    """Ambiguous in the daemon's format, so the row is kept with the odd label
+    rather than dropped: a board that stops is the worse of the two."""
+    labels = list(LABELS)
+    labels[0] = "A | B"
+    row = logparse.parse_row(PREFIX + _format_row(_result(labels=labels)))
+    assert row is not None
+    assert len(row.labels) == 12
+    assert row.labels[0] == "A | B"
+    assert row.labels[2] == LABELS[2]
+
+
 def test_a_row_with_a_gap_in_the_numbering_is_refused():
     """Half a board is worse than none -- it would show stale labels as live."""
     assert logparse.parse_row("[pfd] 1:A | 3:B") is None

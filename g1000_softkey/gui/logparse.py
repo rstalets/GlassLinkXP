@@ -33,6 +33,13 @@ BACKGROUND_VALUES = {name: value for value, name in BACKGROUND_NAMES.items()}
 #: the bracketed display key followed by "1:", which a timestamp cannot fake.
 _ROW = re.compile(r"\[(?P<display>[A-Za-z0-9_.-]+)\]\s+(?P<body>1:.*)$")
 _CELL = re.compile(r"^(?P<index>\d+):(?P<text>.*)$")
+#: What separates one cell from the next: `_format_row` joins with " | ", and
+#: the spaces are the load-bearing part. Splitting on a bare "|" was safe only
+#: because DEFAULT_WHITELIST leaves the character out -- but ocr.whitelist is
+#: the user's to edit, is offered in the GUI's own settings form, and "|" is
+#: Tesseract's commonest confusion for I and 1. One cell reading "|" made this
+#: whole function return None, and the board stopped updating without a word.
+_SEPARATOR = re.compile(r"\s\|\s")
 _BG = re.compile(r"^(?P<index>\d+)=(?P<name>[a-z?]+)$")
 
 #: What `_format_row` prints for a cell with no label. A real label cannot be
@@ -70,10 +77,17 @@ def parse_row(line: str) -> LabelRow | None:
         body, _, backgrounds_text = body.partition("  bg:")
 
     labels: list[str] = []
-    for chunk in body.split("|"):
+    for chunk in _SEPARATOR.split(body):
         cell = _CELL.match(chunk.strip())
         if cell is None:
-            return None
+            # Not "<n>:" at all, so it is not a cell: it is the tail of the
+            # previous label, which happened to contain the separator itself.
+            # Rejoined rather than refused -- the row is ambiguous at that
+            # point and one odd label is worth more than a board that stops.
+            if not labels:
+                return None
+            labels[-1] = f"{labels[-1]} | {chunk.strip()}".strip()
+            continue
         # Cells are printed in order and padded to a fixed width; a gap would
         # mean the format changed, and half a row is worse than none.
         if int(cell.group("index")) != len(labels) + 1:

@@ -188,6 +188,19 @@ def test_a_warning_cell_is_drawn_as_one(gui):
     assert run._boards["pfd"]._boxes[0].cget("background") == CELL_COLORS[RED][0]
 
 
+def test_a_cell_reading_as_a_pipe_does_not_freeze_the_board(gui):
+    """The row is joined with " | " and the parser split on the bare
+    character, so one cell reading "|" -- Tesseract's commonest confusion for
+    I and 1, and reachable as soon as the user adds it to ocr.whitelist --
+    made the row unparseable and the board silently stopped updating."""
+    run = _tab(gui, "RunTab")
+    run.on_event(Line("[pfd] 1:INSET     | 2:|         | 3:PFD"))
+    board = run._boards["pfd"]
+    assert board._boxes[0].cget("text") == "INSET"
+    assert board._boxes[1].cget("text") == "|"
+    assert board._boxes[2].cget("text") == "PFD"
+
+
 def test_a_display_that_stops_delivering_frames_is_shown_as_such(gui):
     run = _tab(gui, "RunTab")
     run._set_running(True)
