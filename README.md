@@ -543,12 +543,15 @@ says:
   `[[screen]]` block; **Tools** ran the benchmark.
 * **Find windows** failed as it must on Linux, and the tab showed the command
   that failed and the daemon's own explanation of why.
-* The tests cover this without a display too: 300 of them, of which the 78 that
-  need Tk skip themselves when there is no display (`519 passed` with one,
-  `441 passed, 78 skipped` without). Four of them are there to stop the GUI
+* The tests cover this without a display too: 358 of them, of which the 100 that
+  need Tk skip themselves when there is no display (`594 passed` with one,
+  `494 passed, 100 skipped` without). Several are there to stop the GUI
   drifting from the daemon -- every argv the GUI can build is parsed by
-  `main.build_parser()`, the softkey board's parser is fed
-  `main._format_row()`'s own output, the settings form is checked against the
+  `main.build_parser()`, every parser in `gui/logparse.py` is fed the output of
+  the command it reads (the softkey board from `main._format_row()`, the window
+  list from a real `WindowInfo`, and the calibrate, dump-colors and
+  screen-template parsers from those commands run over synthetic frames), the
+  settings form is checked against the
   config dataclasses field by field, and the calibration editor's boxes are
   compared with the rectangles `strip.py` crops.
 
