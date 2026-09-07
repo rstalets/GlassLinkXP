@@ -1,0 +1,110 @@
+name: Bug report
+description: A label reads wrong, nothing publishes, the window misbehaves, or the installer fails.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. One thing worth knowing before you fill this in:
+
+        **the screen is the only source of truth here**, and it is a small,
+        anti-aliased, GPU-composited picture. Almost every wrong label has been
+        diagnosed from a *picture of the cell* rather than from a description of
+        it -- guessing at pixels nobody can see is how this project has lost most
+        of its time. So if a label reads wrong, the `dump-cells` picture asked
+        for below is the single most useful thing you can attach.
+
+  - type: input
+    id: version
+    attributes:
+      label: GlassLinkXP version
+      description: "The first line of any command's output names it -- `GlassLinkXP 1.2.3: run` -- and so does the bottom-right corner of the window. `NO_VERSION` means it was not installed from a release zip."
+      placeholder: "1.2.3"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where it went wrong
+      options:
+        - Installing (install.cmd / install.ps1)
+        - The X-Plane plugin (datarefs missing or not registering)
+        - Finding or sizing the pop-out windows
+        - Calibration (drawing the strip)
+        - Reading the labels (OCR: wrong or blank)
+        - Background colour (selected / caution / warning)
+        - Publishing to X-Plane (or PilotsDeck showing nothing)
+        - The window itself (a tab, a crash, a hang)
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: verbose
+    attributes:
+      label: Output of a verbose run
+      description: |
+        From your install folder (`%appdata%\GlassLinkXP`):
+
+        ```
+        .\glasslinkxp.cmd run --once -v
+        ```
+
+        Paste the whole thing, including the per-cell lines. If the window is
+        what misbehaved, the Log pane at the bottom shows the same output --
+        copy that.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: cells
+    attributes:
+      label: A picture of the cells, if a label read wrong
+      description: |
+        ```
+        .\glasslinkxp.cmd dump-cells
+        ```
+
+        writes one PNG per cell *after* preprocessing -- which is what Tesseract
+        actually sees, and is usually the thing that explains the reading. Drag
+        the images in here, or attach the folder as a zip. A screenshot of the
+        whole softkey strip helps too.
+      placeholder: Drag images here.
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Your config.toml
+      description: Calibration and tuning are the settings most bugs turn out to live in. It contains no credentials.
+      render: toml
+    validations:
+      required: false
+
+  - type: input
+    id: environment
+    attributes:
+      label: Windows, X-Plane and display
+      description: Windows version, X-Plane version, monitor resolution, and the Windows display **scaling** (a pop-out at 125% is captured 25% larger than the size in config.toml, which matters).
+      placeholder: "Windows 11 24H2, X-Plane 12.2.0, 3840x2160 at 150%"
+    validations:
+      required: true
+
+  - type: textarea
+    id: anything-else
+    attributes:
+      label: Anything else
+      description: Aircraft, whether it happens every time, what you already tried.
+    validations:
+      required: false

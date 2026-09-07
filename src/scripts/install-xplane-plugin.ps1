@@ -10,9 +10,13 @@
     Three things have to be true before the plugin runs:
 
       1. XPPython3 is installed in <X-Plane>/Resources/plugins/XPPython3.
-         Version 4 bundles its own Python 3.12, so no system Python is needed
-         and the plugin does NOT run in this project's venv -- which is why it
-         imports nothing but the standard library and the XPPython3 API.
+         It is what loads Python plugins at all, so this script checks for it
+         first and offers to download and install it if it is not there --
+         before copying our plugin in, since a PI_ file with no XPPython3 to
+         load it does nothing at all. Version 4 bundles its own Python 3.12,
+         so no system Python is needed and the plugin does NOT run in this
+         project's venv -- which is why it imports nothing but the standard
+         library and the XPPython3 API.
       2. <X-Plane>/Resources/plugins/PythonPlugins exists. XPPython3 creates
          it on the first X-Plane run, so on a fresh install it is not there
          yet. This script creates it if needed, which is harmless.
@@ -27,7 +31,12 @@
     Install the XPPython3 beta build instead of stable.
 
 .PARAMETER SkipXPPython3
-    Only copy the plugin; assume XPPython3 is already installed.
+    Only copy the plugin; assume XPPython3 is already installed. Without it,
+    a missing XPPython3 is offered for download instead.
+
+.PARAMETER Yes
+    Do not ask before downloading XPPython3 -- install it if it is missing.
+    install.ps1 passes this because it has already asked.
 
 .PARAMETER Force
     Reinstall XPPython3 even if it is already present.
@@ -49,7 +58,8 @@ param(
     [switch]$Beta,
     [switch]$SkipXPPython3,
     [switch]$Force,
-    [switch]$VerifyOnly
+    [switch]$VerifyOnly,
+    [switch]$Yes
 )
 
 $ErrorActionPreference = 'Stop'
@@ -193,17 +203,68 @@ if ($VerifyOnly) {
 # --------------------------------------------------------------------------
 # XPPython3
 # --------------------------------------------------------------------------
-Write-Step 'Installing XPPython3'
-if ((Test-Path $xp3Dir) -and -not $Force) {
-    Write-Ok "already present: $xp3Dir (use -Force to reinstall)"
+# GlassLinkXP's plugin is a *Python* plugin, and X-Plane cannot run one on its
+# own: XPPython3 is the host that loads it. So this checks whether it is
+# already there and, if it is not, offers to fetch it -- before our own plugin
+# is copied in, because a PI_ file in PythonPlugins with no XPPython3 to load
+# it is a file that silently does nothing.
+#
+# Presence is decided by finding an .xpl, not by the folder existing: a folder
+# left behind by an interrupted extraction would otherwise be read as an
+# install, and the failure that follows is X-Plane quietly not loading
+# anything, which is a bad thing to have to debug from the other end.
+Write-Step 'Checking for XPPython3'
+$xp3Xpl = $null
+if (Test-Path $xp3Dir) {
+    $xp3Xpl = Get-ChildItem -Path $xp3Dir -Filter '*.xpl' -Recurse -File -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+}
+$zipName = if ($Beta) { 'xp3-win32b.zip' } else { 'xp3-win32.zip' }
+# The download location named by the XPPython3 documentation itself
+# (xppython3.readthedocs.io -> Plugin Installation). v4 bundles its own
+# Python 3.12, which is why the plugin needs no system Python and imports
+# nothing outside the standard library.
+$url = "https://maps.avnwx.com/data/x-plane/$zipName"
+
+$installXp3 = $false
+if ($xp3Xpl -and -not $Force) {
+    Write-Ok "already installed: $($xp3Xpl.FullName)"
+    Write-Host '        (use -Force to reinstall it)' -ForegroundColor DarkGray
 } elseif ($SkipXPPython3) {
     Write-Warn2 'skipping XPPython3 (-SkipXPPython3)'
-    if (-not (Test-Path $xp3Dir)) { Write-Warn2 "but $xp3Dir does not exist -- the plugin will not load." }
+    if (-not $xp3Xpl) { Write-Warn2 "but no XPPython3 plugin is installed -- our plugin will not load." }
 } else {
-    # v4 bundles Python 3.12; no system Python needed.
-    $zipName = if ($Beta) { 'xp3-win32b.zip' } else { 'xp3-win32.zip' }
-    $url     = "https://maps.avnwx.com/data/x-plane/$zipName"
-    $tmp     = Join-Path ([System.IO.Path]::GetTempPath()) $zipName
+    if (-not $xp3Xpl -and (Test-Path $xp3Dir)) {
+        Write-Warn2 "$xp3Dir exists but holds no .xpl -- treating XPPython3 as not installed."
+    }
+    if ($Yes -or $Force) {
+        # install.ps1 passes -Yes because it has already asked; -Force is an
+        # explicit "reinstall it", which is an answer in itself.
+        $installXp3 = $true
+    } else {
+        Write-Host ''
+        Write-Host '    XPPython3 is not installed in this copy of X-Plane. It is what runs' -ForegroundColor Yellow
+        Write-Host '    Python plugins, including the small one GlassLinkXP publishes into,' -ForegroundColor Yellow
+        Write-Host '    and it bundles its own Python -- nothing else on your PC is touched.' -ForegroundColor Yellow
+        Write-Host "    It would be downloaded from:"
+        Write-Host "        $url"
+        Write-Host "    and extracted into:"
+        Write-Host "        $pluginsDir"
+        $answer = Read-Host '    Download and install XPPython3 now? [Y/n]'
+        $installXp3 = ($answer -notmatch '^[Nn]')
+    }
+    if (-not $installXp3) {
+        Write-Warn2 'not installing XPPython3.'
+        Write-Warn2 'GlassLinkXP''s plugin will still be copied in, but nothing will load it'
+        Write-Warn2 'until XPPython3 is there. Install it by hand from:'
+        Write-Warn2 '  https://xppython3.readthedocs.io/en/latest/usage/installation_plugin.html'
+        Write-Warn2 "extracting into $pluginsDir, or re-run this script and answer yes."
+    }
+}
+
+if ($installXp3) {
+    Write-Step 'Installing XPPython3'
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) $zipName
     Write-Host "    downloading $url"
     try {
         Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $tmp
@@ -227,7 +288,12 @@ so that you end up with $xp3Dir
     if (-not (Test-Path $xp3Dir)) {
         Fail "extraction did not produce $xp3Dir -- the zip layout may have changed."
     }
-    Write-Ok "installed: $xp3Dir"
+    $xp3Xpl = Get-ChildItem -Path $xp3Dir -Filter '*.xpl' -Recurse -File -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+    if (-not $xp3Xpl) {
+        Fail "extracted $xp3Dir but it holds no .xpl -- the zip layout may have changed."
+    }
+    Write-Ok "installed: $($xp3Xpl.FullName)"
 }
 
 # --------------------------------------------------------------------------
@@ -282,18 +348,18 @@ $running = @(Get-Process -Name 'X-Plane*' -ErrorAction SilentlyContinue)
 Write-Host @"
 
 ============================================================
- X-Plane side installed.
+ $(if ($xp3Xpl) { 'X-Plane side installed.' } else { 'X-Plane side installed, but it will not load yet.' })
 
-   XPPython3 : $xp3Dir
+   XPPython3 : $(if ($xp3Xpl) { $xp3Dir } else { 'NOT INSTALLED -- nothing will load the plugin until it is' })
    Plugin    : $dest
 
  Next:
-   1. $(if ($running) { 'RESTART X-Plane (it is running now -- plugins load at startup)' } else { 'Start X-Plane 12 and load an aircraft with a G1000' })
+   1. $(if (-not $xp3Xpl) { 'Install XPPython3: https://xppython3.readthedocs.io/en/latest/usage/installation_plugin.html' } elseif ($running) { 'RESTART X-Plane (it is running now -- plugins load at startup)' } else { 'Start X-Plane 12 and load an aircraft with a G1000' })
    2. Confirm the 48 datarefs registered:
         src\scripts\install-xplane-plugin.ps1 -VerifyOnly
    3. Pop out the PFD and MFD into their own windows, then:
         .\glasslinkxp list-windows
-        .\glasslinkxp calibrate --display pfd
+        .\glasslinkxp calibrate
 
  If the plugin does not load, look in the X-Plane root at:
    Log.txt  and  XPPython3.log

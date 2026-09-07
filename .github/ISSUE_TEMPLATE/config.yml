@@ -1,0 +1,12 @@
+# Blank issues stay available on purpose: Discussions is not enabled on this
+# repository, so a question that is neither a bug nor an enhancement would
+# otherwise have nowhere to go. Turn this off if Discussions is ever turned on,
+# and add a contact link to it here.
+blank_issues_enabled: true
+contact_links:
+  - name: Installing, wiring a PilotsDeck button, or a label that will not read
+    url: https://github.com/rstalets/GlassLinkXP#readme
+    about: The README covers install, first run, wiring, and the common failures in a troubleshooting table. Worth a look before filing.
+  - name: How it works, and what has actually been tested
+    url: https://github.com/rstalets/GlassLinkXP/blob/main/docs/DEVELOPER.md
+    about: Layout, offline development, latency numbers, and an explicit list of what is verified and what is not.

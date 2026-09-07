@@ -29,9 +29,10 @@ truth, and it is a low-resolution, anti-aliased, GPU-composited image.**
 downloads and extracts, with `install.cmd` at its top level -- so the manifest
 (`pyproject.toml`, `uv.lock`, `.python-version`) lives inside it too, because
 `uv sync` reads them on the user's machine at install time. Everything else
-here (`tests/`, `docs/`, `tools/`, `CLAUDE.md`, `PLAN.md`) is dev-only and
-never ships. `tests/test_packaging.py` enforces both halves of that, and
-`tools/make_zip.py` builds the zip.
+here (`tests/`, `docs/`, `tools/`, `.github/`, `CLAUDE.md`, `PLAN.md`) is
+dev-only and never ships. `tests/test_packaging.py` enforces both halves of
+that, and `tools/make_zip.py` builds the zip -- stamping the version in from
+the release tag, which `.github/workflows/release.yml` passes it.
 
 ## Shape of the system
 
@@ -73,6 +74,8 @@ src/glasslinkxp/
   screens.py    softkey page definitions (screens.toml)
   config.py     frozen dataclasses + TOML loader (reading only; the GUI
                 writes with tomli-w)
+  version.py    reads the VERSION file the release build stamps; logged on the
+                first line of every command
   configmigrate.py  reconciles a kept config.toml with the settings this
                 version has, on update (see migrate-config)
   gui/          the window (see docs/GUI.md), including the calibration editor
@@ -136,6 +139,26 @@ dataref and a number bare into an Int one. X-Plane types the dataref, so the
 daemon and the plugin have to agree without either checking: send a number to a
 name the plugin registered as `Type_Data` and the write fails at the sim, not
 here. Adding a dataref means touching both sides.
+
+**The version is written by the build, into the zip, never into the tree.**
+`src/pyproject.toml` says `0.0.0` and so does the `glasslinkxp` block in
+`src/uv.lock`; a release stamps the tag into both, because `uv sync --locked`
+-- what `install.ps1` runs on the user's machine -- refuses to run when the
+lock and the manifest disagree about the project's own version. That is
+measured: bumping `pyproject.toml` alone makes `uv lock --check` report the
+lockfile out of date.
+
+A third file, `glasslinkxp/VERSION`, is the only one the *running* app reads
+(`version.py` at import; `main()` logs it on the first line of every command
+and the window shows it bottom-right) and **it does not exist in a checkout**:
+the build creates it for a release only, so a clone finds nothing and reports
+`NO_VERSION`. It shipped checked-in at `0.0.0` once, and a clone then claimed
+`0.0.0` -- a number, in logs and bug reports, for a build nobody released. Do
+not add it back to the tree; `.gitignore` carries it, and `make_zip.py` skips
+any it finds. So there is nothing to bump by hand for a release, and
+`tools/make_zip.py` is the only thing that writes a version. If you find
+yourself editing a version number, stop and read *Releasing* in
+`docs/DEVELOPER.md`.
 
 **The plugin may only import the standard library.** It runs inside XPPython3's
 own bundled Python 3.12, not this project's venv. No numpy, no requests.
@@ -298,6 +321,8 @@ None of these couplings is visible to the type checker:
 | `strip_rect` or `cell_rects` | `test_gui_geometry.py` and `test_gui_canvas.py` -- the calibration editor draws what `cell_rects` returns, and both check it against the real thing |
 | `clipped_edges` or `CLIP_MARGIN` | `test_gui_checks.py` -- the margin is 0 because the ink extents were measured across the corpus, and a test keeps that measurement true; the calibration editor and `run -v` share the function |
 | a tab class name, or the setup steps | `test_gui_wizard.py` -- every step in `gui/wizard.py` names its tab by class name, and the test resolves each through `tabs.tab_index` |
+| a flag `tools/make_zip.py` takes, or how the version is stamped | `test_release.py` -- the workflow's own `python tools/make_zip.py ...` line is parsed by `build_parser()`, and the manifest and the lock are checked to agree about the version |
+| a switch `install.ps1` passes to `scripts/install-xplane-plugin.ps1` | `test_packaging.py` -- they are separate processes, so a switch the other does not declare fails only at the end of a real install |
 
 Fix the GUI in the same commit; do not weaken the test. A GUI that has drifted
 from the daemon still looks like it is working, which is what makes it worth a
@@ -355,6 +380,9 @@ commit, not afterwards.
 | a config dataclass field | `gui/schema.py` -- see *Things that will catch you out* |
 | dataref names, types or field width | `README.md` PilotsDeck wiring, the plugin docstring, `src/config.example.toml` |
 | what has been tested on real hardware | the *Verified offline* / *Not verified here* sections of `docs/DEVELOPER.md` |
+| how a release is built, versioned or published | the *Releasing* section of `docs/DEVELOPER.md`, and the short version in `README.md` |
+| what every command prints before it starts | the *Reading the debug output* section of `docs/PIPELINE.md` |
+| what either installer asks the user, or installs for them | `README.md`'s install steps, and the script's own comment-based help (`.DESCRIPTION`) |
 
 **The Mermaid diagrams in `docs/` must be re-rendered to confirm they still
 parse.**

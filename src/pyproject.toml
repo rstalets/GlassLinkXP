@@ -1,6 +1,6 @@
 [project]
 name = "glasslinkxp"
-version = "0.1.0"
+version = "0.0.0"
 description = "GlassLinkXP reads the G1000's softkey labels off the screen and publishes them as X-Plane datarefs"
 requires-python = "==3.12.*"
 
@@ -45,7 +45,10 @@ dependencies = [
 # it by default, so the test suite is there without a second flag. install.ps1
 # passes --no-dev, so a user's install gets a runtime-only environment.
 [dependency-groups]
-dev = ["pytest>=7.4"]
+# PyYAML is here for the tests alone: the GitHub issue forms and the release
+# workflow are YAML files this repository's own tests read back, and a test
+# that skips itself for a missing parser is not a test.
+dev = ["pytest>=7.4", "PyYAML>=6,<7"]
 
 [project.scripts]
 glasslinkxp = "glasslinkxp.main:main"
@@ -92,4 +95,4 @@ build-backend = "setuptools.build_meta"
 packages = ["glasslinkxp", "glasslinkxp.gui"]
 
 [tool.setuptools.package-data]
-glasslinkxp = ["labels.txt", "screens.toml"]
+glasslinkxp = ["labels.txt", "screens.toml", "VERSION"]

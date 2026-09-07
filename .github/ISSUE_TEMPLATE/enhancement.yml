@@ -1,0 +1,58 @@
+name: Enhancement
+description: Suggest something GlassLinkXP should do, or do differently.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is awkward today
+      description: |
+        The situation you are actually in, before any solution. What you were
+        trying to do with the aircraft or the deck, and where it got in the way.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like instead
+      description: How you picture it working. A rough sketch is fine.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of it
+      options:
+        - Reading the labels (OCR, vocabulary, tuning)
+        - Colours and cell state
+        - Capture and the pop-out windows
+        - What gets published (datarefs, Stream Deck / PilotsDeck wiring)
+        - The window (tabs, setup, calibration editor)
+        - Install and update
+        - Documentation
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you have tried, or considered
+      description: |
+        Existing settings you have already tried, or a way of doing it you
+        rejected and why. Knowing the dead ends saves repeating them -- that
+        is how most of this project's design decisions were reached.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: This is about the G1000 in X-Plane 12 on Windows (the only thing GlassLinkXP supports today).
+          required: false
+        - label: I would be willing to test a build of this.
+          required: false

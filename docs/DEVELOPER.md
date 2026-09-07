@@ -49,7 +49,11 @@ src/            EVERYTHING THAT SHIPS. Zip this directory and it is what a
                                           without activating a venv
   config.example.toml   what a new config.toml is seeded from
 tests/          offline tests over the whole pipeline (not shipped)
-tools/make_zip.py   builds dist/glasslinkxp-<version>.zip from src/
+tools/make_zip.py   builds dist/glasslinkxp-<version>.zip from src/, stamping
+                the version in (see Releasing)
+.github/
+  workflows/release.yml   publishes a release -> the zip appears on it
+  ISSUE_TEMPLATE/         bug report and enhancement forms
 docs/
   PIPELINE.md       flowcharts of the daemon loop and the per-frame path
   GUI.md            how the window is put together, and what it is coupled to
@@ -97,6 +101,64 @@ source at `frames/` and every tab works with no X-Plane and no Windows.
 Every command takes `--image <png|dir>` in place of live capture, so the whole
 pipeline runs without Windows or X-Plane. `-v` prints a line per cell showing
 the raw OCR string, what it snapped to, confidence, and any substitution.
+
+## Releasing
+
+Publish a GitHub release tagged `vX.Y.Z` and `.github/workflows/release.yml`
+attaches `glasslinkxp-X.Y.Z.zip` to it a minute later. There is nothing to
+build first and nothing to bump by hand.
+
+**The tree is unreleased.** `src/pyproject.toml` says `0.0.0` and so does the
+`glasslinkxp` entry in `src/uv.lock`; the version is stamped in at build time
+from the tag. A checkout is not a release of anything, and a zip a developer
+builds locally says so on its face.
+
+**`glasslinkxp/VERSION` is the one the running app reads, and it is not in
+the tree.** The build *creates* it, for a release only. Every command logs it
+on its first line (`GlassLinkXP 1.2.3: run`) and the window shows it in its
+bottom-right corner, so a log or a screenshot says which download produced it.
+A checkout finds no file and says `NO_VERSION`, which is deliberately not a
+number -- a dev build cannot then be mistaken in an issue for a version
+something was released at.
+
+That asymmetry is load-bearing and was got wrong first: the file was checked
+in holding `0.0.0`, so every clone reported `0.0.0`, which reads like a build
+rather than like the absence of one. It is also why the version is a file and
+not something derived from `pyproject.toml` at runtime -- the manifest is in
+every checkout, so a dev build would get the same answer a release does.
+`.gitignore` carries it, so a copy that acquires one locally (from an install
+copied back, say) cannot be committed, and the build never zips one it finds.
+
+**The manifest and the lock are stamped together, and that is not tidiness.** `uv.lock`
+records the version it locked the project at, and `uv sync --locked` -- which
+is what `install.ps1` runs on the *user's* machine -- refuses to run when the
+lock and the manifest disagree. That was measured rather than assumed: bumping
+`pyproject.toml` alone makes `uv lock --check` report the lockfile out of
+date, and stamping both makes it pass again. So stamping one would produce a
+zip that downloads, extracts, and then fails at `uv sync`, on a machine none
+of us can see. `tools/make_zip.py` does all three in one operation and refuses to
+build if either substitution finds nothing; `tests/test_release.py` pins that,
+including that all three agree in the tree as checked in. Stamping writes into
+the zip, never into the tree, so a build leaves the checkout as it found it.
+
+The tag is the only input. `make_zip.py` normalises and validates it
+(`v1.2.3` -> `1.2.3`, and a tag that is not a version stops the build), which
+is why the workflow is four lines of shell: the version never reaches the
+shell interpolated, only as an environment variable it quotes, because a tag
+is text a human typed.
+
+```
+python tools/make_zip.py                    # dist/glasslinkxp-0.0.0.zip, no VERSION in it
+python tools/make_zip.py --version v1.2.3   # dist/glasslinkxp-1.2.3.zip, stamped
+```
+
+A zip built without a tag carries no version file at all, so a copy installed
+from one reports `NO_VERSION` exactly as a checkout does. Only a release has a
+version.
+
+To rehearse the packaging without cutting a version, run the workflow by hand
+(**Actions -> Release -> Run workflow**) with a version: it builds exactly the
+same zip and leaves it as a workflow artifact, attached to no release.
 
 ## Offline development (no X-Plane, no Windows)
 
@@ -306,6 +368,35 @@ On Linux/CPython 3.11, Tesseract 5.3.4 (system) with `tesserocr` 2.11:
   variants built across the six synthetic menus, none of them a retry, every
   label identical with `retry_opposite_polarity` on and off.
 
+* **A release build installs.** `tools/make_zip.py --version v1.4.2` was
+  built, extracted, and `uv lock --check` run against the extracted folder:
+  it resolves, which is the check `uv sync --locked` makes on the user's
+  machine before installing anything. Stamping `pyproject.toml` alone fails
+  that same check -- that is the measurement the two-file stamping exists
+  for, and both directions were run rather than reasoned about.
+* **The PowerShell parses, and the X-Plane side actually ran.** PowerShell
+  7.4.6 for Linux was fetched into a scratch directory (it is not in the
+  container by default and is not a dependency of anything):
+
+  ```
+  pwsh -NoProfile -Command '$e=$null; $t=$null;
+    [System.Management.Automation.Language.Parser]::ParseFile(
+      (Resolve-Path src/install.ps1).Path, [ref]$t, [ref]$e); $e'
+  ```
+
+  Both scripts parse with no errors. `install-xplane-plugin.ps1` was then run
+  against a fake X-Plane root (`X-Plane.exe` plus `Resources/plugins`; PowerShell
+  normalises the scripts' backslash paths on Linux, so the tree is ordinary
+  directories) over every branch of the XPPython3 check: none installed and
+  answered *no* (warns, still copies the plugin, and the summary says the
+  X-Plane side will not load yet); an `XPPython3` folder holding no `.xpl`
+  (reported as not installed, rather than counted as one); a real `.xpl`
+  present (left alone); `-SkipXPPython3`; and `-Yes`, which downloaded
+  `xp3-win32.zip` from the location the XPPython3 documentation names and
+  extracted `XPPython3/win_x64/XPPython3.xpl` -- the layout that documentation
+  describes. What that does *not* cover is Windows: file locking, paths with
+  drive letters, `Expand-Archive` under PowerShell 5.1, and a real X-Plane
+  loading what was extracted.
 * The tests pass (`python -m pytest -q`), including the full frame -> labels
   pipeline over 5 synthetic softkey menus (60 cells: 49 labels + 11 blanks),
   all read exactly, blanks included, with the highlighted cell read correctly.
@@ -429,12 +520,15 @@ have **never been executed**:
 * **Real G1000 geometry, fonts and colours.** All accuracy numbers above come
   from synthetic frames rendered with Liberation Sans, not from X-Plane
   screenshots.
-* **`install.ps1` / `install.cmd`, and `src/scripts/install-xplane-plugin.ps1`.**
-  Everything they orchestrate is verified piece by piece -- the wheel's
-  contents were inspected by hand, `uv lock` records its digest, and `uv sync
-  --locked` provisions an interpreter and passes the whole suite on Linux --
-  but **the PowerShell itself has never been run, or even syntax-checked**:
-  there is no PowerShell in the development container.
+* **`install.ps1` / `install.cmd`, and `src/scripts/install-xplane-plugin.ps1`,
+  on Windows.** Both scripts now parse clean and the plugin script has been
+  *run*, but under PowerShell 7 on Linux (see *Verified offline*), which is
+  not the Windows PowerShell 5.1 a user's `install.cmd` starts. Untested
+  either way: everything Windows-only in them -- the `WScript.Shell` desktop
+  shortcut, `SendMessageTimeout` broadcasting the new `TESSDATA_PREFIX`,
+  `winget`, `%APPDATA%` layout, the `uv` bootstrap, and `install.cmd` itself.
+  `install.ps1` has never been run at all: it copies into `%APPDATA%` and
+  runs `uv sync` on the machine it is on.
 * **The `Type_Int` datarefs.** The plugin registers them with `readInt` /
   `writeInt` per the XPPython3 documentation and the round trip is tested
   against the stubbed SDK, but no X-Plane has created one.

@@ -14,6 +14,7 @@ from tkinter import ttk
 from typing import Callable
 
 from ..color import BLACK, RED, WHITE, YELLOW
+from ..version import display_version
 
 # ---------------------------------------------------------------------------
 # palette
@@ -483,13 +484,29 @@ class WizardBar(tk.Frame):
 
 
 class StatusBar(ttk.Frame):
-    """One line at the bottom of the window: what just happened."""
+    """One line at the bottom of the window: what just happened, and which
+    build this is.
 
-    def __init__(self, parent: tk.Misc) -> None:
+    The version sits in the corner because a screenshot is how most of what
+    the window does gets reported, and a screenshot carries no log. It is the
+    same string the CLI logs on its first line, read from the same file, so
+    the two cannot disagree about which build somebody is running.
+    """
+
+    def __init__(self, parent: tk.Misc, version: str | None = None) -> None:
         super().__init__(parent, relief="sunken", borderwidth=1)
         self._text = tk.StringVar(value="")
+        # The version is packed first, and that order is load-bearing for the
+        # same reason the status bar itself is packed before the notebook: a
+        # widget packed after one with expand=True gets what that one left,
+        # which for a long status message is nothing.
+        self.version = ttk.Label(
+            self, text=version or display_version(), anchor="e",
+            padding=(6, 2), foreground=HELP_COLOR,
+        )
+        self.version.pack(side="right")
         self.label = ttk.Label(self, textvariable=self._text, anchor="w", padding=(6, 2))
-        self.label.pack(fill="x")
+        self.label.pack(side="left", fill="x", expand=True)
 
     def set(self, message: str, level: str = "info") -> None:
         self._text.set(message)

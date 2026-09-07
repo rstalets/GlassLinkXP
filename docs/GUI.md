@@ -173,6 +173,17 @@ space to slaves in the order they were packed, and a widget asked for after
 one with `expand=True` gets whatever that one left, which for an overflowing
 tab is nothing.
 
+The same rule applies *inside* the status bar. It carries two things: the
+message on the left and the version in the bottom-right corner, and the
+version is packed first for exactly the reason above -- the message expands,
+so anything packed after it would be squeezed out by a long one. The version
+is there because a screenshot is how most of what this window does gets
+reported, and a screenshot carries no log; it is `display_version()` over the
+same `glasslinkxp/VERSION` file the CLI logs on its first line, so the window
+and the log cannot disagree about which build somebody is running. A checkout has no version file -- the
+release build creates it -- so a dev build reads `NO_VERSION` there rather
+than a number nobody stamped.
+
 ## Queueing a page for the sharpening tuner
 
 **Add this page** copies the cells you typed an expected label for into their

@@ -1,14 +1,17 @@
 """CLI smoke tests -- every subcommand that can run without X-Plane."""
 
+import argparse
 import json
+import logging
 
 import pytest
 
+from glasslinkxp import __version__
 from glasslinkxp import main as main_module
 from glasslinkxp import synth
 from glasslinkxp.color import BLACK, RED, WHITE, YELLOW
-from glasslinkxp.config import DisplayConfig, PublishConfig
-from glasslinkxp.main import _values, main
+from glasslinkxp.config import ConfigError, DisplayConfig, PublishConfig
+from glasslinkxp.main import _values, build_parser, main
 from glasslinkxp.ocr import CellResult
 from glasslinkxp.pipeline import DisplayResult
 
@@ -474,3 +477,47 @@ def test_dump_cells_writes_the_picture_the_daemon_actually_uses(tmp_path, monkey
         assert written is not None, f"cell {index} was not written"
         assert written.shape == expected.shape, f"cell {index} is not the daemon's first variant"
         assert (written == expected).all(), f"cell {index} differs from what run() would OCR"
+
+
+# ---------------------------------------------------------------------------
+# Which build this is, on the first line of every run
+# ---------------------------------------------------------------------------
+
+def subcommands() -> list[str]:
+    """Every subcommand the parser knows, so a new one is covered by adding it."""
+    action = next(
+        a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction)
+    )
+    return sorted(action.choices)
+
+
+#: What a subcommand needs on the command line before argparse will accept it.
+EXTRA_ARGS = {"tune": ["--truth", "truth.toml"]}
+
+
+@pytest.mark.parametrize("command", subcommands())
+def test_every_command_says_which_build_it_is(command, caplog, monkeypatch):
+    """A bug report arrives as a log, and the first thing asked of one is which
+    version produced it.
+
+    Config loading is made to fail so this is about the log line and not about
+    what each subcommand does: the line still has to be out by then, because
+    the failures worth diagnosing include the ones that happen before any
+    subcommand runs.
+    """
+    def refuse(*args, **kwargs):
+        raise ConfigError("stopped before the subcommand runs")
+
+    monkeypatch.setattr(main_module, "load_config", refuse)
+    with caplog.at_level(logging.INFO, logger="glasslinkxp"):
+        assert main([command, *EXTRA_ARGS.get(command, [])]) == 2
+    assert f"GlassLinkXP {__version__}: {command}" in caplog.text
+
+
+def test_the_version_line_is_the_version_file(caplog, frames):
+    """Not a constant in the source: the file is what the release stamps."""
+    from glasslinkxp.version import VERSION_FILE, read_version
+
+    with caplog.at_level(logging.INFO, logger="glasslinkxp"):
+        assert main(["synth", "--out", str(frames)]) == 0
+    assert f"GlassLinkXP {read_version(VERSION_FILE)}:" in caplog.text

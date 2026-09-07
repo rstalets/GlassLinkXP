@@ -78,3 +78,73 @@ def test_the_launchers_find_the_venv_the_installer_builds():
         text = (SHIPPED / name).read_text(encoding="utf-8")
         assert "%~dp0.venv\\Scripts\\" in text, f"{name} looks for the venv somewhere else"
         assert "%~dp0..\\" not in text, f"{name} reaches above the install root"
+
+
+# ---------------------------------------------------------------------------
+# The two installers are one flow, and neither can see the other's mistakes
+# ---------------------------------------------------------------------------
+
+def _plugin_script() -> str:
+    return (SHIPPED / "scripts" / "install-xplane-plugin.ps1").read_text(encoding="utf-8")
+
+
+def test_the_installer_passes_the_plugin_script_only_switches_it_declares():
+    """install.ps1 launches the plugin script as a *separate* powershell.
+
+    So a switch the plugin script does not declare is not a syntax error
+    anybody sees here -- it is a failed X-Plane side at the end of a real
+    install, on a machine with no way to debug it.
+    """
+    installer = (SHIPPED / "install.ps1").read_text(encoding="utf-8")
+    match = re.search(r"-File \$pluginScript((?: -\w+)*)", installer)
+    assert match, "install.ps1 no longer launches the plugin script"
+    passed = re.findall(r"-(\w+)", match.group(1))
+    assert "Yes" in passed, (
+        "install.ps1 asks about the X-Plane side itself, so it must answer the "
+        "plugin script's own question rather than have the user asked twice"
+    )
+    declared = re.findall(r"\[switch\]\$(\w+)", _plugin_script())
+    for switch in passed:
+        assert switch in declared, f"install.ps1 passes -{switch}, which the plugin script does not accept"
+
+
+def test_xppython3_is_checked_for_before_our_plugin_is_copied_in():
+    """Order, because a PI_ file with no XPPython3 to load it does nothing.
+
+    XPPython3 is what runs Python plugins at all; installing ours into a
+    PythonPlugins folder that nothing reads looks like success and is not, so
+    the check and the offer come first.
+    """
+    text = _plugin_script()
+    check = text.index("Checking for XPPython3")
+    offer = text.index("Download and install XPPython3 now?")
+    ours = text.index("Installing PI_GlassLinkXP.py")
+    assert check < offer < ours
+    # The download location named by the XPPython3 documentation itself.
+    assert "https://maps.avnwx.com/data/x-plane/$zipName" in text
+    assert "https://xppython3.readthedocs.io/en/latest/usage/installation_plugin.html" in text
+
+
+def test_declining_xppython3_is_a_state_the_summary_can_report():
+    """Answering no still installs our plugin, so the end of the run has to
+    say the X-Plane side will not load yet -- otherwise the next thing the
+    user sees is 48 datarefs missing and no reason given."""
+    text = _plugin_script()
+    assert "NOT INSTALLED -- nothing will load the plugin until it is" in text
+
+
+def test_the_version_file_is_package_data():
+    """The release build puts it inside the package, so setuptools has to know.
+
+    It is not in the tree -- `tests/test_release.py` is where that is pinned --
+    but the zip is what a user installs, and a file setuptools does not know
+    about would be missing from the installed copy while still being in the
+    zip, which is the sort of difference nobody looks for. Declaring package
+    data that is not there is harmless; not declaring it is not.
+    """
+    assert not (SHIPPED / "glasslinkxp" / "VERSION").exists(), \
+        "a checkout must not carry a version -- see tests/test_release.py"
+    manifest = (SHIPPED / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r"(?m)^glasslinkxp = \[([^\]]*)\]", manifest)
+    assert match, "no package-data entry for glasslinkxp"
+    assert "VERSION" in match.group(1)

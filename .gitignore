@@ -227,3 +227,10 @@ tuning/
 # Language data fetched by install.ps1. Pinned by URL and SHA-256 in the
 # installer, never committed: nothing binary is vendored into this repository.
 tessdata/
+
+# Written by tools/make_zip.py into the release zip, never into the tree: a
+# checkout has no version, and a copy running from one says NO_VERSION rather
+# than claiming a number nobody stamped. An installed copy has one because it
+# came out of a zip; a dev checkout that somehow acquires one must not commit
+# it.
+src/glasslinkxp/VERSION
