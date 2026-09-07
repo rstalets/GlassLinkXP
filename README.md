@@ -145,6 +145,15 @@ shows that is missing; your additions survive updates.
 Run any command with `-v` for debug logging (per-cell raw OCR strings,
 confidences and match scores).
 
+## Asking a question
+
+[Start a discussion](../../discussions/new/choose). Anything that is not a
+specific bug or a concrete request -- "is it meant to do this", "has anyone got
+it working with X", an idea you want to sound out -- goes there rather than in
+an issue, and answers stay findable in
+[Discussions](../../discussions) instead of disappearing into a closed issue. A
+discussion that turns out to be a real bug can become an issue afterwards.
+
 ## Reporting a problem
 
 [Open an issue](../../issues/new/choose) -- there is a form for a bug and one

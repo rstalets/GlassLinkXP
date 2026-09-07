@@ -53,7 +53,9 @@ tools/make_zip.py   builds dist/glasslinkxp-<version>.zip from src/, stamping
                 the version in (see Releasing)
 .github/
   workflows/release.yml   publishes a release -> the zip appears on it
-  ISSUE_TEMPLATE/         bug report and enhancement forms
+  ISSUE_TEMPLATE/         bug report and enhancement forms, plus
+                          config.yml -- blank issues are off and it
+                          points questions at Discussions instead
 docs/
   PIPELINE.md       flowcharts of the daemon loop and the per-frame path
   GUI.md            how the window is put together, and what it is coupled to

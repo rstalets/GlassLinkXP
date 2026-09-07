@@ -1,9 +1,16 @@
-# Blank issues stay available on purpose: Discussions is not enabled on this
-# repository, so a question that is neither a bug nor an enhancement would
-# otherwise have nowhere to go. Turn this off if Discussions is ever turned on,
-# and add a contact link to it here.
-blank_issues_enabled: true
+# Blank issues are off because Discussions is enabled: a question, or an idea
+# you want to talk through before it is a request, belongs there rather than in
+# an issue with no form behind it. The links below are what a blank issue used
+# to be for. If Discussions is ever turned off again, turn blank issues back on
+# and drop the two Discussions links, or questions will have nowhere to go.
+blank_issues_enabled: false
 contact_links:
+  - name: Ask a question, or start a discussion
+    url: https://github.com/rstalets/GlassLinkXP/discussions/new/choose
+    about: "\"Is this supposed to...\", \"has anyone got this working with...\", or an idea you want to talk through -- Discussions, not an issue. Issues here are for a specific bug or a concrete request."
+  - name: Read what people have already asked
+    url: https://github.com/rstalets/GlassLinkXP/discussions
+    about: Someone may have hit the same thing. Answered questions live here rather than in closed issues.
   - name: Installing, wiring a PilotsDeck button, or a label that will not read
     url: https://github.com/rstalets/GlassLinkXP#readme
     about: The README covers install, first run, wiring, and the common failures in a troubleshooting table. Worth a look before filing.

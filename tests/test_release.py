@@ -291,6 +291,17 @@ def test_the_issue_templates_are_the_shape_github_expects():
                 assert field["id"], f"{path.name}: every field needs an id"
     config = yaml.safe_load((directory / "config.yml").read_text(encoding="utf-8"))
     assert isinstance(config["blank_issues_enabled"], bool)
+    links = config.get("contact_links") or []
+    for link in links:
+        assert link["name"] and link["url"] and link["about"]
+    if not config["blank_issues_enabled"]:
+        # With the blank form off, anything that is neither a bug nor a
+        # concrete request only has somewhere to go if a link sends it there.
+        # Discussions is that somewhere; drop the link and questions land in
+        # whichever form fits worst.
+        assert any(
+            "/discussions" in link["url"] for link in links
+        ), "blank issues are off, so a Discussions link is what questions have left"
 
 
 # ---------------------------------------------------------------------------
