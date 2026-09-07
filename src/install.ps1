@@ -15,6 +15,8 @@
       3. Fetches eng.traineddata (Tesseract's language data) and points
          TESSDATA_PREFIX at it for your Windows account.
       4. Adds a "GlassLinkXP" shortcut on the desktop, pointing at the window.
+      5. Offers to install the X-Plane side: XPPython3, if that copy of
+         X-Plane does not already have it, and then the dataref plugin.
 
     Re-run it to update. It asks before replacing the installed app, keeps
     your config.toml and labels.txt, and reconciles both with the settings and
@@ -239,12 +241,17 @@ Write-Ok "shortcut: $shortcutPath"
 $pluginScript = Join-Path $Target 'scripts\install-xplane-plugin.ps1'
 if (-not $SkipXPlanePlugin) {
     Write-Host "`nGlassLinkXP also needs a small plugin installed into X-Plane, so it has" -ForegroundColor Cyan
-    Write-Host "somewhere to publish the labels to." -ForegroundColor Cyan
+    Write-Host "somewhere to publish the labels to. If X-Plane has no XPPython3 yet -- the" -ForegroundColor Cyan
+    Write-Host "add-on that runs Python plugins at all -- that is downloaded and installed" -ForegroundColor Cyan
+    Write-Host "first; it brings its own Python and touches nothing else on your PC." -ForegroundColor Cyan
     $answer = Read-Host 'Install it now? [Y/n]'
     if ($answer -notmatch '^[Nn]') {
         # A separate powershell.exe, not `&`: install-xplane-plugin.ps1 calls
         # `exit` on failure, which would otherwise end this installer too.
-        powershell -NoProfile -ExecutionPolicy Bypass -File $pluginScript
+        # -Yes: it asks about XPPython3 itself when run on its own, and the
+        # question above is that same question -- asking it twice in one
+        # install is how a yes starts looking like a trick.
+        powershell -NoProfile -ExecutionPolicy Bypass -File $pluginScript -Yes
         if ($LASTEXITCODE -ne 0) {
             Write-Warn2 "the X-Plane side did not complete."
             Write-Warn2 "run it again later: $pluginScript"

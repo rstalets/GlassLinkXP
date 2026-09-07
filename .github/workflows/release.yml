@@ -1,0 +1,62 @@
+name: Release
+
+# Publishing a release is the trigger, not pushing a tag: the tag is what
+# names the version, and the release is the thing the zip has to end up
+# attached to. Draft a release, publish it, and its assets appear a minute
+# later.
+on:
+  release:
+    types: [published]
+  # A dry run. Builds exactly the same zip and leaves it as a workflow
+  # artifact, attached to no release -- which is how you check a change to
+  # the packaging without cutting a version to throw away.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to stamp in (e.g. 1.2.3). The zip is kept as a workflow artifact; no release is touched.'
+        required: true
+        default: '0.0.0'
+
+permissions:
+  contents: write   # to upload the asset onto the release
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # tools/make_zip.py imports nothing but the standard library, so there
+      # is no install step here at all -- and nothing that can fail between
+      # publishing a release and its asset appearing. The app's own
+      # dependencies are resolved on the user's machine by uv sync at install
+      # time; the zip is source, not a build.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Build the zip
+        # The tag and the dispatch input reach the script through the
+        # environment, never interpolated into the shell: a tag name is
+        # user-supplied text. make_zip.py is what validates the version and
+        # stamps it into pyproject.toml and uv.lock together -- both, because
+        # `uv sync --locked` on the user's machine fails if they disagree.
+        env:
+          RAW_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.version }}
+        run: python tools/make_zip.py --version "$RAW_VERSION" --out-dir dist
+
+      # Kept whatever the trigger was: on a real release this is the same
+      # bytes as the asset, which is how a failed upload can still be
+      # recovered without re-running the build.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: glasslinkxp-zip
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - name: Attach it to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/*.zip --clobber --repo "$GITHUB_REPOSITORY"

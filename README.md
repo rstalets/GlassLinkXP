@@ -28,6 +28,13 @@ Requires Windows and X-Plane 12.1.1+ (for its web API).
    publishes into (say yes -- without it there is nowhere for the labels to
    go).
 
+   That last step checks X-Plane for [XPPython3](https://xppython3.readthedocs.io/),
+   the add-on that runs Python plugins at all, and downloads it first if it is
+   not already there. It brings its own Python and installs only into
+   `X-Plane/Resources/plugins`. If you would rather do that part yourself,
+   answer no and install it by hand -- GlassLinkXP's plugin is copied in
+   either way, and starts working once XPPython3 is beside it.
+
 ### Updating
 
 Run `install.cmd` again. It asks before replacing the installed app, and
@@ -131,6 +138,22 @@ shows that is missing; your additions survive updates.
 Run any command with `-v` for debug logging (per-cell raw OCR strings,
 confidences and match scores).
 
+## Reporting a problem
+
+[Open an issue](../../issues/new/choose) -- there is a form for a bug and one
+for an idea. The bug form asks for a couple of things worth gathering first,
+because they are what actually settles a wrong label:
+
+```
+.\glasslinkxp.cmd run --once -v      # what was read, per cell
+.\glasslinkxp.cmd dump-cells             # what Tesseract was shown
+```
+
+Attach the `dump-cells` images. Every hard reading bug in this project so far
+has been diagnosed from a picture of the preprocessed cell and none from a
+description of one -- the screen is the only source of truth here, and it is a
+small, anti-aliased picture.
+
 ## More
 
 [`docs/PIPELINE.md`](docs/PIPELINE.md) has flowcharts of the daemon loop and of
@@ -151,5 +174,10 @@ there. Everything else in the repository is development-only.
 ```
 uv sync --project src --locked             # the venv lands in src/.venv
 xvfb-run -a src/.venv/bin/python -m pytest -q
-src/.venv/bin/python tools/make_zip.py     # -> dist/glasslinkxp-<version>.zip
+src/.venv/bin/python tools/make_zip.py     # -> dist/glasslinkxp-0.0.0.zip
 ```
+
+Releases are cut by publishing a GitHub release tagged `vX.Y.Z`: a workflow
+zips `src/`, stamps that version into it and attaches it. Nothing in the tree
+carries a version -- it says `0.0.0` until a release names one. See
+[*Releasing*](docs/DEVELOPER.md#releasing).
