@@ -41,7 +41,10 @@ dependencies = [
     "windows-capture>=1.3,<2 ; sys_platform == 'win32'",
 ]
 
-[project.optional-dependencies]
+# A PEP 735 group, not an optional extra: `uv sync` installs it by default,
+# so the installer's smoke-test step finds pytest without a second flag.
+# `uv sync --no-dev` gets a runtime-only environment.
+[dependency-groups]
 dev = ["pytest>=7.4"]
 
 [project.scripts]

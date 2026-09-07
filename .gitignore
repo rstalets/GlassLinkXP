@@ -222,6 +222,7 @@ config.toml
 calibration/
 cells/
 frames/
+tuning/
 
 # Language data fetched by scripts/install-windows.ps1. Pinned by URL and
 # SHA-256 in the installer, never committed: nothing binary is vendored into

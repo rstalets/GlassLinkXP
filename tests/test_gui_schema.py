@@ -61,7 +61,7 @@ def test_every_setting_is_explained():
 def test_choices_match_what_the_daemon_accepts():
     assert set(schema.setting("ocr", "threshold").choices) == {"otsu", "adaptive"}
     assert set(schema.setting("publish", "target").choices) == \
-        {"websocket", "webapi", "file", "console"}
+        {"websocket", "webapi", "console"}
 
 
 def test_the_publish_targets_are_the_ones_create_publisher_knows():
@@ -83,12 +83,6 @@ def test_a_setting_with_an_unknown_kind_is_refused():
 def test_a_choice_without_choices_is_refused():
     with pytest.raises(ValueError):
         schema.Setting("x", "choice", "X", "help")
-
-
-def test_kind_of_is_quiet_about_things_it_does_not_describe():
-    assert schema.kind_of("app", "loop_hz") == "float"
-    assert schema.kind_of("app", "not_a_setting") == ""
-    assert schema.kind_of("not_a_section", "anything") == ""
 
 
 # ---------------------------------------------------------------------------

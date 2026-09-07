@@ -35,7 +35,7 @@ import json
 import shutil
 import tomllib
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from ..config import AppConfig, StripGeometry, default_config, from_mapping
 from . import schema
@@ -50,12 +50,27 @@ class ConfigIoError(Exception):
 
 
 def read_document(path: str | Path) -> dict[str, Any]:
-    """The file as a plain nested dict, ready for the form to edit."""
+    """The file as a plain nested dict, ready for the form to edit.
+
+    Both ways of failing to *read* the bytes are a ``ConfigIoError``, because
+    the window opens by calling this and catches nothing else. A file saved
+    as UTF-16 -- which is what Notepad's old "Unicode" option produces, and
+    what a config file edited on a Windows machine can easily end up as --
+    raises ``UnicodeDecodeError``, a ``ValueError``, which used to escape:
+    the exception happened before the window existed, so there was no window,
+    no message, and under ``pythonw.exe`` no console to print to either.
+    ``prefs.load`` has always caught ``ValueError`` for the same reason.
+    """
     p = Path(path)
     try:
         text = p.read_text(encoding="utf-8")
     except OSError as exc:
         raise ConfigIoError(f"could not read {p}: {exc}") from exc
+    except ValueError as exc:  # UnicodeDecodeError, and anything like it
+        raise ConfigIoError(
+            f"could not read {p}: it is not UTF-8 text ({exc}). TOML files are UTF-8; "
+            "if you saved it from Notepad, save it again with the encoding set to UTF-8."
+        ) from exc
     return loads(text, source=str(p))
 
 
@@ -97,8 +112,9 @@ def document_from_config(config: AppConfig) -> dict[str, Any]:
             entry["window_size"] = list(display.window_size)
         document["display"][display.key] = entry
     document["ocr"] = {
-        key: _plain(getattr(config.ocr, key))
-        for key in (setting.key for setting in schema.OCR.settings)
+        setting.key: _plain(getattr(config.ocr, setting.key))
+        for setting in schema.OCR.settings
+        if not _is_package_default(config.ocr, setting, "ocr")
     }
     document["color"] = {
         key: getattr(config.color, key)
@@ -116,6 +132,25 @@ def _plain(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_plain(item) for item in value]
     return value
+
+
+def _is_package_default(section_config: Any, setting: schema.Setting, section: str) -> bool:
+    """Whether this value is only the path to the package's own copy of a file.
+
+    Those defaults are absolute paths into whichever checkout is running --
+    ``.../g1000_softkey/screens.toml`` -- and a document is what the form
+    fills its boxes from and what Save writes back out. Copying one into
+    config.toml pins the file to this install, so moving or reinstalling the
+    project leaves the daemon pointing at a file that is not there; the user
+    never asked for that path and would have no reason to look for it.
+    ``config.example.toml`` leaves these keys out for the same reason.
+
+    An absent key is not a missing setting: it is the setting saying "the copy
+    that ships with the package", which is what the daemon does with it.
+    """
+    if not setting.package_default:
+        return False
+    return getattr(section_config, setting.key) == schema.default_value(section, setting)
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +306,18 @@ def parse_field(setting: schema.Setting, text: str) -> Any:
 
 
 def format_field(setting: schema.Setting, value: Any) -> str:
-    """A config value as the text to put in the form field."""
+    """A config value as the text to put in the form field.
+
+    The ``int`` branch mirrors the ``float`` one above it, and it is not
+    cosmetic. TOML has two number types, and the daemon takes either for a
+    whole-number setting: ``change_tolerance = 6.0`` is legal and loads
+    exactly like ``6``. Without this the form put ``6.0`` in the box,
+    ``parse_field`` refused it as "not a whole number", and because
+    ``_collect`` gives up on the first bad field that one number made the
+    whole form unsaveable -- with an error naming a setting the user had not
+    touched. A float that is not a whole number is still shown as it is and
+    still refused: that one really is not an integer.
+    """
     if value is None:
         return ""
     if setting.kind == "bool":
@@ -280,6 +326,12 @@ def format_field(setting: schema.Setting, value: Any) -> str:
         return _toml_literal(value)
     if setting.kind == "float":
         return repr(float(value))
+    if setting.kind == "int":
+        if isinstance(value, bool):
+            return str(int(value))
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return str(value)
     return str(value)
 
 
@@ -330,6 +382,40 @@ def _toml_literal(value: Any) -> str:
     single-line box in the first place.
     """
     return json.dumps(_plain(value))
+
+
+# ---------------------------------------------------------------------------
+# tune --truth files
+# ---------------------------------------------------------------------------
+
+
+def dumps_truth(cases: Sequence[Mapping[str, Any]]) -> str:
+    """Serialise sharpening-tuner cases as a ``tune --truth`` file.
+
+    Lives beside :func:`dumps` rather than in ``tuning.py``, which is where
+    the search this file feeds actually runs: that module imports the
+    pipeline (cv2, Tesseract) to do the searching, and the GUI must never pull
+    that into its own process just to write a form's queued cases out to a
+    file -- it only ever shells out to the search, the same as everything
+    else it runs. ``tests/test_tuning.py`` checks the round trip through the
+    real ``tuning.load_truth`` instead.
+    """
+    try:
+        import tomli_w
+    except ImportError as exc:  # pragma: no cover - depends on the install
+        raise ConfigIoError(
+            "tomli-w is needed to write a tuning file and is not installed. "
+            "Run: pip install tomli-w"
+        ) from exc
+    document = {"case": [
+        {
+            "dir": str(case["dir"]),
+            "display": str(case["display"]),
+            "expect": {str(cell): str(label) for cell, label in sorted(case["expect"].items())},
+        }
+        for case in cases
+    ]}
+    return tomli_w.dumps(document)
 
 
 def get_in(document: Mapping[str, Any], path: tuple[str, ...], default: Any = None) -> Any:

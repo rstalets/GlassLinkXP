@@ -7,7 +7,7 @@ The calibration editor can show where the boxes are, but not what is inside
 them. This runs the daemon's own crop over the captured frame and asks the
 same question ``run -v`` asks of every cell: is the ink touching an edge?
 
-It uses ``strip.split_cells`` and ``strip.clipped_edges`` rather than its own
+It uses ``strip.split_cells`` and ``strip.measure_ink`` rather than its own
 crop and its own threshold, for the reason everything else in this tab does:
 a warning derived from a second implementation would be a warning about
 something other than what the reader is going to do.
@@ -45,18 +45,24 @@ def load_frame(path: str | Path):
     Read with OpenCV rather than converted from the editor's own PIL image, so
     the array handed to ``split_cells`` is byte for byte the one the capture
     path produces -- same channel order, same depth.
+
+    Which means the same flag ``capture.ImageCapture.grab`` uses, and that is
+    the point of the sentence above: ``IMREAD_UNCHANGED`` keeps whatever the
+    file happens to have, so a PNG with an alpha channel arrived here with
+    four channels and reached the daemon's own crop with three. The clipping
+    warning would then be measuring something the reader never sees.
     """
     import cv2  # noqa: PLC0415 - heavy; not wanted at import time
 
     p = Path(path)
     if not p.is_file():
         return None
-    return cv2.imread(str(p), cv2.IMREAD_UNCHANGED)
+    return cv2.imread(str(p), cv2.IMREAD_COLOR)
 
 
 def check_cells(frame, geometry: StripGeometry, ocr: OcrConfig | None = None) -> list[CellClip]:
     """Cells whose ink touches an edge of the crop this geometry would take."""
-    from ..strip import clipped_edges, ink_ratio, split_cells  # noqa: PLC0415
+    from ..strip import measure_ink, split_cells  # noqa: PLC0415
 
     if frame is None:
         return []
@@ -65,13 +71,14 @@ def check_cells(frame, geometry: StripGeometry, ocr: OcrConfig | None = None) ->
     for index, cell in enumerate(split_cells(frame, geometry), start=1):
         if cell.size == 0:
             continue
+        ink = measure_ink(cell, ocr.blank_contrast)
         # A blank softkey has no ink to touch anything, and reporting one as
         # clipped would put a warning on most of the strip most of the time --
         # the G1000 leaves plenty of keys empty. Skipped on the same test the
         # pipeline uses to decide a cell never reaches OCR.
-        if ink_ratio(cell, ocr.blank_contrast) < ocr.blank_ink_ratio:
+        if ink.ratio < ocr.blank_ink_ratio:
             continue
-        edges = clipped_edges(cell, ocr.blank_contrast)
+        edges = ink.clipped_edges()
         if edges:
             found.append(CellClip(index, edges))
     return found

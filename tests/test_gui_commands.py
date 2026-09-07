@@ -20,7 +20,7 @@ def _sample(option: commands.Option):
         return option.choices[0]
     if option.default is not None:
         return option.default
-    return {"labels": "A,B,C", "expect": "0", "hz": "8"}.get(option.key, "value")
+    return {"labels": "A,B,C", "hz": "8"}.get(option.key, "value")
 
 
 @pytest.mark.parametrize("spec", commands.COMMANDS, ids=lambda s: s.name)
@@ -66,12 +66,39 @@ def test_config_and_verbose_come_first():
 
 def test_a_required_option_left_empty_is_refused():
     with pytest.raises(commands.MissingOption):
-        commands.build_argv(commands.TUNE, {"image": "cell.png"})
+        commands.build_argv(commands.TUNE, {})
 
 
 def test_a_value_outside_the_choices_is_refused():
     with pytest.raises(ValueError):
         commands.build_argv(commands.RUN, {"publisher": "carrier-pigeon"})
+
+
+def test_the_declared_output_option_is_a_real_option():
+    """It was declared on three commands and read nowhere, so nothing would
+    have noticed it naming an option that had been renamed away."""
+    for spec in commands.COMMANDS:
+        if spec.output_option:
+            assert spec.option(spec.output_option).default, \
+                f"{spec.name}: the output folder needs a default to fall back on"
+
+
+def test_an_output_option_that_names_nothing_is_refused():
+    with pytest.raises(KeyError):
+        commands.CommandSpec("x", "X", "summary", output_option="out")
+
+
+def test_the_output_folder_is_what_the_child_would_write_into():
+    assert commands.output_folder(commands.CALIBRATE, {"out": " pictures "}) == "pictures"
+    # empty box: the child falls back to the option default, so this must too
+    assert commands.output_folder(commands.CALIBRATE, {"out": ""}) == \
+        commands.CALIBRATE.option("out").default
+    assert commands.output_folder(commands.CALIBRATE) == \
+        commands.CALIBRATE.option("out").default
+
+
+def test_a_command_that_writes_no_folder_has_none_to_show():
+    assert commands.output_folder(commands.RUN, {"out": "somewhere"}) == ""
 
 
 def test_run_is_the_only_long_running_command():

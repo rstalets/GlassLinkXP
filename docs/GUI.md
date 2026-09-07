@@ -52,6 +52,18 @@ everything else is a one-shot that finishes on its own. They get separate
 process slots so that pressing **Take a picture** cannot silently kill a
 running daemon.
 
+Both are drained by one `after` callback, `app._poll`, twenty times a second,
+and it reschedules itself in a `finally`. That is not tidiness. Tkinter
+*catches* an exception raised inside an `after` callback -- it reports it and
+returns -- so a reschedule written as the last statement is skipped by any
+failure above it, and the polling stops for good while the window carries on
+looking healthy: no more log lines, no board, no `Finished` event to put the
+Start button back. One bad line of output reaching one tab's handler is
+enough, and under `pythonw.exe` the traceback goes to a stderr nobody can
+see. So the loop survives a handler that raises, and says so in the status
+bar with a count and the traceback kept on the app (`poll_failures`,
+`last_poll_error`) -- kept alive is not the same as kept quiet.
+
 ## The tabs
 
 | Tab | Runs | For |
@@ -60,12 +72,63 @@ running daemon.
 | Run | `run` | Start/stop, the publisher, the rate, debug output, and a live board of the twelve softkeys per display. |
 | Find windows | `list-windows` | Pick the pop-out windows off a list; applying one writes `window_title` into the config. Windows only. |
 | Calibrate | `calibrate` | Draw the strip on the captured frame with the mouse, judge it in a magnified close-up, and work through three steps. The MFD copies the PFD unless told otherwise. See below. |
-| Cells | `dump-cells`, `tune` | Every cell as Tesseract receives it, next to the raw crop. Tune searches preprocessing settings against one cell that reads wrongly. |
+| Cells | `dump-cells`, `tune` | Every cell as Tesseract receives it, next to the raw crop. Type what a cell should read, queue the page, repeat on other pages, then Run tuning searches sharpening/upscale/threshold settings that fix a queued cell without breaking another. See below. |
 | Colours | `dump-colors` | Each cell's ring BGR/HSV and how it classified, with the rows drawn in the colour they were called. |
-| Pages | `screen-template`, `learn` | Record a softkey page into `screens.toml`; learn glyph shapes into `signatures.json`. |
+| Pages | `screen-template` | Record a softkey page into `screens.toml`. |
 | Vocabulary | -- | `labels.txt` in an editor. |
 | Settings | -- | Every setting in the config file, as a form, plus a raw TOML editor. |
 | Tools | `bench`, `synth` | Timings, and synthetic frames. |
+
+## The Cells tab: true resolution over density
+
+The prep picture is shown at its true pixel size (or an integer multiple),
+never shrunk to fit its box: `ImageView(allow_shrink=False)` skips the
+LANCZOS-shrink branch in `_load_scaled` entirely. That is not a stylistic
+choice -- `CLAUDE.md` records that this project's hardest bug (a closed
+counter filling in during thresholding) was found only once someone saw a
+picture of the preprocessed cell, and a smoothed-down preview of a strictly
+binary image can hide exactly that. The tab used to shrink this preview to
+34% of native size to fit six columns in the window; that made it decorative
+rather than diagnostic.
+
+The box itself has no configured size, and is not `pack_propagate(False)`: it
+sizes to whatever picture it is given, rather than the picture being made to
+fit a size guessed from one geometry. A first version fixed the box at
+~320x152 -- this project's own default `StripGeometry` -- and combined with
+`allow_shrink=False` that clipped the bottom of a real, differently
+calibrated strip's taller cells instead of blurring them, which is the same
+failure in a new shape. There is no size that is right for every geometry;
+letting the box follow the picture is.
+
+True resolution does not fit twelve cells in one screen, so the grid, the
+tuner controls and the output pane all live inside one `ScrollableFrame`
+rather than being packed directly into the tab. That is deliberate beyond
+just "it doesn't fit": with three things below the top controls each wanting
+their own minimum height and no way to tell `pack` which one may give space
+back, an oversubscribed tab does not shrink its content gracefully -- it
+picks something to squeeze, arbitrarily, and previously that was the output
+pane and (once its overflow reached the window's own packing) the status bar,
+both crushed to a 1px sliver. Scrolling the lot together removes the fight
+instead of trying to referee it, and the same failure mode is why the status
+bar is now packed *before* the notebook in `GuiApp._build` -- pack gives
+space to slaves in the order they were packed, and a widget asked for after
+one with `expand=True` gets whatever that one left, which for an overflowing
+tab is nothing.
+
+## Queueing a page for the sharpening tuner
+
+**Add this page** copies the cells you typed an expected label for into their
+own folder under `tuning/queue/` rather than recording the live `dump-cells`
+output folder directly. Reading a different page overwrites that same
+`{display}_{cell:02d}_raw.png` files in place -- it is the same folder every
+time, on purpose, so **Open folder** always shows the latest capture -- and a
+queued case that pointed at it directly would silently start being checked
+against a *different* page's pixels the moment a second page was captured,
+while still carrying the first page's expected labels. That shipped once:
+three pages queued, and the search reported no improvement possible no matter
+what, because most of the labelled cells were being compared against the
+wrong picture. **Clear queue** removes the snapshot folder along with the
+in-memory queue.
 
 ## The calibration editor
 
@@ -195,6 +258,14 @@ line and is therefore fixed for the life of that child -- toggling it while the
 daemon is running says so in the status bar rather than appearing to do
 nothing.
 
+The three settings that are remembered between sessions -- the frame source,
+debug output and the publisher -- are Tk variables on the app rather than on
+the tab that shows them, because `app.on_close` is what writes the
+preferences file and a tab-local copy is a copy that can disagree. Anything a
+command writes a *folder* of is declared once, as `output_option` on the
+`CommandSpec`, so the "Open folder" buttons and the child cannot end up
+looking in different places.
+
 The frame source at the top of the window is the shared `--image` argument. Set
 it to a PNG or a folder of PNGs and every tab reads from saved pictures instead
 of a live window, which is how the whole GUI can be used -- and is tested --
@@ -209,9 +280,31 @@ change to either fails the suite rather than the user's window:
 | --- | --- | --- |
 | the argv every button builds | `main.build_parser()` | `tests/test_gui_commands.py` parses every possible argv with the real parser, and asserts the GUI covers every subcommand the CLI has |
 | the daemon's `[pfd] 1:INSET \| ...` log rows | `main._format_row()` | `tests/test_gui_logparse.py` formats a `DisplayResult` with `_format_row` and parses it back |
+| the `list-windows` lines the Find windows tab lists | `capture.WindowInfo.__str__()` | `tests/test_gui_logparse.py` formats a real `WindowInfo` and parses it back, over titles with quotes, backslashes and non-ASCII in them |
+| what `calibrate`, `dump-colors` and `screen-template` print | `main.cmd_calibrate` / `cmd_dump_colors` / `cmd_screen_template` | `tests/test_gui_logparse.py` runs each command over the synthetic frames and parses exactly what it printed |
+| the `[tuning_result]` block `tune` prints | `tuning.result_block` | `tests/test_gui_logparse.py` and `tests/test_tuning.py` both round-trip it through the real TOML parser |
 | every config setting | the dataclasses in `config.py` | `tests/test_gui_schema.py` fails if a field is neither in `gui/schema.py` nor in `NOT_IN_THE_FORM` with a reason |
 | where the strip and its cells are | `strip.strip_rect` / `strip.cell_rects` | `tests/test_gui_geometry.py` compares the editor's pixels with theirs; `tests/test_gui_canvas.py` reads the drawn boxes back off the canvas |
 | whether a crop cuts a label | `strip.clipped_edges` | shared outright: the editor's amber boxes and `run -v`'s `CLIPPED?` are the same function |
+
+Every one of those parsers lives in `gui/logparse.py`, not in the tab that
+uses it, and every one is tested by *producing* its input -- formatting a real
+object, or running the real subcommand over the synthetic frames -- rather
+than from a sample pasted into the test. That is not a style preference. The
+window-list parser was written from a sample typed into a comment beside it,
+the sample had no apostrophe in it, and so the parser and its test agreed with
+each other while disagreeing with the producer for every aircraft whose name
+has one.
+
+One coupling runs the other way: the Cells tab *writes* a `tune --truth` file
+for `tuning.load_truth` to read, rather than parsing anything the CLI printed.
+That writer (`configio.dumps_truth`) deliberately does not live in `tuning.py`
+-- that module imports the pipeline (cv2, Tesseract) to do the searching, and
+the GUI must never pull that into its own process just to serialise a form's
+queued pages, the same reason `cmd_run` is a child rather than a function
+call. `tests/test_tuning.py` holds the coupling the same way as the ones
+above: it feeds `dumps_truth`'s actual output through the real
+`tuning.load_truth` rather than asserting on a hand-typed TOML fixture.
 
 The alternative to parsing the log rows was a second, machine-readable output
 mode on `run`. That would be a second thing to keep correct, and a board fed
@@ -231,11 +324,13 @@ g1000_softkey/gui/
   geometry.py   fractions ↔ frame pixels ↔ canvas pixels, and the clamping (no Tk)
   checks.py     runs the daemon's crop over the frame and reports clipped cells
   runner.py     child process + reader thread + event queue (no Tk)
-  logparse.py   the daemon's log rows back into labels and colours
+  logparse.py   everything the CLI prints, back into structures: the daemon's
+                log rows, list-windows, calibrate, dump-colors, screen-template
   schema.py     every config setting, with the text that explains it
   configio.py   config.toml in and out, including the small TOML writer
-  prefs.py      which config file was open last, and whether the displays share
-                a calibration; not stored in config.toml
+  prefs.py      which config file was open last, the frame source, the debug
+                flag, the publisher, and whether the displays share a
+                calibration; not stored in config.toml
 ```
 
 Nothing outside `app.py`, `tabs.py` and `widgets.py` imports Tk, which is why
@@ -275,12 +370,24 @@ are kept in `test_gui_configio.py` as a record of why, and to catch a future
 attempt to hand-roll it again.
 
 What remains here is the shape of a config document and the moving of values
-in and out of a form -- plus two small things worth naming:
+in and out of a form -- plus three small things worth naming:
 
 * **`strip_unset`.** `None` is how the form says a setting is not set, and
   TOML has no null; an absent key *is* the unset state, and is what the daemon
   reads back as `None`. Done on a copy, because the form still needs somewhere
   to put an empty box.
+* **The files that come with the package.** `ocr.screens_file` and
+  `ocr.labels_file` default to absolute paths *inside this checkout*, so a
+  document built from the defaults would carry them, the form would show them
+  as values, and the first Save would write them into `config.toml` -- pinning
+  the configuration to one install, and stopping the daemon starting the day
+  it moves. `config.example.toml` deliberately leaves them out for the same
+  reason. So they are marked `package_default` in `gui/schema.py` (which
+  implies `optional`): a document never carries them at their default, an
+  empty box means "whatever the package ships with", and the current file is
+  shown as a **hint drawn over the empty box** rather than as its contents.
+  Hint, not placeholder text: a placeholder written into the widget is
+  written into the variable the form serialises, which is the bug again.
 * **The header comment.** Prepended as a string, not serialised -- it points
   at `CONFIGURATION.md` and warns that saving from the form does not keep
   comments.

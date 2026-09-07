@@ -1,10 +1,9 @@
 """CLI entry point: run | gui | list-windows | calibrate | dump-cells | dump-colors
-| bench | screen-template | learn | tune | synth."""
+| bench | screen-template | tune | synth."""
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
 import logging
 import signal
 import statistics
@@ -17,7 +16,14 @@ import numpy as np
 from . import synth
 from .capture import CaptureError, FrameSource, ImageCapture, list_windows, sources_for
 from .color import BLACK, background_name, measure_cell
-from .config import AppConfig, ConfigError, DisplayConfig, default_config, load_config
+from .config import (
+    AppConfig,
+    ConfigError,
+    ConfigNotFound,
+    DisplayConfig,
+    default_config,
+    load_config,
+)
 from .ocr import OcrUnavailable, SoftkeyReader
 from .pipeline import DisplayPipeline, DisplayResult
 from .publish import Value, create_publisher
@@ -414,151 +420,41 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
 
 
 def cmd_tune(args: argparse.Namespace, config: AppConfig) -> int:
-    """Search preprocessing settings against a real cell image.
+    """Search sharpening-ladder settings across every labelled cell given.
 
-    Every parameter here has been guessed at least once from a description of
-    the pixels rather than the pixels themselves, and the guesses have been
-    wrong more often than right: the glyphs are small, the font is not one we
-    can reproduce, and what reopens a counter on one capture rings on another.
-    This runs the search where the real image is.
+    A setting that reads one cell correctly is not an improvement: the ladder
+    it goes into runs against all twelve cells of every frame, and a rung
+    strong enough to open up a 0 has, in practice, turned a 6 into a 5. So
+    this is fed one or more captured pages -- each a ``dump-cells`` output
+    folder plus what some of its cells should read -- and only keeps a
+    candidate that fixes something without making a cell that already read
+    correctly read wrong.
 
-    Feed it a cell that reads wrongly and say what it should say:
+        g1000 dump-cells --out cells_page1
+        # edit cells_page1's captures into a truth file, then:
+        g1000 tune --truth truth.toml
 
-        g1000 tune --image cells/pfd_01_raw.png --expect 0
+    See ``TuningCase`` in ``tuning.py`` for the truth file's shape.
     """
-    import cv2
+    from .tuning import TuningError, format_report, load_truth, run_tuning
 
-    from .ocr import LabelVocabulary, TesserocrEngine, normalise
-    from .strip import preprocess_cell
-
-    cell = cv2.imread(args.image, cv2.IMREAD_UNCHANGED)
-    if cell is None:
-        LOG.error("could not read %s", args.image)
-        return 2
-    expected = args.expect.strip().upper()
-    LOG.info("tuning %s (%dx%d) against %r", args.image, cell.shape[1], cell.shape[0], expected)
-
-    vocabulary = LabelVocabulary.from_file(config.ocr.labels_file, config.ocr.fuzzy_cutoff)
-    upscales = (3.0, 4.0, 6.0, 8.0)
-    amounts = (0.0, 0.3, 0.5, 0.8, 1.2, 1.6)
-    radii = (0.8, 1.0, 1.4)
-    psms = (7, 8, 10, 13)
-    methods = ("otsu", "adaptive")
-
-    engines = {}
-    for psm in psms:
-        try:
-            engines[psm] = TesserocrEngine(replace(config.ocr, psm=psm))
-        except Exception as exc:  # noqa: BLE001
-            LOG.warning("psm %d unavailable: %s", psm, exc)
-
-    hits, tried = [], 0
-    for psm, engine in engines.items():
-        for method in methods:
-            for upscale in upscales:
-                for amount in amounts:
-                    for radius in (radii if amount else (1.0,)):
-                        try:
-                            image = preprocess_cell(
-                                cell, upscale=upscale, method=method,
-                                sharpen_amount=amount, sharpen_radius=radius,
-                            )
-                            text, confidence = engine.recognize(image)
-                        except Exception:  # noqa: BLE001 - a bad combination is just a miss
-                            continue
-                        tried += 1
-                        snapped, _ = vocabulary.snap(normalise(text, config.ocr.whitelist))
-                        if snapped == expected:
-                            hits.append((confidence, psm, method, upscale, amount, radius))
-    for engine in engines.values():
-        engine.close()
-
-    print(f"\n  tried {tried} combinations, {len(hits)} produced {expected!r}\n")
-    if not hits:
-        print("  Nothing read it. The glyph is probably too small to recover by filtering:")
-        print("  make the pop-out window larger so the strip lands on more pixels, then")
-        print("  re-run calibrate and try again.\n")
-        return 1
-
-    hits.sort(reverse=True)
-    print(f"  {'conf':>5} {'psm':>4} {'method':>9} {'upscale':>8} {'sharpen':>16}")
-    for confidence, psm, method, upscale, amount, radius in hits[:10]:
-        sharpen = "off" if not amount else f"{amount} / {radius}"
-        print(f"  {confidence:>5.0f} {psm:>4} {method:>9} {upscale:>8} {sharpen:>16}")
-
-    best = hits[0]
-    print("\n  Add to config.toml under [ocr]:\n")
-    print(f"  psm = {best[1]}")
-    print(f'  threshold = "{best[2]}"')
-    print(f"  upscale = {best[3]}")
-    if best[4]:
-        print(f"  sharpen_ladder = [[0.0, 0.0], [{best[4]}, {best[5]}]]")
-    else:
-        print("  sharpen_ladder = [[0.0, 0.0]]")
-    print()
-    return 0
-
-
-def cmd_learn(args: argparse.Namespace, config: AppConfig) -> int:
-    """Record shape signatures for a screen whose labels you can read yourself.
-
-    OCR on a ~10 px glyph is a guess; the pixels are not. Capture a screen, say
-    what it actually says, and the shapes are stored for the cells OCR is least
-    sure about later.
-
-        g1000 learn --display pfd --labels "0,1,2,3,4,5,6,7,IDENT,BKSP,BACK,"
-
-    Trailing or repeated commas mean an empty cell and are skipped. Run it on
-    several screens to build the file up; it is additive.
-    """
-    from .signatures import SignatureStore, signature
-
-    display = config.display(args.display)
-    if display is None:
-        LOG.error("no display %r in the config", args.display)
-        return 2
-
-    labels = [part.strip().upper() for part in args.labels.split(",")]
-    if len(labels) != display.geometry.cells:
-        LOG.error(
-            "got %d labels but %s has %d cells -- use empty entries for blank keys",
-            len(labels), display.key, display.geometry.cells,
-        )
-        return 2
-
-    sources = _open_sources(config, args.image)
     try:
-        frame = _grab(sources[display.key])
-    finally:
-        for source in sources.values():
-            source.close()
+        cases = load_truth(args.truth)
+    except TuningError as exc:
+        LOG.error("%s", exc)
+        return 2
 
-    store = SignatureStore.load(config.ocr.signatures_file)
-    before = len(store)
-    added = skipped = 0
-    for index, cell in enumerate(split_cells(frame, display.geometry)):
-        label = labels[index]
-        if not label:
-            continue
-        if is_blank(cell, config.ocr.blank_ink_ratio, config.ocr.blank_contrast):
-            LOG.warning("cell %d is blank but you gave %r -- skipping", index + 1, label)
-            skipped += 1
-            continue
-        amount, radius = config.ocr.sharpen_ladder[0]
-        prep = preprocess_cell(
-            cell, config.ocr.upscale, config.ocr.threshold,
-            sharpen_amount=amount, sharpen_radius=radius,
-        )
-        if store.add(label, signature(prep)):
-            added += 1
-            LOG.info("cell %-2d learned %r", index + 1, label)
-        else:
-            LOG.info("cell %-2d %r already known", index + 1, label)
+    LOG.info("tuning against %d case(s): %s", len(cases), ", ".join(c.label for c in cases))
+    try:
+        result = run_tuning(cases, config.ocr, progress=LOG.info)
+    except TuningError as exc:
+        LOG.error("%s", exc)
+        return 2
 
-    store.save(config.ocr.signatures_file)
-    print(f"\n  {added} new signature(s), {len(store)} label(s) known "
-          f"(was {before}){f', {skipped} skipped' if skipped else ''}")
-    print(f"  stored in {config.ocr.signatures_file}\n")
+    print(format_report(result))
+    wrong_at_baseline = sum(1 for o in result.baseline.outcomes if not o.ok)
+    if wrong_at_baseline and not result.best.fixed:
+        return 1
     return 0
 
 
@@ -661,7 +557,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="override app.loop_hz for this run (handy for A/B timing)")
     run.add_argument("--timing", action="store_true",
                      help="log a per-stage latency breakdown whenever labels change")
-    run.add_argument("--publisher", choices=["websocket", "webapi", "file", "console"],
+    run.add_argument("--publisher", choices=["websocket", "webapi", "console"],
                      help="override publish.target from the config")
     run.set_defaults(func=cmd_run)
 
@@ -670,7 +566,9 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[common],
     )
     # Alone among the subcommands, this one still runs when -c names a file
-    # that is not there: creating that file is one of the things it does.
+    # that is not there: creating that file is one of the things it does. It
+    # gets no more licence than that -- a file that exists and is broken is an
+    # error for `gui` exactly as for the rest.
     gui.set_defaults(func=cmd_gui, tolerate_missing_config=True)
 
     windows = sub.add_parser("list-windows", help="list top-level windows (Windows only)", parents=[common])
@@ -710,24 +608,15 @@ def build_parser() -> argparse.ArgumentParser:
     template.add_argument("--name", default="unnamed-page", help="a name for this page")
     template.set_defaults(func=cmd_screen_template)
 
-    learn = sub.add_parser(
-        "learn", help="record shape signatures for a screen you can read yourself",
-        parents=[common],
-    )
-    add_image(learn)
-    learn.add_argument("--display", default="pfd", help="which display to learn from")
-    learn.add_argument(
-        "--labels", required=True,
-        help='comma-separated, one per cell, empty for blank: "0,1,2,...,BACK,"',
-    )
-    learn.set_defaults(func=cmd_learn)
-
     tune = sub.add_parser(
-        "tune", help="search preprocessing settings against one real cell image",
+        "tune", help="search sharpening-ladder settings across one or more captured pages",
         parents=[common],
     )
-    tune.add_argument("--image", required=True, help="a *_raw.png written by dump-cells")
-    tune.add_argument("--expect", required=True, help="what that cell should read, e.g. 0")
+    tune.add_argument(
+        "--truth", required=True,
+        help="a TOML file listing one or more [[case]] pages (a dump-cells folder, a display, "
+             "and what some of its cells should read) -- see tuning.load_truth",
+    )
     tune.set_defaults(func=cmd_tune)
 
     synth_cmd = sub.add_parser("synth", help="write synthetic softkey frames for offline testing", parents=[common])
@@ -743,7 +632,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         try:
             config = load_config(getattr(args, "config", None))
-        except ConfigError:
+        except ConfigNotFound:
+            # Only a file that is *not there* is tolerated, and only for `gui`.
+            # A file that exists but does not parse or does not validate is
+            # still an error here: opening the window on the built-in defaults
+            # would hide the mistake and then overwrite the file with the
+            # defaults on the first Save.
             if not getattr(args, "tolerate_missing_config", False):
                 raise
             config = default_config()

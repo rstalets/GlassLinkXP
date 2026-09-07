@@ -32,14 +32,14 @@ surface remain unexercised, and that section says which.
 ```
 g1000_softkey/
   main.py       CLI: run | gui | list-windows | calibrate | dump-cells
-                     | dump-colors | bench | screen-template | learn | tune | synth
+                     | dump-colors | bench | screen-template | tune | synth
   gui/          the window: one tab per command, over the same CLI (see docs/GUI.md)
   capture.py    WGC backend (Windows) + PNG backend (offline dev/test)
   strip.py      strip crop, 12-cell split, per-cell preprocessing, auto-detect
   ocr.py        persistent Tesseract API, char whitelist, vocabulary snapping
   color.py      cell background -> black / white / yellow / red, + text colour
   pipeline.py   frame -> cells -> change gating -> labels + colours
-  publish.py    X-Plane Web API client, JSON-file fallback, console output
+  publish.py    X-Plane WebSocket and REST clients, console output
   synth.py      synthetic G1000 softkey frames for offline work
   config.example.toml
   labels.txt    the softkey vocabulary (edit this)
@@ -303,11 +303,9 @@ expressed as *fractions* of the client area and has to be set once per setup.
    .\g1000 -c config.toml run
    ```
 
-If the Web API refuses to write the plugin's datarefs, use the fallback --
-`--publisher file` -- which atomically writes
-`%TEMP%\g1000_softkey_labels.json`; the plugin polls that file at 5 Hz and
-copies the strings into the same datarefs. Both sides honour the
-`G1000_SOFTKEY_JSON` environment variable if you want the file elsewhere.
+Both X-Plane targets write the same datarefs, and both have been confirmed
+doing so against a running X-Plane: `websocket` sends one message per cycle
+and is the normal path, `webapi` sends an HTTP request per changed cell.
 
 ## Wiring a PilotsDeck button
 
@@ -510,6 +508,14 @@ On Linux/CPython 3.11, Tesseract 5.3.4 (system) with `tesserocr` 2.11:
 * Vocabulary snapping fixed 1 of 49 labels in the offline corpus
   (`TMRIREF` -> `TMR/REF`), and is unit-tested against the usual confusions
   (`lNSET`, `DCLTP`, `0BS`, `STDBARO`).
+* The sharpening tuner's no-regression guarantee -- a rung strong enough to
+  fix one cell must not read a different, already-correct cell wrongly -- is
+  tested against a scripted OCR engine reproducing the exact failure this
+  tool exists for (a rung that opens up a `0` and also flips a `6` into a
+  `5`), and the search finds the rung that fixes the first without the
+  second. `tune --truth <file>` was also run for real, over the synthetic
+  corpus with real Tesseract: the search of ~7,200 candidate ladders across
+  32 psm/threshold/upscale combinations took a few seconds.
 
 ### The GUI, offline
 
@@ -531,17 +537,40 @@ says:
   into `config.toml` and they loaded back. Over-trimming the cells turned the
   offending boxes amber and made Save ask before writing; at a correct
   geometry it asked nothing, on every frame in the offline corpus.
-* **Cells** showed all 24 cell pictures; **Colours** parsed 24 measurements and
-  drew each row in the colour it was classified as; **Pages** captured a
-  `[[screen]]` block; **Tools** ran the benchmark.
+* **Cells** showed all 24 cell pictures, at their true pixel size rather than
+  shrunk to fit; typing an expected label into two of them, queuing the page
+  and pressing **Run tuning** shelled out to a real `tune --truth ...` (real
+  Tesseract, the full psm/threshold/upscale/ladder search over the synthetic
+  corpus, in a few seconds), reported "everything already reads correctly at
+  baseline", and Save suggested settings wrote the settings it found into
+  `config.toml` and read back the same values. Queuing three different pages
+  captured one after another into the same `dump-cells` output folder --
+  which overwrites it every time, by design -- left each queued page checked
+  against its own snapshot rather than whichever page was captured last (all
+  9 labelled cells across the three pages read correctly). At the documented
+  `minsize(940, 640)`, with real `dump-cells` output loaded, the tab's own
+  content -- more than twice the window's height once the grid, the tuner and
+  the output pane are all accounted for -- scrolls instead of squeezing the
+  output pane and the status bar to nothing, which is what it did before. A
+  box fixed at this project's own default geometry's ~320x152 still clipped a
+  taller, differently-calibrated strip's cells instead of blurring them; the
+  box now takes its size from the picture it is given rather than the other
+  way around, checked against a strip geometry more than twice as tall.
+  **Colours** parsed 24 measurements and drew each row in the colour it was
+  classified as; **Pages** captured a `[[screen]]` block; **Tools** ran the
+  benchmark.
 * **Find windows** failed as it must on Linux, and the tab showed the command
   that failed and the daemon's own explanation of why.
-* The tests cover this without a display too: 300 of them, of which the 78 that
-  need Tk skip themselves when there is no display (`519 passed` with one,
-  `441 passed, 78 skipped` without). Four of them are there to stop the GUI
+* The tests cover this without a display too: 369 of them, of which the 111 that
+  need Tk skip themselves when there is no display (`618 passed` with one,
+  `507 passed, 111 skipped` without). Several are there to stop the GUI
   drifting from the daemon -- every argv the GUI can build is parsed by
-  `main.build_parser()`, the softkey board's parser is fed
-  `main._format_row()`'s own output, the settings form is checked against the
+  `main.build_parser()`, every parser in `gui/logparse.py` is fed the output of
+  the command it reads (the softkey board from `main._format_row()`, the window
+  list from a real `WindowInfo`, the calibrate, dump-colors and
+  screen-template parsers from those commands run over synthetic frames, and
+  the tuning-result parser from a real `tune` search), the settings form is
+  checked against the
   config dataclasses field by field, and the calibration editor's boxes are
   compared with the rectangles `strip.py` crops.
 
@@ -556,16 +585,16 @@ The following code paths are written from the documented APIs but have
   vs 11, and capture of an occluded X-Plane pop-out are all unexercised.
 * **`list_windows()` / `find_window()`** (ctypes `user32` enumeration). The
   non-Windows error path is tested; the Windows path is not.
-* **The X-Plane Web API writes.** The client is tested against a stub session
-  (id resolution, base64 body, re-resolve on 404, X-Plane-not-running), not
-  against X-Plane. In particular, PLAN.md's open question stands: it is
-  **unknown whether the Web API will accept a PATCH to a plugin-created Data
-  dataref**. That is exactly why `--publisher file` exists.
-* **The XPPython3 plugin inside X-Plane.** Its buffer handling and JSON poll
-  are tested against a stubbed `XPPython3` module, so the logic is exercised,
-  but `registerDataAccessor` argument names, the `Type_Data` read/write
-  callback contract, and flight-loop registration have not been validated
-  against a real XPPython3 runtime.
+* **The details of the X-Plane API clients.** Whether X-Plane accepts a write
+  to a plugin-created Data dataref was PLAN.md's open question, and it is
+  answered: both the WebSocket and the REST publisher have been seen updating
+  the plugin's datarefs against a running X-Plane. What is still only tested
+  against a stub session is the behaviour around that -- id resolution,
+  re-resolving on a 404, and the X-Plane-not-running paths.
+* **The XPPython3 plugin inside X-Plane.** Its buffer handling is tested
+  against a stubbed `XPPython3` module, so the logic is exercised, but
+  `registerDataAccessor` argument names and the `Type_Data` read/write
+  callback contract have not been validated against a real XPPython3 runtime.
 * **Real G1000 geometry, fonts and colours.** All accuracy numbers above come
   from synthetic frames rendered with Liberation Sans, not from X-Plane
   screenshots. Real-world OCR accuracy, the true default strip fractions in

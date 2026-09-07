@@ -9,6 +9,7 @@ Run them headlessly with:  xvfb-run -a python -m pytest tests/test_gui_app.py
 """
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -42,6 +43,24 @@ def _tab(app, class_name):
 
     widget = app.notebook.tabs()[tabs.tab_index(class_name)]
     return app.root.nametowidget(widget)
+
+
+def _entry_for(settings_tab, path):
+    """The widget the Settings form built for one setting, found by its variable."""
+    from g1000_softkey.gui.widgets import HintEntry
+
+    variable = {p: v for p, _s, v in settings_tab._fields}[path]
+    name = str(variable)
+    for widget in _descendants(settings_tab):
+        if isinstance(widget, HintEntry) and str(widget.cget("textvariable")) == name:
+            return widget
+    raise AssertionError(f"no entry for {path}")
+
+
+def _descendants(widget):
+    for child in widget.winfo_children():
+        yield child
+        yield from _descendants(child)
 
 
 # -- construction ----------------------------------------------------------
@@ -96,6 +115,48 @@ def test_opening_a_config_file_reads_it(tmp_path, monkeypatch):
         root.destroy()
 
 
+def test_a_config_that_is_not_utf_8_still_opens_the_window(tmp_path, monkeypatch):
+    """A config.toml saved as UTF-16 used to mean no window at all: the decode
+    error is a ValueError, which read_document did not turn into a
+    ConfigIoError, which is the only thing app.load_config catches."""
+    from g1000_softkey.gui.app import build
+
+    monkeypatch.setattr(prefs, "prefs_path", lambda: tmp_path / "gui.json")
+    monkeypatch.setattr(prefs, "project_root", lambda: tmp_path)
+    path = tmp_path / "config.toml"
+    path.write_bytes("[app]\nloop_hz = 3.5\n".encode("utf-16"))
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:  # pragma: no cover
+        pytest.skip(f"no display available for Tk ({exc})")
+    root.withdraw()
+    try:
+        app = build(root, path)
+        assert "could not be read" in app.config_display.get()
+        assert "UTF-8" in app.status._text.get()
+        assert app.document  # the built-in defaults, so every tab still works
+    finally:
+        root.destroy()
+
+
+def test_the_raw_editor_says_so_rather_than_raising_on_a_non_utf_8_file(gui, tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_bytes("[app]\n".encode("utf-16"))
+    gui.config_path = path
+    settings = _tab(gui, "SettingsTab")
+    settings.reload_raw()
+    assert "could not read" in settings.raw.get("1.0", "end-1c")
+
+
+def test_a_vocabulary_file_that_is_not_utf_8_says_so_rather_than_raising(gui, tmp_path):
+    path = tmp_path / "labels.txt"
+    path.write_bytes("INSET\n".encode("utf-16"))
+    configio.set_in(gui.document, ("ocr", "labels_file"), str(path))
+    vocabulary = _tab(gui, "VocabularyTab")
+    vocabulary.reload()
+    assert "could not read" in vocabulary.text.get("1.0", "end-1c")
+
+
 def test_an_unreadable_config_is_reported_rather_than_fatal(gui, tmp_path):
     broken = tmp_path / "broken.toml"
     broken.write_text("[app\n", encoding="utf-8")
@@ -128,6 +189,19 @@ def test_a_warning_cell_is_drawn_as_one(gui):
     assert run._boards["pfd"]._boxes[0].cget("background") == CELL_COLORS[RED][0]
 
 
+def test_a_cell_reading_as_a_pipe_does_not_freeze_the_board(gui):
+    """The row is joined with " | " and the parser split on the bare
+    character, so one cell reading "|" -- Tesseract's commonest confusion for
+    I and 1, and reachable as soon as the user adds it to ocr.whitelist --
+    made the row unparseable and the board silently stopped updating."""
+    run = _tab(gui, "RunTab")
+    run.on_event(Line("[pfd] 1:INSET     | 2:|         | 3:PFD"))
+    board = run._boards["pfd"]
+    assert board._boxes[0].cget("text") == "INSET"
+    assert board._boxes[1].cget("text") == "|"
+    assert board._boxes[2].cget("text") == "PFD"
+
+
 def test_a_display_that_stops_delivering_frames_is_shown_as_such(gui):
     run = _tab(gui, "RunTab")
     run._set_running(True)
@@ -143,6 +217,27 @@ def test_the_board_clears_when_the_daemon_stops(gui):
     run.on_event(Finished(0))
     assert run._boards["pfd"]._boxes[0].cget("text") == "--"
     assert run.state_text.get() == "Stopped"
+
+
+def test_the_idle_board_says_the_same_thing_on_every_key(gui):
+    """It marked cell 1 and blanked the other eleven, which reads as one label
+    having been read rather than as nothing having been."""
+    run = _tab(gui, "RunTab")
+    board = run._boards["pfd"]
+    board.set_idle("--")
+    assert [box.cget("text") for box in board._boxes] == ["--"] * board.cells
+    board.set_idle("...")
+    assert [box.cget("text") for box in board._boxes] == ["..."] * board.cells
+    board.set_idle()
+    assert [box.cget("text") for box in board._boxes] == [""] * board.cells
+
+
+def test_the_whole_board_clears_when_the_daemon_stops(gui):
+    run = _tab(gui, "RunTab")
+    run.on_event(Line("[pfd] 1:INSET | 2:PFD | 3:MAP"))
+    run.on_event(Finished(0))
+    board = run._boards["pfd"]
+    assert [box.cget("text") for box in board._boxes] == ["--"] * board.cells
 
 
 def test_a_daemon_that_will_not_start_is_reported(gui):
@@ -216,6 +311,177 @@ def test_the_output_pane_does_not_grow_without_limit(gui):
     assert "line 99" in run.output.contents()
 
 
+# -- layout at the documented minsize ---------------------------------------
+
+
+def _cell_pngs(tmp_path):
+    """A real dump-cells folder, the way the Cells tab actually gets one."""
+    from g1000_softkey import synth
+    from g1000_softkey.main import main as cli_main
+
+    frames = tmp_path / "frames"
+    synth.write_menus(frames)
+    cells = tmp_path / "cells"
+    assert cli_main(["dump-cells", "--image", str(frames / "pfd_top.png"),
+                     "--out", str(cells)]) == 0
+    return cells
+
+
+def test_status_bar_keeps_its_own_space_when_a_tab_overflows(gui):
+    """Whole-window bug, not specific to any one tab: the status bar is
+    packed after the notebook, so a tab wanting more height than the window
+    has left it nothing -- it showed as a 1px sliver, or vanished outright."""
+    gui.root.deiconify()
+    gui.root.geometry("940x640")
+    gui.root.update_idletasks()
+    assert gui.status.winfo_height() > 1
+    assert gui.status.winfo_reqheight() == gui.status.winfo_height()
+
+
+def test_cells_tab_does_not_clip_at_the_documented_minsize(gui, tmp_path):
+    """The report this pins: at minsize(940, 640) with real dump-cells output,
+    the tab used to request ~2x the height it was given, and Tk resolved the
+    shortfall by squeezing the output pane and the status bar to nothing
+    rather than by showing less of the grid. Nothing below the top controls
+    should be squeezed now -- it should be reachable by scrolling instead."""
+    cells = _cell_pngs(tmp_path)
+    tab = _tab(gui, "CellsTab")
+    tab.display.set("pfd")
+    tab.out.set(str(cells))
+    tab._show()
+
+    gui.root.deiconify()
+    gui.root.geometry("940x640")
+    gui.root.update_idletasks()
+
+    assert gui.status.winfo_height() > 1, "the status bar was squeezed to nothing"
+    assert tab.output.winfo_height() == tab.output.winfo_reqheight(), \
+        "the output pane did not get its own requested height"
+
+    # Everything the tab wants to show has to be *reachable*, even if it does
+    # not all fit on screen at once -- that is what makes scrolling different
+    # from clipping.
+    body = tab.grid_frame.master        # grid_frame's parent is the ScrollableFrame's body
+    canvas = body.master                # body's parent is the ScrollableFrame's canvas
+    canvas.update_idletasks()
+    region = canvas.bbox("all")
+    body_height = body.winfo_reqheight()
+    assert region is not None
+    assert region[3] - region[1] >= body_height - 2, \
+        "the scrollregion does not cover everything the tab packed into it"
+
+
+def test_cells_tab_boxes_are_never_shorter_than_the_picture_they_show(gui, tmp_path):
+    """Reported live: the raw crop was still clipped along the bottom after
+    the fix above. The box sizes (320x152 prep, 90x45 raw) were picked to fit
+    *this* project's default StripGeometry -- a taller one (a real
+    calibration, not the synthetic default) produces a bigger native picture,
+    and a fixed box combined with allow_shrink=False clips whatever does not
+    fit rather than blurring it. The box must size itself to the picture, not
+    the other way around."""
+    from g1000_softkey import synth
+    from g1000_softkey.main import main as cli_main
+
+    tall = StripGeometry(y=0.80, h=0.10, cell_pad_y=0.03)
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    import cv2
+    cv2.imwrite(str(frames / "pfd_top.png"), synth.render_menu("pfd_top", geom=tall))
+    cells = tmp_path / "cells"
+
+    document = configio.default_document()
+    document["display"]["pfd"]["geometry"] = dict(tall.as_dict())
+    config_path = tmp_path / "config.toml"
+    configio.save(config_path, document, backup=False)
+    gui.config_path = config_path
+    gui.load_config()
+
+    assert cli_main(["-c", str(config_path), "dump-cells",
+                     "--image", str(frames / "pfd_top.png"), "--out", str(cells)]) == 0
+
+    tab = _tab(gui, "CellsTab")
+    tab.display.set("pfd")
+    tab.out.set(str(cells))
+    tab._show()
+    gui.root.deiconify()
+    gui.root.update_idletasks()
+
+    prep, raw, _caption = tab._views[0]
+    assert prep._image is not None and raw._image is not None
+    assert prep.winfo_height() >= prep._image.height(), \
+        f"prep box ({prep.winfo_height()}) is shorter than its picture ({prep._image.height()})"
+    assert raw.winfo_height() >= raw._image.height(), \
+        f"raw box ({raw.winfo_height()}) is shorter than its picture ({raw._image.height()})"
+
+
+def test_add_tuning_page_snapshots_pixels_so_a_later_capture_cannot_overwrite_them(gui, tmp_path):
+    """Reported live: three pages queued, and the search reported settings
+    that stayed on the baseline no matter what, because every queued page's
+    ``dir`` pointed at the same dump-cells output folder -- ``Read the
+    cells`` for the next page overwrites that folder's
+    ``{key}_{cell:02d}_raw.png`` files in place, so an earlier page's queued
+    *labels* ended up checked against a *different* page's pixels the moment
+    a second page was captured."""
+    from g1000_softkey import synth
+    from g1000_softkey.main import main as cli_main
+
+    frames = tmp_path / "frames"
+    synth.write_menus(frames)
+    out = tmp_path / "cells"
+
+    tab = _tab(gui, "CellsTab")
+    tab.display.set("pfd")
+    tab.out.set(str(out))
+
+    assert cli_main(["dump-cells", "--image", str(frames / "xpdr.png"), "--out", str(out)]) == 0
+    tab._expect[0].set("stby")
+    tab.add_tuning_page()
+    assert len(tab._tuning_cases) == 1
+    page1_dir = Path(tab._tuning_cases[0]["dir"])
+    page1_pixels = (page1_dir / "pfd_01_raw.png").read_bytes()
+
+    # A second page, captured into the same out/ folder -- overwriting
+    # out/pfd_01_raw.png is exactly what a second "Read the cells" does.
+    assert cli_main(["dump-cells", "--image", str(frames / "pfd_top.png"), "--out", str(out)]) == 0
+    tab._expect[0].set("inset")
+    tab.add_tuning_page()
+    assert len(tab._tuning_cases) == 2
+    page2_dir = Path(tab._tuning_cases[1]["dir"])
+
+    assert page1_dir != page2_dir
+    assert (page1_dir / "pfd_01_raw.png").read_bytes() == page1_pixels, \
+        "page 1's queued snapshot changed after page 2 was captured"
+    assert (page1_dir / "pfd_01_raw.png").read_bytes() != (page2_dir / "pfd_01_raw.png").read_bytes()
+    assert tab._tuning_cases[0]["expect"] == {1: "STBY"}
+    assert tab._tuning_cases[1]["expect"] == {1: "INSET"}
+
+
+def test_clear_tuning_queue_removes_the_snapshots_it_made(gui, tmp_path):
+    cells = _cell_pngs(tmp_path)
+    tab = _tab(gui, "CellsTab")
+    tab.display.set("pfd")
+    tab.out.set(str(cells))
+    tab._expect[0].set("inset")
+    tab.add_tuning_page()
+    snapshot_root = gui.project_root / "tuning" / "queue"
+    assert snapshot_root.is_dir()
+
+    tab.clear_tuning_queue()
+    assert not tab._tuning_cases
+    assert not snapshot_root.exists()
+
+
+def test_cells_tab_prep_view_is_wired_to_never_shrink(gui):
+    """The mechanism (ImageView(allow_shrink=False)) has its own unit tests in
+    test_gui_widgets.py; this just pins that the Cells tab actually asks for
+    it, for both the prep and the raw view -- a future edit that dropped the
+    flag from the constructor call would still pass those unit tests."""
+    tab = _tab(gui, "CellsTab")
+    for prep, raw, _caption in tab._views:
+        assert prep.allow_shrink is False
+        assert raw.allow_shrink is False
+
+
 # -- commands --------------------------------------------------------------
 
 
@@ -230,22 +496,23 @@ def test_the_frame_source_is_passed_to_every_command_that_takes_one(gui, monkeyp
 
 
 def test_tune_is_not_given_the_shared_frame_source(gui, monkeypatch):
-    """Its --image is one cell picture, not the whole frame."""
+    """It reads a truth file, not a live frame -- the shared --image must
+    never appear on its command line even though the frame source is set."""
     started = {}
     monkeypatch.setattr(gui.task, "start", lambda command, cwd=None: started.update(
         command=command))
     gui.image_source.set("/frames")
-    gui.run_task(commands.TUNE, {"image": "/cells/pfd_01_raw.png", "expect": "0"},
-                 include_image=False)
+    gui.run_task(commands.TUNE, {"truth": "/cells/truth.toml"}, include_image=False)
     assert "/frames" not in started["command"]
-    assert "/cells/pfd_01_raw.png" in started["command"]
+    assert "--image" not in started["command"]
+    assert "/cells/truth.toml" in started["command"]
 
 
 def test_a_missing_required_option_is_refused_before_spawning(gui, monkeypatch):
     monkeypatch.setattr("tkinter.messagebox.showwarning", lambda *a, **k: None)
     spawned = []
     monkeypatch.setattr(gui.task, "start", lambda *a, **k: spawned.append(a))
-    assert gui.run_task(commands.TUNE, {"image": "x.png"}, include_image=False) is False
+    assert gui.run_task(commands.TUNE, {}, include_image=False) is False
     assert not spawned
 
 
@@ -257,6 +524,184 @@ def test_only_one_one_shot_command_runs_at_a_time(gui, monkeypatch):
 
 def test_the_daemon_and_a_one_shot_command_are_separate_processes(gui):
     assert gui.daemon is not gui.task
+
+
+# -- validating before starting --------------------------------------------
+
+
+def test_a_string_where_a_number_belongs_does_not_raise_ConfigError(gui):
+    """The premise of the test below, taken from the daemon rather than assumed.
+
+    A hand-edited `loop_hz = "12"` reaches a comparison inside `from_mapping`
+    and comes back out as a TypeError, which is neither a ConfigError nor a
+    ValueError -- so a validator that catches only those two lets it escape.
+    """
+    from g1000_softkey.config import ConfigError, from_mapping
+
+    with pytest.raises(Exception) as raised:
+        from_mapping({"app": {"loop_hz": "12"}})
+    assert not isinstance(raised.value, (ConfigError, ValueError))
+
+
+def test_a_document_the_daemon_cannot_read_at_all_is_a_message_not_a_crash(gui):
+    gui.document = {"app": {"loop_hz": "12"}}
+    problem = gui.validate_document()
+    assert problem
+    assert "TypeError" in problem
+
+
+def test_a_config_error_is_shown_as_the_sentence_it_is(gui):
+    gui.document = configio.default_document()
+    gui.document["app"]["loop_hz"] = 0
+    assert "loop_hz" in gui.validate_document()
+    assert "ConfigError" not in gui.validate_document()
+
+
+def test_start_says_why_rather_than_doing_nothing(gui, monkeypatch):
+    """Start went quiet: the dialog is raised from the escaping exception's place."""
+    errors = []
+    monkeypatch.setattr("tkinter.messagebox.showerror",
+                        lambda title, message, **k: errors.append(message))
+    started = []
+    monkeypatch.setattr(gui.daemon, "start", lambda *a, **k: started.append(a))
+    gui.document = {"app": {"loop_hz": "12"}}
+
+    _tab(gui, "RunTab").start()
+
+    assert errors and not started
+
+
+def test_the_open_folder_buttons_use_the_folder_the_command_writes_into(gui,
+                                                                       monkeypatch,
+                                                                       tmp_path):
+    """Each tab had its own copy of this, and CommandSpec.output_option -- the
+    declaration of which box holds the folder -- was read nowhere."""
+    from g1000_softkey.gui import tabs
+
+    opened = []
+    monkeypatch.setattr(tabs, "open_folder", lambda path: opened.append(Path(path)) or "")
+
+    for class_name, spec in (("CalibrateTab", commands.CALIBRATE),
+                             ("CellsTab", commands.DUMP_CELLS)):
+        tab = _tab(gui, class_name)
+        folder = tmp_path / spec.name
+        folder.mkdir()
+        tab.out.set(str(folder))
+        tab._open_folder()
+        assert opened[-1] == folder
+
+
+def test_open_folder_says_so_when_there_is_nothing_there_yet(gui, monkeypatch, tmp_path):
+    from g1000_softkey.gui import tabs
+
+    opened = []
+    monkeypatch.setattr(tabs, "open_folder", lambda path: opened.append(path) or "")
+    tab = _tab(gui, "CellsTab")
+    tab.out.set(str(tmp_path / "never-written"))
+    tab._open_folder()
+    assert not opened
+    assert "nothing there yet" in gui.status._text.get()
+
+
+def test_the_publisher_choice_is_remembered(tmp_path, monkeypatch):
+    """It was read out of the preferences at startup and never written back,
+    so "console" -- the setting somebody deliberately picks while they are
+    still checking the readings -- was forgotten every time."""
+    from g1000_softkey.gui.app import build
+
+    monkeypatch.setattr(prefs, "prefs_path", lambda: tmp_path / "gui.json")
+    monkeypatch.setattr(prefs, "project_root", lambda: tmp_path)
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:  # pragma: no cover
+        pytest.skip(f"no display available for Tk ({exc})")
+    root.withdraw()
+    app = build(root, None)
+    run = _tab(app, "RunTab")
+    assert run.publisher is app.publisher  # one setting, not two variables
+    run.publisher.set("console")
+    app.on_close()  # writes the preferences, and destroys its own root
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        reopened = build(root, None)
+        assert _tab(reopened, "RunTab").publisher.get() == "console"
+    finally:
+        root.destroy()
+
+
+# -- the poll loop ---------------------------------------------------------
+#
+# The loop is what makes every other event in this file arrive at all: the
+# tests above hand a tab an event directly, so none of them notices if the
+# thing that would have delivered it has stopped running. Tkinter *catches*
+# an exception raised inside an `after` callback, so a reschedule written at
+# the end of the callback is skipped by any failure before it and the polling
+# never resumes -- silently, and with no stderr at all under pythonw.exe.
+
+
+def _ticking_runner(monkeypatch, gui, ticks, events_on_tick=None):
+    """Count drains of the daemon, optionally handing out an event on one."""
+    def drain(limit=500):
+        ticks.append(len(ticks) + 1)
+        if events_on_tick and len(ticks) in events_on_tick:
+            return [Line("[pfd] 1:INSET")]
+        return []
+
+    monkeypatch.setattr(gui.daemon, "drain", drain)
+    monkeypatch.setattr(gui.task, "drain", lambda limit=500: [])
+
+
+def test_the_poll_loop_keeps_running_when_a_handler_raises(gui, monkeypatch):
+    import time
+
+    from g1000_softkey.gui import app as app_module
+
+    monkeypatch.setattr(app_module, "POLL_MS", 1)
+    ticks = []
+    _ticking_runner(monkeypatch, gui, ticks, events_on_tick={3})
+    gui._daemon_sink = lambda event: (_ for _ in ()).throw(RuntimeError("handler exploded"))
+
+    # Driven through the loop the window started for itself, and only that
+    # one: calling _poll() here as well would leave a second chain of `after`
+    # callbacks running, and the survivor would hide the death of the first.
+    deadline = time.monotonic() + 5.0
+    while len(ticks) < 20 and time.monotonic() < deadline:
+        gui.root.update()
+        time.sleep(0.001)
+
+    # Before the fix this froze on the tick the handler raised on.
+    assert len(ticks) >= 20
+
+
+def test_a_handler_that_raises_is_said_out_loud_rather_than_swallowed(gui, monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(gui.root, "after", lambda ms, fn: scheduled.append((ms, fn)))
+    monkeypatch.setattr(gui.daemon, "drain", lambda limit=500: [Line("[pfd] 1:INSET")])
+    monkeypatch.setattr(gui.task, "drain", lambda limit=500: [])
+    gui._daemon_sink = lambda event: (_ for _ in ()).throw(RuntimeError("handler exploded"))
+
+    gui._poll()
+
+    assert gui.poll_failures == 1
+    assert "handler exploded" in gui.last_poll_error
+    assert "handler exploded" in gui.status._text.get()
+    assert scheduled and scheduled[-1][1] == gui._poll
+
+
+def test_the_next_drain_is_scheduled_even_if_the_reporting_fails(gui, monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(gui.root, "after", lambda ms, fn: scheduled.append((ms, fn)))
+    monkeypatch.setattr(gui.daemon, "drain",
+                        lambda limit=500: (_ for _ in ()).throw(RuntimeError("drain exploded")))
+    monkeypatch.setattr(gui, "_poll_failed",
+                        lambda exc: (_ for _ in ()).throw(RuntimeError("reporting exploded")))
+
+    with pytest.raises(RuntimeError):
+        gui._poll()
+
+    assert scheduled and scheduled[-1][1] == gui._poll
 
 
 # -- settings --------------------------------------------------------------
@@ -291,6 +736,96 @@ def test_editing_a_field_and_saving_writes_the_file(gui, tmp_path):
     saved = load_config(path)
     assert saved.loop_hz == 5.5
     assert saved.display("pfd").window_title == "My PFD Window"
+
+
+def test_saving_the_form_does_not_bake_this_installs_paths_into_the_config(gui, tmp_path):
+    """The form used to fill these boxes from the built-in defaults -- absolute
+    paths into whichever checkout was running -- and write them straight back
+    out on the first Save. Moving the install then stopped the daemon."""
+    path = tmp_path / "config.toml"
+    configio.save(path, configio.default_document(), backup=False)
+    gui.config_path = path
+    gui.load_config(quiet=True)
+
+    settings = _tab(gui, "SettingsTab")
+    boxes = {p: v for p, _s, v in settings._fields}
+    assert boxes[("ocr", "screens_file")].get() == ""
+    assert boxes[("ocr", "labels_file")].get() == ""
+
+    settings.save()
+    text = path.read_text(encoding="utf-8")
+    assert "screens_file" not in text
+    assert "labels_file" not in text
+
+
+def test_the_packages_own_file_is_shown_as_a_hint_beside_the_empty_box(gui):
+    from g1000_softkey.config import OcrConfig
+
+    settings = _tab(gui, "SettingsTab")
+    entry = _entry_for(settings, ("ocr", "screens_file"))
+    assert OcrConfig().screens_file in entry.hint
+    assert entry.hint_showing()
+    # ... and it is a hint, not a value: nothing to save, nothing to clear.
+    assert entry.get() == ""
+
+
+def test_the_hint_gets_out_of_the_way_of_a_path_of_your_own(gui):
+    settings = _tab(gui, "SettingsTab")
+    entry = _entry_for(settings, ("ocr", "screens_file"))
+    variable = {p: v for p, _s, v in settings._fields}[("ocr", "screens_file")]
+    variable.set("/somewhere/else/screens.toml")
+    assert not entry.hint_showing()
+    variable.set("")
+    assert entry.hint_showing()
+
+
+def test_clearing_the_box_is_the_way_back_to_the_packages_file(gui, tmp_path):
+    """It used to raise "Pages file cannot be empty", which left no way back."""
+    from g1000_softkey.config import OcrConfig, load_config
+
+    path = tmp_path / "config.toml"
+    document = configio.default_document()
+    document["ocr"]["screens_file"] = str(tmp_path / "mine.toml")
+    configio.save(path, document, backup=False)
+    gui.config_path = path
+    gui.load_config(quiet=True)
+
+    settings = _tab(gui, "SettingsTab")
+    for field_path, _setting, variable in settings._fields:
+        if field_path == ("ocr", "screens_file"):
+            assert variable.get() == str(tmp_path / "mine.toml")
+            variable.set("")
+    settings.save()
+
+    assert "screens_file" not in path.read_text(encoding="utf-8")
+    assert load_config(path).ocr.screens_file == OcrConfig().screens_file
+
+
+def test_a_whole_number_written_as_a_float_does_not_block_the_whole_form(gui, tmp_path,
+                                                                        monkeypatch):
+    """One legal `change_tolerance = 6.0` used to fail Save for every field:
+    the form rendered it as "6.0" and then refused its own text."""
+    from g1000_softkey.config import load_config
+
+    warnings = []
+    monkeypatch.setattr("tkinter.messagebox.showwarning",
+                        lambda title, message, **k: warnings.append(message))
+    path = tmp_path / "config.toml"
+    document = configio.default_document()
+    document["app"]["change_tolerance"] = 6.0
+    configio.save(path, document, backup=False)
+    gui.config_path = path
+    gui.load_config(quiet=True)
+
+    settings = _tab(gui, "SettingsTab")
+    for field_path, _setting, variable in settings._fields:
+        if field_path == ("app", "loop_hz"):
+            variable.set("7.5")
+    settings.save()
+
+    assert not warnings
+    assert load_config(path).loop_hz == 7.5
+    assert load_config(path).change_tolerance == 6
 
 
 def test_a_value_the_daemon_would_reject_is_not_written(gui, tmp_path, monkeypatch):
@@ -378,6 +913,26 @@ def test_the_window_list_is_parsed_and_can_be_applied(gui):
     windows.target.set("pfd")
     windows.apply()
     assert gui.document["display"]["pfd"]["window_title"] == "G1000 PFD (Cessna)"
+
+
+def test_a_window_whose_title_has_an_apostrophe_is_listed(gui):
+    """It was dropped, and the tab said "No windows matched" with the line
+    plainly visible above it. Built from a real WindowInfo, because a sample
+    typed into a test is what hid this in the first place."""
+    from g1000_softkey.capture import WindowInfo
+
+    window = WindowInfo(hwnd=0x10F42, title="Cirrus SR22's PFD", class_name="X-Plane",
+                        width=1288, height=832, pid=1234)
+    windows = _tab(gui, "WindowsTab")
+    windows._parse(0, ["1 of 40 visible top-level windows", f"  {window}"])
+
+    rows = windows.tree.get_children()
+    assert len(rows) == 1
+    assert windows.tree.item(rows[0], "values")[0] == window.title
+    windows.tree.selection_set(rows[0])
+    windows.target.set("pfd")
+    windows.apply()
+    assert gui.document["display"]["pfd"]["window_title"] == window.title
 
 
 def test_the_calibration_suggestion_is_read_from_the_output(gui):

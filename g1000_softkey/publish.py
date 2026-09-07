@@ -2,16 +2,22 @@
 
 Three targets:
 
+``websocket`` One ``dataref_set_values`` message per cycle over X-Plane's
+            WebSocket API. The normal path: a changed cell costs part of a
+            frame that was going to be sent anyway.
 ``webapi``  PATCH the plugin-created datarefs through X-Plane's built-in REST
             API (12.1.1+). Data (byte array) datarefs are base64 in both
             directions; the Int datarefs carrying the background colour are
             written as bare numbers. Dataref ids are session-scoped, so names
             are resolved to ids at startup and re-resolved whenever a write
             404s.
-``file``    Atomically write a small JSON file that the XPPython3 plugin
-            polls at 5 Hz. Fallback for the case where the Web API refuses to
-            write a plugin-created dataref.
 ``console`` Log the labels; for development only.
+
+Both X-Plane paths write the datarefs the XPPython3 plugin creates, and both
+have been confirmed doing so against a running X-Plane. They also agree on
+*which* API they are talking to: the version is negotiated once, in
+``WebApiPublisher``, from the unversioned ``/api/capabilities`` endpoint, and
+the websocket inherits that answer rather than resolving one of its own.
 """
 
 from __future__ import annotations
@@ -19,30 +25,12 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import os
-import tempfile
 import time
-from pathlib import Path
 from typing import Mapping, Protocol, Sequence
 
 from .config import PublishConfig
 
 LOG = logging.getLogger(__name__)
-
-JSON_ENV_VAR = "G1000_SOFTKEY_JSON"
-JSON_BASENAME = "g1000_softkey_labels.json"
-
-
-def default_json_path() -> Path:
-    """Shared default location of the JSON fallback file.
-
-    The XPPython3 plugin resolves it exactly the same way, so the two sides
-    agree without any configuration.
-    """
-    override = os.environ.get(JSON_ENV_VAR)
-    if override:
-        return Path(override)
-    return Path(tempfile.gettempdir()) / JSON_BASENAME
 
 
 def encode_field(text: str, width: int = 16) -> bytes:
@@ -103,45 +91,6 @@ class ConsolePublisher:
         return None
 
 
-class FilePublisher:
-    """Atomic JSON writer polled by the plugin."""
-
-    name = "file"
-
-    def __init__(self, config: PublishConfig) -> None:
-        self.path = Path(config.json_path) if config.json_path else default_json_path()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._last: dict[str, Value] = {}
-        LOG.info("publishing labels to %s", self.path)
-
-    def publish(self, values: Mapping[str, Value]) -> None:
-        if dict(values) == self._last:
-            return
-        # Strings and numbers go in separate tables rather than one mixed one:
-        # the plugin has a byte buffer for the first and a plain int for the
-        # second, and a JSON number and a JSON string are the only signal it
-        # would otherwise have to tell them apart. A v1 file (labels only) is
-        # still a valid v2 file with no numbers, so the plugin reads both.
-        payload = {
-            "version": 2,
-            "updated": time.time(),
-            "labels": {k: v for k, v in values.items() if isinstance(v, str)},
-            "numbers": {k: v for k, v in values.items() if not isinstance(v, str)},
-        }
-        tmp = self.path.with_suffix(f".{os.getpid()}.tmp")
-        try:
-            tmp.write_text(json.dumps(payload, indent=1), encoding="utf-8")
-            os.replace(tmp, self.path)  # atomic within a filesystem
-        except OSError as exc:
-            LOG.warning("could not write %s: %s", self.path, exc)
-            tmp.unlink(missing_ok=True)
-            return
-        self._last = dict(values)
-
-    def close(self) -> None:
-        return None
-
-
 class WebApiPublisher:
     """X-Plane Web API client (REST, base64 for Data datarefs)."""
 
@@ -164,12 +113,58 @@ class WebApiPublisher:
         self._last: dict[str, Value] = {}
         self._next_resolve = 0.0
         self._warned = False
+        #: What /api/capabilities said, once it has said it. None until then.
+        self._api_version: str | None = None
         self.resolve()
 
     # -- plumbing ---------------------------------------------------------
     @property
+    def _version(self) -> str:
+        """The API version to talk: what X-Plane advertised, else the floor."""
+        return self._api_version or self.config.api_version
+
+    @property
     def _root(self) -> str:
-        return f"{self.config.base_url.rstrip('/')}/api/{self.config.api_version}"
+        return f"{self.config.base_url.rstrip('/')}/api/{self._version}"
+
+    def _negotiate_version(self) -> str:
+        """Ask /api/capabilities which API versions this X-Plane speaks.
+
+        The endpoint is unversioned and reports e.g. {"api": {"versions":
+        ["v1","v2","v3"]}}. Picking the highest avoids guessing wrong about
+        which version carries the interface we want -- Laminar has shipped
+        v1, v2 and v3, and the oldest of those will not be served forever.
+
+        Called from :meth:`resolve` rather than from ``_root``, so it costs
+        one request per id-resolution attempt and not one per write. A
+        successful answer is cached for the life of the publisher: X-Plane
+        cannot change which versions it serves without restarting, which
+        restarts the daemon's dataref ids too.
+
+        A *failed* answer is deliberately not cached. Falling back to the
+        floor is what a daemon started before X-Plane does, and pinning it
+        there for the session would leave it on the floor for a sim that was
+        about to advertise something newer; the next resolve() -- already
+        rate-limited to retry_interval -- asks again.
+        """
+        if self._api_version:
+            return self._api_version
+        base = self.config.base_url.rstrip("/")
+        try:
+            response = self._session.get(f"{base}/api/capabilities", timeout=self.config.timeout)
+            versions = (response.json() or {}).get("api", {}).get("versions", [])
+            numbered = sorted(
+                (v for v in versions if isinstance(v, str) and v.startswith("v")),
+                key=lambda v: int(v[1:]) if v[1:].isdigit() else -1,
+            )
+            if numbered:
+                self._api_version = numbered[-1]
+                LOG.info("X-Plane advertises API versions %s; using %s",
+                         ", ".join(versions), self._api_version)
+                return self._api_version
+        except Exception as exc:  # noqa: BLE001 - endpoint is optional
+            LOG.debug("could not read /api/capabilities (%s); using %s", exc, self._version)
+        return self._version
 
     def _log_offline(self, detail: str) -> None:
         if not self._warned:
@@ -184,6 +179,7 @@ class WebApiPublisher:
     def resolve(self) -> bool:
         """Map dataref names to this session's numeric ids."""
         self._next_resolve = time.monotonic() + self.config.retry_interval
+        self._negotiate_version()
         try:
             response = self._session.get(f"{self._root}/datarefs", timeout=self.config.timeout)
         except Exception as exc:  # noqa: BLE001 - requests raises many types
@@ -282,7 +278,8 @@ class WebSocketPublisher(WebApiPublisher):
     prior subscription, so the whole strip goes out as a single frame and we do
     not block waiting for a reply.
 
-    Name-to-id resolution still uses REST (inherited); only writes move.
+    Name-to-id resolution and API version negotiation still use REST
+    (inherited); only writes move.
     """
 
     name = "websocket"
@@ -291,38 +288,11 @@ class WebSocketPublisher(WebApiPublisher):
         self._ws = None
         self._req_id = 0
         self._ws_warned = False
-        self._ws_version = None
         self._connect_failures = 0
         self._next_ws_attempt = 0.0
         self._fell_back = False
         self._host_rewritten = False
         super().__init__(config, dataref_names, session=session)
-
-    def _negotiate_version(self) -> str:
-        """Ask /api/capabilities which API versions this X-Plane speaks.
-
-        The endpoint is unversioned and reports e.g. {"api": {"versions":
-        ["v1","v2","v3"]}}. Picking the highest avoids guessing wrong about
-        which version carries the WebSocket interface.
-        """
-        if self._ws_version:
-            return self._ws_version
-        self._ws_version = self.config.api_version
-        base = self.config.base_url.rstrip("/")
-        try:
-            response = self._session.get(f"{base}/api/capabilities", timeout=self.config.timeout)
-            versions = (response.json() or {}).get("api", {}).get("versions", [])
-            numbered = sorted(
-                (v for v in versions if isinstance(v, str) and v.startswith("v")),
-                key=lambda v: int(v[1:]) if v[1:].isdigit() else -1,
-            )
-            if numbered:
-                self._ws_version = numbered[-1]
-                LOG.info("X-Plane advertises API versions %s; using %s for the websocket",
-                         ", ".join(versions), self._ws_version)
-        except Exception as exc:  # noqa: BLE001 - endpoint is optional
-            LOG.debug("could not read /api/capabilities (%s); using %s", exc, self._ws_version)
-        return self._ws_version
 
     @property
     def _ws_url(self) -> str:
@@ -337,7 +307,7 @@ class WebSocketPublisher(WebApiPublisher):
             if not self._host_rewritten:
                 self._host_rewritten = True
                 LOG.info("using 127.0.0.1 for the websocket (X-Plane binds IPv4 loopback only)")
-        return f"{root}/api/{self._negotiate_version()}"
+        return f"{root}/api/{self._version}"
 
     def _fall_back(self, reason: str) -> None:
         """Note, once, that this cycle's writes are going out over REST.
@@ -454,12 +424,10 @@ class WebSocketPublisher(WebApiPublisher):
 def create_publisher(config: PublishConfig, dataref_names: Sequence[str]) -> Publisher:
     if config.target == "console":
         return ConsolePublisher(config)
-    if config.target == "file":
-        return FilePublisher(config)
     if config.target == "webapi":
         return WebApiPublisher(config, dataref_names)
     if config.target == "websocket":
         return WebSocketPublisher(config, dataref_names)
     raise ValueError(
-        f"unknown publish target {config.target!r} (websocket | webapi | file | console)"
+        f"unknown publish target {config.target!r} (websocket | webapi | console)"
     )

@@ -189,25 +189,13 @@ A page is only recognised when its identifying cells all read at least this conf
 
 ### `screens_file`
 
-*Pages file* — text (a path or a name). Default: `'/home/user/g1000-softkey/g1000_softkey/screens.toml'`.
+*Pages file* — text (a path or a name). Default: `'/home/user/g1000-softkey/g1000_softkey/screens.toml'`. Leave it out to use the copy that comes with the package -- the default above is a path into this install, so writing it into your config file would tie the file to it.
 
-The known softkey pages. Add one with the Screen template tab.
-
-### `signature_confidence`
-
-*Shape fallback below* — a number. Default: `0.0`.
-
-Below this confidence, compare the glyph's shape against learned signatures. Off by default (0), because page lookup covers the same cells with a stronger signal.
-
-### `signatures_file`
-
-*Signatures file* — text (a path or a name). Default: `'/home/user/g1000-softkey/g1000_softkey/signatures.json'`.
-
-Where learned glyph shapes are stored. Build it with the Learn tab.
+The known softkey pages. Add one with the Screen template tab. Set this only to point at a file of your own.
 
 ### `labels_file`
 
-*Vocabulary file* — text (a path or a name). Default: `'/home/user/g1000-softkey/g1000_softkey/labels.txt'`.
+*Vocabulary file* — text (a path or a name). Default: `'/home/user/g1000-softkey/g1000_softkey/labels.txt'`. Leave it out to use the copy that comes with the package -- the default above is a path into this install, so writing it into your config file would tie the file to it.
 
 The list of labels a reading is snapped to. Edit it in the Vocabulary tab; it is aircraft and version dependent.
 
@@ -289,9 +277,9 @@ Where the labels are sent. Watch them with 'console' first; switch to websocket 
 
 ### `target`
 
-*Publish to* — one of `websocket`, `webapi`, `file`, `console`. Default: `'webapi'`.
+*Publish to* — one of `websocket`, `webapi`, `console`. Default: `'webapi'`.
 
-websocket is the normal path: one message per cycle. webapi sends an HTTP request per changed cell. file writes a JSON file the plugin polls, which is the fallback if X-Plane will not accept the writes. console just prints.
+websocket is the normal path: one message per cycle. webapi sends an HTTP request per changed cell; both write the same datarefs. console just prints.
 
 ### `base_url`
 
@@ -301,9 +289,9 @@ Where X-Plane serves its web API. Enable it in Settings -> Network if it does no
 
 ### `api_version`
 
-*API version* — one of `v1`, `v2`. Default: `'v1'`.
+*API version* — one of `v1`, `v2`, `v3`. Default: `'v1'`.
 
-v1 works on X-Plane 12.1.1 and later; v2 from 12.1.4.
+Only a fallback. The daemon asks X-Plane which API versions it serves and uses the newest one; this is what it falls back to when that question goes unanswered, which means a sim too old to answer it. Leave it at v1.
 
 ### `field_width`
 
@@ -322,9 +310,3 @@ How long to wait for X-Plane to answer.
 *Retry every (s)* — a number. Default: `5.0`.
 
 How long to wait between reconnection attempts when X-Plane is not answering.
-
-### `json_path`
-
-*JSON file* — text (a path or a name). Default: `''`. Leave it out to leave it unset.
-
-Where the 'file' publisher writes. Empty means a file in the system temp folder, which is also where the plugin looks.

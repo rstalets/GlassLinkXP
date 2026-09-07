@@ -2,11 +2,10 @@
 
 XPPython3 only exists inside X-Plane, so the ``XPPython3`` module is faked
 here. This does not prove the plugin runs in the sim -- it proves the dataref
-buffer handling and the JSON-fallback poll are correct.
+buffer handling is correct.
 """
 
 import importlib.util
-import json
 import sys
 import types
 from pathlib import Path
@@ -48,11 +47,11 @@ class FakeXP:
         self.accessors.pop(accessor.split(":", 1)[1], None)
 
     def registerFlightLoopCallback(self, callback, interval, refCon):
+        # Kept as a trap rather than removed: the whole point of the plugin is
+        # that it does no per-frame work, so a callback appearing here is the
+        # regression to catch, not an API to support.
         self.flight_loops.append((callback, interval))
         return callback
-
-    def unregisterFlightLoopCallback(self, callback, refCon):
-        self.flight_loops = [f for f in self.flight_loops if f[0] is not callback]
 
     def findPluginBySignature(self, signature):
         return 7 if "DataRefEditor" in signature else self.NO_PLUGIN_ID
@@ -62,23 +61,22 @@ class FakeXP:
 
 
 @pytest.fixture
-def plugin(monkeypatch, tmp_path):
+def plugin(monkeypatch):
     fake_xp = FakeXP()
     module = types.ModuleType("XPPython3")
     module.xp = fake_xp
     monkeypatch.setitem(sys.modules, "XPPython3", module)
-    monkeypatch.setenv("G1000_SOFTKEY_JSON", str(tmp_path / "labels.json"))
 
     spec = importlib.util.spec_from_file_location("PI_G1000SoftkeyLabels", PLUGIN_PATH)
     loaded = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(loaded)
     instance = loaded.PythonInterface()
     instance.XPluginStart()
-    return instance, fake_xp, tmp_path / "labels.json"
+    return instance, fake_xp
 
 
 def test_creates_a_label_and_a_colour_dataref_per_cell(plugin):
-    instance, fake_xp, _ = plugin
+    instance, fake_xp = plugin
     assert len(fake_xp.accessors) == 48  # 24 labels + 24 backgrounds
     assert "g1000/softkey/pfd/1" in fake_xp.accessors
     assert "g1000/softkey/mfd/12" in fake_xp.accessors
@@ -91,7 +89,7 @@ def test_creates_a_label_and_a_colour_dataref_per_cell(plugin):
 
 
 def test_the_field_holds_the_longest_label_with_room_to_spare(plugin):
-    instance, _, _ = plugin
+    instance, _ = plugin
     from g1000_softkey.publish import encode_field
 
     assert all(len(buffer) == 64 for buffer in instance.buffers.values())
@@ -102,7 +100,7 @@ def test_the_field_holds_the_longest_label_with_room_to_spare(plugin):
 
 
 def test_int_datarefs_round_trip_and_ignore_junk(plugin):
-    instance, _, _ = plugin
+    instance, _ = plugin
     name = "g1000/softkey/pfd/4/bg"
     assert instance.read_int(name) == 0
     instance.write_int(name, 2)
@@ -116,7 +114,7 @@ def test_int_datarefs_round_trip_and_ignore_junk(plugin):
 
 
 def test_read_and_write_round_trip(plugin):
-    instance, _, _ = plugin
+    instance, _ = plugin
     name = "g1000/softkey/pfd/1"
     instance.write_data(name, b"INSET" + b"\x00" * 59, 0, 64)
     assert instance.read_data(name, None, 0, 64) == 64
@@ -126,7 +124,7 @@ def test_read_and_write_round_trip(plugin):
 
 
 def test_write_is_bounded(plugin):
-    instance, _, _ = plugin
+    instance, _ = plugin
     name = "g1000/softkey/mfd/3"
     instance.write_data(name, b"X" * 256, 0, 256)
     assert len(instance.buffers[name]) == 64
@@ -135,47 +133,19 @@ def test_write_is_bounded(plugin):
     instance.write_data("g1000/softkey/none", b"Z", 0, 1)  # unknown: ignored
 
 
-def test_json_fallback_is_applied(plugin):
-    instance, _, json_file = plugin
-    assert instance.poll(0, 0, 0, None) == 0.2  # no file yet, no crash
+def test_the_plugin_does_no_per_frame_work(plugin):
+    """Enable must register nothing with the flight loop.
 
-    json_file.write_text(json.dumps({
-        "version": 2,
-        "labels": {"g1000/softkey/pfd/1": "TMR/REF", "g1000/softkey/xxx/9": "ignored"},
-        "numbers": {"g1000/softkey/pfd/1/bg": 1, "g1000/softkey/xxx/9/bg": 2},
-    }))
-    instance.poll(0, 0, 0, None)
-    assert bytes(instance.buffers["g1000/softkey/pfd/1"]).rstrip(b"\x00") == b"TMR/REF"
-    assert instance.ints["g1000/softkey/pfd/1/bg"] == 1
-
-    before = instance.last_mtime
-    instance.poll(0, 0, 0, None)  # unchanged mtime -> no re-read
-    assert instance.last_mtime == before
-
-
-def test_a_version_1_file_without_numbers_still_applies(plugin):
-    """An older daemon writes labels only; the plugin must not care."""
-    instance, _, json_file = plugin
-    json_file.write_text(json.dumps({
-        "version": 1,
-        "labels": {"g1000/softkey/mfd/2": "MAP"},
-    }))
-    instance.poll(0, 0, 0, None)
-    assert bytes(instance.buffers["g1000/softkey/mfd/2"]).rstrip(b"\x00") == b"MAP"
-    assert instance.ints["g1000/softkey/mfd/2/bg"] == 0
-
-
-def test_malformed_json_does_not_raise(plugin):
-    instance, fake_xp, json_file = plugin
-    json_file.write_text("{not json")
-    instance.poll(0, 0, 0, None)
-    assert any("could not apply" in message for message in fake_xp.logs)
-
-
-def test_enable_disable_registers_the_flight_loop(plugin):
-    instance, fake_xp, _ = plugin
+    The plugin exists only to create the datarefs; the daemon writes them from
+    outside the sim over the WebSocket or REST API, both confirmed working
+    against a running X-Plane. It used to also poll a JSON file at 5 Hz, as a
+    hedge against the Web API refusing to write a plugin-created dataref, and
+    that hedge is no longer needed -- so the correct per-frame cost is zero,
+    and this is the test that keeps it there.
+    """
+    instance, fake_xp = plugin
     assert instance.XPluginEnable() == 1
-    assert fake_xp.flight_loops and fake_xp.flight_loops[0][1] == 0.2
+    assert not fake_xp.flight_loops
     instance.XPluginDisable()
     assert not fake_xp.flight_loops
     instance.XPluginStop()

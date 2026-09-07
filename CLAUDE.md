@@ -48,15 +48,14 @@ also the only way to stop the daemon with a signal it handles: `cmd_run` calls
 ```
 g1000_softkey/
   main.py       CLI: run, gui, list-windows, calibrate, dump-cells, dump-colors,
-                     bench, screen-template, learn, tune, synth
+                     bench, screen-template, tune, synth
   capture.py    Windows Graphics Capture, plus a PNG backend for offline work
   strip.py      strip crop, 12-cell split, per-cell preprocessing
   ocr.py        Tesseract, label vocabulary, CellResult
   color.py      border-ring sampling, HSV background classification
   pipeline.py   DisplayPipeline.process(): one frame -> 12 CellResults
-  publish.py    WebSocket / REST / file / console publishers
+  publish.py    WebSocket / REST / console publishers
   screens.py    softkey page definitions (screens.toml)
-  signatures.py glyph shape fallback, off by default
   config.py     frozen dataclasses + TOML loader (reading only; the GUI
                 writes with tomli-w)
   gui/          the window (see docs/GUI.md), including the calibration editor
@@ -82,11 +81,19 @@ So:
 - **Measure before you tune.** If you are choosing a threshold, a colour, or a
   filter strength, add a diagnostic that prints the real values from a real
   capture first. `tune`, `dump-cells`, `dump-colors`, `calibrate` and
-  `screen-template` all exist because of this. One such measurement is still
-  outstanding: the `[color]` HSV thresholds ship as plausible swatch values and
-  have never been checked against a real G1000 frame -- `dump-colors` prints
-  what a live capture actually contains, so replace them rather than trusting
-  them.
+  `screen-template` all exist because of this.
+  A test suite proves a classifier's *logic*; only a live capture proves its
+  *threshold values*. `tests/test_color.py` and the live run between them have
+  closed the `[color]` case -- keep both halves in mind when adding any other
+  classifier, because passing tests are not evidence that a threshold is right.
+- **This applies to any number a human will look at a pixel through**, not just
+  numbers the pipeline reads. *A preview of a diagnostic image is part of the
+  diagnostic.* The Cells tab exists because the closed-counter bug was only
+  found once someone saw a picture of the preprocessed cell -- so a preview that
+  resamples that picture defeats the tab rather than serving it. Framing
+  constants that only decide layout need no measurement, but they do need to be
+  one named constant: two numbers describing one affordance (a handle drawn at
+  one size and grabbed at another) is the `FIELD_WIDTH` problem in miniature.
 - **Synthetic frames are for regression, not calibration.** `synth.py` renders
   softkey strips for the test suite. They do not use X-Plane's font and must
   never be the basis for a tuning decision.
@@ -132,16 +139,26 @@ resizing, the installer scripts, anything touching a live X-Plane, and three
 things in the GUI -- `pythonw.exe`, `CTRL_BREAK_EVENT` as the way Stop reaches
 the daemon, and `os.startfile`.
 
-**The GUI reads three things it did not write, and each is pinned by a test.**
-It parses the argv the CLI accepts, the log rows `_format_row` prints, and the
-fields of the config dataclasses. None of those couplings is visible to the
-type checker, so each has a test that constructs the input from the daemon's
-own code rather than from a copied sample:
+**Any code that parses another module's output is a coupling, and every one
+needs a test that builds its input by calling the real producer.** Never a
+pasted sample: a sample records what the formatter did for one easy case, and
+the cases that break are the ones nobody thinks to paste. That is not
+hypothetical -- `WindowInfo.__str__` formats with `repr`, which switches to
+double quotes when a title contains an apostrophe, and a hand-typed fixture
+hid it until a window called `Cirrus SR22's PFD` vanished from the list with
+"No windows matched" on screen. Parsers therefore live in `gui/logparse.py`,
+never beside their caller, so this is enforceable by looking in one place.
+Adding a parser means adding a row here and a format-then-parse test.
+
+None of these couplings is visible to the type checker:
 
 | if you change | the test that fails |
 | --- | --- |
 | a subcommand or a flag in `main.py` | `test_gui_commands.py` -- every argv the GUI can build is parsed by `build_parser()`, and it asserts the GUI covers every subcommand |
 | what `_format_row` prints | `test_gui_logparse.py` -- it formats a `DisplayResult` and parses it back |
+| `WindowInfo.__str__` | `test_gui_logparse.py` -- `parse_window` is fed a formatted `WindowInfo`, over quoting, backslashes and non-ASCII |
+| what `calibrate`, `dump-colors`, `screen-template` or `tune` print | `test_gui_logparse.py` -- `parse_calibration` / `parse_colors` / `parse_screen_block` / `parse_tuning_result` are fed the real commands' output over synthetic frames or a scripted search |
+| the shape of a `tune --truth` file | `test_tuning.py` -- the GUI's `configio.dumps_truth` (which cannot import `tuning.py`: that pulls in cv2 and Tesseract, and the GUI must never run the pipeline in its own process) is fed through the real `tuning.load_truth` |
 | a field on any config dataclass | `test_gui_schema.py` -- a field must be in `gui/schema.py` or in `NOT_IN_THE_FORM` with a reason |
 | `strip_rect` or `cell_rects` | `test_gui_geometry.py` and `test_gui_canvas.py` -- the calibration editor draws what `cell_rects` returns, and both check it against the real thing |
 | `clipped_edges` or `CLIP_MARGIN` | `test_gui_checks.py` -- the margin is 0 because the ink extents were measured across the corpus, and a test keeps that measurement true; the calibration editor and `run -v` share the function |
@@ -159,8 +176,12 @@ python -m g1000_softkey.main run --once --image frames/xpdr.png --publisher cons
 python -m g1000_softkey.main gui                       # the window
 ```
 
-The GUI's own tests need a display; without one the 78 that build widgets skip
-themselves and the rest still run. To run all of them here:
+The GUI's own tests need tkinter to import and a display to run, and those are
+two different failures. With tkinter present and no display the widget tests
+skip themselves and the rest still run; **without tkinter the suite does not
+collect at all**, because `gui/tabs.py` imports it at module scope. If
+`python -m pytest` dies during collection, check `python -c "import tkinter"`
+before anything else. To run all of them here:
 
 ```
 xvfb-run -a python -m pytest -q
@@ -191,7 +212,8 @@ commit, not afterwards.
 | a config setting, or its default | `gui/schema.py` (the help text is the documentation), then regenerate `docs/CONFIGURATION.md` -- a test fails until you do -- and `config.example.toml` |
 | a CLI subcommand or flag | the command list in `CLAUDE.md` and the relevant `README.md` section, and `gui/commands.py` -- `test_gui_commands.py` fails until the GUI covers it |
 | a tab, or how the GUI runs a command | `docs/GUI.md`, including its flowchart and the tab table |
-| what `_format_row` prints, or a config dataclass field | `gui/logparse.py` or `gui/schema.py` -- see *Things that will catch you out* |
+| anything a CLI subcommand prints that the GUI reads | `gui/logparse.py` -- and its format-then-parse test; see *Things that will catch you out* |
+| a config dataclass field | `gui/schema.py` -- see *Things that will catch you out* |
 | dataref names, types or field width | `README.md` PilotsDeck wiring, the plugin docstring, `config.example.toml` |
 | what has been tested on real hardware | the *Verified offline* / *Not verified here* sections of `README.md` |
 

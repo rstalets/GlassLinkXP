@@ -7,7 +7,7 @@ from g1000_softkey.color import BLACK, RED, WHITE, YELLOW
 from g1000_softkey.config import AppConfig, ColorConfig, DisplayConfig, StripGeometry
 from g1000_softkey.ocr import CellResult
 from g1000_softkey.pipeline import DisplayPipeline
-from g1000_softkey.strip import auto_detect_strip
+from g1000_softkey.strip import auto_detect_strip, split_cells
 
 MENUS = sorted(synth.MENUS)
 
@@ -27,6 +27,58 @@ def test_every_menu_is_read_exactly(menu, reader, config):
     result = pipeline.process(synth.render_menu(menu))
     assert result.labels == synth.MENUS[menu]
     assert result.ocr_calls == sum(1 for label in synth.MENUS[menu] if label)
+
+
+@pytest.mark.parametrize("menu", MENUS)
+def test_only_the_rungs_that_are_read_are_preprocessed(menu, reader, config, monkeypatch):
+    """Same labels, less work: a rung nobody OCRs is never built.
+
+    Measured across the corpus before this was made lazy: 174 preprocessing
+    passes -- three rungs for all 58 cells that reach OCR -- where the reader
+    only ever looked at 63 of them.
+    """
+    from g1000_softkey import pipeline as pipeline_module
+
+    real = pipeline_module.preprocess_cell
+    calls = []
+
+    def counted(cell, **kwargs):
+        calls.append(kwargs["sharpen_amount"])
+        return real(cell, **kwargs)
+
+    monkeypatch.setattr(pipeline_module, "preprocess_cell", counted)
+
+    result = make_pipeline(reader, config).process(synth.render_menu(menu))
+    assert result.labels == synth.MENUS[menu], "laziness must not change the answer"
+
+    rungs = len(config.ocr.sharpen_ladder)
+    assert rungs > 1, "otherwise this test proves nothing"
+    assert len(calls) >= result.ocr_calls, "every cell read gets at least rung one"
+    assert len(calls) < result.ocr_calls * rungs, "and most stop there"
+    assert calls.count(config.ocr.sharpen_ladder[0][0]) == result.ocr_calls
+
+
+def test_the_ladder_charges_its_time_to_preprocessing_not_to_ocr(reader, config):
+    """preprocess_ms now accrues inside read_best, and must still be its own
+    figure: -v prints the two stages separately and they are read against each
+    other when the loop is running late."""
+    result = make_pipeline(reader, config).process(synth.render_menu("xpdr"))
+    assert result.timings["preprocess_ms"] > 0
+    assert result.timings["ocr_ms"] > 0
+
+
+def test_the_ladder_stops_building_when_the_reader_stops_reading(reader, config):
+    """The ladder object itself, without a pipeline around it."""
+    from g1000_softkey.pipeline import SharpenLadder
+
+    cell = split_cells(synth.render_menu("xpdr"), StripGeometry())[0]
+    ladder = SharpenLadder(cell, config.ocr)
+    assert ladder.rungs == 0 and ladder.elapsed_ms == 0.0, "nothing built until asked"
+    first = next(iter(ladder))
+    assert first is not None
+    assert ladder.rungs == 1
+    assert ladder.elapsed_ms > 0
+    assert len(list(SharpenLadder(cell, config.ocr))) == len(config.ocr.sharpen_ladder)
 
 
 def test_blank_cells_are_reported_empty_and_skip_ocr(reader, config):

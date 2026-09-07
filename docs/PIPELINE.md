@@ -6,13 +6,6 @@ a single captured frame.
 For the window that drives all of this -- what it spawns, and the places it
 reads what the daemon printed -- see [GUI.md](GUI.md).
 
-> **On naming.** What the config and these diagrams call a *page* or *screen* --
-> `screens.toml`, `screen_confidence` -- is the softkey-page signature idea:
-> the labels that read cleanly identify which page is showing, and the page
-> supplies the ones that did not. There is a separate, off-by-default
-> *shape signature* fallback in `signatures.py` that compares glyph pixels;
-> it is a different mechanism and is not in these diagrams.
-
 ## The daemon
 
 ```mermaid
@@ -69,7 +62,7 @@ flowchart TD
     GATE -->|yes| INK{"ink ratio >= blank_ink_ratio?"}
 
     INK -->|no| BLANK["Empty cell<br/>never reaches OCR"]
-    INK -->|yes| LADDER["Preprocess once per sharpen_ladder rung:<br/>unsharp mask, upscale, threshold,<br/>normalise polarity, crop to content"]
+    INK -->|yes| LADDER["Preprocess the next sharpen_ladder rung:<br/>unsharp mask, upscale, threshold,<br/>normalise polarity, crop to content"]
 
     LADDER --> OCR["Tesseract reads each variant"]
     OCR --> SNAP["Normalise, then snap to the<br/>nearest label in labels.txt"]
@@ -132,9 +125,27 @@ grows strokes instead, turning a 0 into a B. The amount that works depends on
 the font and the capture scale, so each rung is tried and the answer the
 vocabulary agrees with wins. The first rung is no sharpening at all.
 
+Picking those rungs from a single cell is exactly what caused the regression
+this paragraph is about: a rung strong enough to open up a 0 also, in one real
+capture, turned a 6 into a 5 and a 7 into nothing -- because the rung that
+fixed one cell was never checked against any other, and the ladder is the same
+one every cell on every frame is read with. `tune --truth <file>` (see
+`tuning.py`) now searches against every labelled cell on every page it is
+given and keeps a candidate only when it fixes something without making
+anything else, on any page, read wrong.
+
 **Confidence gates the early exit.** Landing on a known label is not proof:
 every digit 0-7 is a valid softkey, so a 0 misread as 2 still matches exactly.
 Only a hit that is also confident ends the search.
+
+**And the rungs are built one at a time.** The exit above stops the OCR calls,
+but the rungs used to be preprocessed up front, all of them, before the reader
+had looked at any -- so the search saved a Tesseract call and paid for an
+unsharp mask, a 4x resize and a threshold it never used. They are now produced
+as they are asked for. Across the offline corpus that is 63 preprocessing
+passes instead of 174 for the same 58 cells, and 9.8 ms per frame down to
+4.4 ms. The ladder itself is unchanged -- same rungs, same order, same
+answers; only the work nobody was going to look at is skipped.
 
 **Page lookup runs only when something needs it.** The stage exists to serve
 cells OCR was unsure about, so the first question is whether any exist. When

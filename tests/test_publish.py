@@ -10,10 +10,8 @@ from g1000_softkey import publish
 from g1000_softkey.config import PublishConfig
 from g1000_softkey.publish import (
     ConsolePublisher,
-    FilePublisher,
     WebApiPublisher,
     create_publisher,
-    default_json_path,
     encode_field,
     encode_field_b64,
     encode_value,
@@ -31,31 +29,6 @@ def test_encode_field_pads_and_truncates():
     assert base64.b64decode(encode_field_b64("OBS")) == encode_field("OBS")
 
 
-def test_default_json_path_honours_the_env_var(monkeypatch, tmp_path):
-    monkeypatch.setenv("G1000_SOFTKEY_JSON", str(tmp_path / "labels.json"))
-    assert default_json_path() == tmp_path / "labels.json"
-    monkeypatch.delenv("G1000_SOFTKEY_JSON")
-    assert default_json_path().name == "g1000_softkey_labels.json"
-
-
-def test_file_publisher_writes_atomically(tmp_path):
-    target = tmp_path / "labels.json"
-    publisher = FilePublisher(PublishConfig(target="file", json_path=str(target)))
-    publisher.publish({NAMES[0]: "INSET", NAMES[1]: ""})
-    payload = json.loads(target.read_text())
-    assert payload["labels"][NAMES[0]] == "INSET"
-    assert payload["version"] == 2
-    assert not list(tmp_path.glob("*.tmp"))
-
-    before = target.stat().st_mtime_ns
-    publisher.publish({NAMES[0]: "INSET", NAMES[1]: ""})  # unchanged -> no rewrite
-    assert target.stat().st_mtime_ns == before
-
-    publisher.publish({NAMES[0]: "PFD", NAMES[1]: ""})
-    assert json.loads(target.read_text())["labels"][NAMES[0]] == "PFD"
-    publisher.close()
-
-
 class FakeResponse:
     def __init__(self, status_code=200, payload=None):
         self.status_code = status_code
@@ -66,17 +39,31 @@ class FakeResponse:
 
 
 class FakeSession:
-    """Stand-in for requests.Session recording what the client would send."""
+    """Stand-in for requests.Session recording what the client would send.
 
-    def __init__(self, ids=None, patch_status=200, fail=False):
+    It answers /api/capabilities the way a current X-Plane does, because the
+    publisher asks that question before every id resolution and the answer
+    decides which /api/vN the rest of the traffic goes to. The two GETs are
+    counted separately so a test about re-resolution is not also counting
+    version negotiation.
+    """
+
+    def __init__(self, ids=None, patch_status=200, fail=False, versions=("v1", "v2", "v3")):
         self.ids = ids if ids is not None else {name: 100 + i for i, name in enumerate(NAMES)}
         self.patch_status = patch_status
         self.fail = fail
+        self.versions = versions
         self.patches = []
         self.list_calls = 0
+        self.capability_calls = 0
         self.closed = False
 
     def get(self, url, timeout=None):
+        if url.endswith("/api/capabilities"):
+            self.capability_calls += 1
+            if self.fail:
+                raise ConnectionError("connection refused")
+            return FakeResponse(200, {"api": {"versions": list(self.versions)}})
         self.list_calls += 1
         if self.fail:
             raise ConnectionError("connection refused")
@@ -100,7 +87,8 @@ def test_webapi_resolves_ids_and_patches_base64():
     assert session.list_calls == 1
     publisher.publish({NAMES[0]: "INSET"})
     url, body = session.patches[0]
-    assert url.endswith("/api/v1/datarefs/100/value")
+    # v3, not the configured v1: the version comes from /api/capabilities.
+    assert url.endswith("/api/v3/datarefs/100/value")
     assert base64.b64decode(body["data"]) == encode_field("INSET", PublishConfig().field_width)
 
     publisher.publish({NAMES[0]: "INSET"})  # unchanged -> no traffic
@@ -129,6 +117,74 @@ def test_webapi_warns_about_missing_datarefs(caplog):
     session = FakeSession(ids={NAMES[0]: 42})
     WebApiPublisher(PublishConfig(), NAMES, session=session)
     assert "not registered" in caplog.text
+
+
+def test_webapi_negotiates_the_highest_advertised_api_version():
+    """REST resolves the version the same way the websocket does.
+
+    It used to interpolate publish.api_version verbatim, so the websocket
+    auto-upgraded while REST stayed on whatever the config file said -- v1 by
+    default, two versions behind what X-Plane 12 now serves.
+    """
+    session = FakeSession(versions=("v1", "v2", "v3"))
+    publisher = WebApiPublisher(PublishConfig(api_version="v1"), NAMES, session=session)
+    publisher.publish({NAMES[0]: "INSET"})
+    assert publisher._root.endswith("/api/v3")
+    assert session.patches[0][0].endswith("/api/v3/datarefs/100/value")
+
+
+def test_api_version_falls_back_to_the_floor_when_capabilities_is_unreachable():
+    """The configured version is a floor, used only when the sim does not say.
+
+    An X-Plane that does not answer /api/capabilities is an old one, so the
+    floor has to stay at the oldest version rather than track the newest.
+    """
+
+    class NoCapabilities(FakeSession):
+        def get(self, url, timeout=None):
+            if url.endswith("/api/capabilities"):
+                self.capability_calls += 1
+                raise ConnectionError("404 not found")
+            return super().get(url, timeout=timeout)
+
+    session = NoCapabilities()
+    publisher = WebApiPublisher(PublishConfig(api_version="v1"), NAMES, session=session)
+    publisher.publish({NAMES[0]: "INSET"})
+    assert publisher._root.endswith("/api/v1")
+    assert session.patches[0][0].endswith("/api/v1/datarefs/100/value"), "writes still land"
+
+
+def test_capabilities_is_asked_once_and_then_cached():
+    """Not per publish, and not per write: X-Plane cannot change its answer
+    without a restart, which invalidates the dataref ids anyway."""
+    session = FakeSession()
+    publisher = WebApiPublisher(PublishConfig(), NAMES, session=session)
+    assert session.capability_calls == 1
+    for label in ("INSET", "PFD", "OBS", "CDI"):
+        publisher.publish({NAMES[0]: label, NAMES[1]: label})
+    assert len(session.patches) == 8
+    assert session.capability_calls == 1
+
+
+def test_a_failed_negotiation_is_retried_on_the_next_resolve():
+    """The floor is not cached: a daemon started before X-Plane must pick up
+    the real answer once the sim is up, not stay on v1 for the session."""
+
+    class LateStart(FakeSession):
+        answering = False
+
+        def get(self, url, timeout=None):
+            if url.endswith("/api/capabilities") and not self.answering:
+                self.capability_calls += 1
+                raise ConnectionError("connection refused")
+            return super().get(url, timeout=timeout)
+
+    session = LateStart(patch_status=404)
+    publisher = WebApiPublisher(PublishConfig(retry_interval=0.0), NAMES, session=session)
+    assert publisher._root.endswith("/api/v1")
+    session.answering = True
+    publisher.publish({NAMES[0]: "INSET"})  # the 404 forces a re-resolve
+    assert publisher._root.endswith("/api/v3")
 
 
 def test_console_publisher_only_logs_changes(caplog):
@@ -411,24 +467,6 @@ def test_encode_value_splits_strings_from_numbers():
     assert encode_value(2) == 2
     assert encode_value(0) == 0  # not falsy-dropped, and not "0"
     assert isinstance(encode_value(3), int)
-
-
-def test_file_publisher_separates_labels_from_numbers(tmp_path):
-    target = tmp_path / "labels.json"
-    publisher = FilePublisher(PublishConfig(target="file", json_path=str(target)))
-    publisher.publish({NAMES[0]: "INSET", BG_NAMES[0]: 1})
-    payload = json.loads(target.read_text())
-    assert payload["labels"] == {NAMES[0]: "INSET"}
-    assert payload["numbers"] == {BG_NAMES[0]: 1}
-
-    before = target.stat().st_mtime_ns
-    publisher.publish({NAMES[0]: "INSET", BG_NAMES[0]: 1})
-    assert target.stat().st_mtime_ns == before, "unchanged -> no rewrite"
-
-    # The colour changes while the label does not: still a write.
-    publisher.publish({NAMES[0]: "INSET", BG_NAMES[0]: 2})
-    assert json.loads(target.read_text())["numbers"][BG_NAMES[0]] == 2
-    publisher.close()
 
 
 def test_webapi_patches_a_number_not_base64():

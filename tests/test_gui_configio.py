@@ -47,19 +47,63 @@ def test_a_thoroughly_non_default_config_round_trips(tmp_path):
             psm=10, whitelist="ABC/-\\", upscale=6.5,
             sharpen_ladder=((0.0, 0.0), (0.9, 1.7)), threshold="adaptive",
             accept_confidence=55.0, screen_confidence=44.0,
-            screen_match_confidence=91.0, signature_confidence=33.0,
+            screen_match_confidence=91.0,
             fuzzy_cutoff=0.5, blank_ink_ratio=0.02, blank_contrast=21,
         ),
         color=ColorConfig(enabled=False, ring_fraction=0.22, value_max=70,
                           saturation_max=80, red_hue_max=9, red_hue_wrap_min=170,
                           yellow_hue_min=20, yellow_hue_max=38),
-        publish=PublishConfig(target="file", base_url="http://example:1/",
+        publish=PublishConfig(target="webapi", base_url="http://example:1/",
                               api_version="v2", field_width=32, timeout=2.5,
-                              json_path="/tmp/labels.json", retry_interval=9.0),
+                              retry_interval=9.0),
     )
     path = tmp_path / "config.toml"
     configio.save(path, configio.document_from_config(config), backup=False)
     assert load_config(path) == config
+
+
+def test_the_packages_own_files_are_not_written_into_the_config(tmp_path):
+    """They are absolute paths into this checkout. Writing them out of the
+    form -- which is what the first Save did -- pins the config to one
+    install, so moving or reinstalling the project stops the daemon starting.
+    config.example.toml leaves them out for the same reason."""
+    document = configio.default_document()
+    for key in ("screens_file", "labels_file"):
+        assert key not in document["ocr"]
+
+    path = tmp_path / "config.toml"
+    configio.save(path, document, backup=False)
+    text = path.read_text(encoding="utf-8")
+    assert "screens_file" not in text
+    assert "labels_file" not in text
+
+    # and the daemon still finds them, because absent means "the package's"
+    loaded = load_config(path)
+    assert loaded.ocr.screens_file == OcrConfig().screens_file
+    assert loaded.ocr.labels_file == OcrConfig().labels_file
+
+
+def test_a_file_the_user_chose_is_kept(tmp_path):
+    """Only the default is left out. A path somebody typed is theirs."""
+    mine = tmp_path / "my_screens.toml"
+    document = configio.default_document()
+    document["ocr"]["screens_file"] = str(mine)
+    path = tmp_path / "config.toml"
+    configio.save(path, document, backup=False)
+    assert str(mine) in path.read_text(encoding="utf-8")
+
+
+def test_an_empty_box_is_a_way_back_to_the_packages_own_file():
+    """The form says "unset" with None, and these have to be able to say it."""
+    for key in ("screens_file", "labels_file"):
+        setting = schema.setting("ocr", key)
+        assert setting.optional, f"{key} cannot be cleared"
+        assert configio.parse_field(setting, "") is None
+
+
+def test_a_package_default_that_is_not_optional_is_refused():
+    with pytest.raises(ValueError):
+        schema.Setting("screens_file", "path", "Pages file", package_default=True)
 
 
 def test_an_unset_optional_setting_is_left_out(tmp_path):
@@ -203,6 +247,25 @@ def test_reading_a_broken_file_says_where(tmp_path):
     assert "bad.toml" in str(exc.value)
 
 
+def test_a_config_saved_as_utf_16_is_reported_not_thrown(tmp_path):
+    """Notepad's old "Unicode" option writes UTF-16, and the window opens by
+    calling this: a UnicodeDecodeError here is a ValueError, which is not a
+    ConfigIoError, so it escaped app.load_config and there was no window at
+    all -- and under pythonw.exe no console to print the traceback to."""
+    path = tmp_path / "config.toml"
+    path.write_bytes('loop_hz = 12\n'.encode("utf-16"))
+    with pytest.raises(configio.ConfigIoError) as exc:
+        configio.read_document(path)
+    assert "UTF-8" in str(exc.value)
+
+
+def test_a_config_full_of_bytes_that_are_not_text_is_reported(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_bytes(b"\xff\xfe\x00\x00binary rubbish")
+    with pytest.raises(configio.ConfigIoError):
+        configio.read_document(path)
+
+
 # -- form fields -----------------------------------------------------------
 
 
@@ -263,6 +326,33 @@ def test_composite_fields_survive_a_form_round_trip():
 
 def test_floats_keep_their_decimal_point():
     assert configio.format_field(schema.setting("app", "loop_hz"), 12) == "12.0"
+
+
+def test_a_whole_number_written_as_a_float_still_fills_its_box():
+    """`change_tolerance = 6.0` is legal TOML and the daemon loads it. Without
+    an int branch the form showed "6.0", parse_field refused it as "not a
+    whole number", and one untouched setting made the whole form unsaveable."""
+    setting = schema.setting("app", "change_tolerance")
+    assert configio.format_field(setting, 6.0) == "6"
+    assert configio.parse_field(setting, configio.format_field(setting, 6.0)) == 6
+
+
+@pytest.mark.parametrize("section,key", [
+    ("app", "change_tolerance"), ("ocr", "psm"), ("ocr", "blank_contrast"),
+    ("color", "value_max"), ("publish", "field_width"), ("geometry", "cells"),
+])
+def test_every_whole_number_setting_survives_a_float_in_the_file(section, key):
+    setting = schema.setting(section, key)
+    assert configio.parse_field(setting, configio.format_field(setting, 8.0)) == 8
+
+
+def test_a_number_that_is_not_whole_is_still_shown_and_still_refused():
+    """It is not an integer, and pretending it is by truncating would change
+    the user's setting behind their back."""
+    setting = schema.setting("app", "change_tolerance")
+    assert configio.format_field(setting, 6.5) == "6.5"
+    with pytest.raises(configio.ConfigIoError):
+        configio.parse_field(setting, "6.5")
 
 
 # -- geometry shared between displays --------------------------------------

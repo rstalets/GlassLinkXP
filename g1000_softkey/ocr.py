@@ -19,12 +19,11 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Iterable, Protocol, Sequence
 
 import numpy as np
 
 from .config import OcrConfig
-from .signatures import SignatureStore, signature
 
 LOG = logging.getLogger(__name__)
 
@@ -53,7 +52,6 @@ class CellResult:
     match_score: float = 0.0  # difflib ratio of raw -> text, 0..1
     blank: bool = False
     ocr_ran: bool = True     # False when served from the change-gating cache
-    by_signature: bool = False  # resolved by shape match, not by Tesseract
     by_screen: str = ""      # value came from this known softkey page
     confirmed_by: str = ""   # page agreed with a reading OCR was unsure of
     #: Background colour class, 0=black 1=white 2=yellow 3=red (see color.py).
@@ -215,11 +213,6 @@ class SoftkeyReader:
         self.config = config
         self.engine = engine or create_engine(config)
         self.vocabulary = LabelVocabulary.from_file(config.labels_file, config.fuzzy_cutoff)
-        self.signatures = (
-            SignatureStore.load(config.signatures_file)
-            if config.signature_confidence > 0
-            else SignatureStore()
-        )
 
     def read(self, index: int, image: np.ndarray) -> CellResult:
         text, confidence = self.engine.recognize(image)
@@ -229,7 +222,7 @@ class SoftkeyReader:
             index=index, text=snapped, raw=raw, confidence=confidence, match_score=score
         )
 
-    def read_best(self, index: int, images: Sequence[np.ndarray]) -> CellResult:
+    def read_best(self, index: int, images: Iterable[np.ndarray]) -> CellResult:
         """OCR each preprocessing variant and keep the most trustworthy answer.
 
         Ranked by: landing exactly on a known softkey label, then Tesseract's
@@ -243,38 +236,41 @@ class SoftkeyReader:
         early on a hit that is *also* confident; a shaky one is left to compete
         with the remaining rungs on confidence. In the common case the first
         rung is both, and this costs a single OCR call.
+
+        ``images`` is pulled one at a time and never re-read, so a caller can
+        hand over a generator and pay for a variant only when the search
+        actually reaches it -- which is what the pipeline does, the ladder's
+        preprocessing being about as expensive per rung as the early exit was
+        saving on OCR.
+        """
+        return self.pick_best(
+            (self.read(index, image) for image in images), self.config.accept_confidence
+        )
+
+    @staticmethod
+    def pick_best(results: Iterable["CellResult"], accept_confidence: float) -> "CellResult":
+        """Rank already-OCR'd rungs and keep the most trustworthy, in order.
+
+        This is the half of :meth:`read_best` that must never quietly drift,
+        because it is the part that decides which reading a real strip
+        publishes. It is factored out so the sharpening tuner can replay this
+        exact ranking, unchanged, over rungs it has cached from a previous OCR
+        pass -- comparing candidate ladders is then a matter of re-ordering
+        cached results rather than re-running Tesseract for each one, and the
+        tuner's notion of "correct" can never diverge from the pipeline's.
         """
         best: CellResult | None = None
-        for image in images:
-            result = self.read(index, image)
-            if best is None or self._rank(result) > self._rank(best):
+        for result in results:
+            if best is None or SoftkeyReader._rank(result) > SoftkeyReader._rank(best):
                 best = result
             if (
-                self.config.accept_confidence > 0
+                accept_confidence > 0
                 and result.text
                 and result.match_score >= 1.0
-                and result.confidence >= self.config.accept_confidence
+                and result.confidence >= accept_confidence
             ):
                 break
-        assert best is not None  # images is never empty
-
-        if (
-            self.config.signature_confidence > 0
-            and len(self.signatures)
-            and best.confidence < self.config.signature_confidence
-        ):
-            # OCR is unsure. Ask what the shape looks like instead.
-            shape = signature(images[0])
-            label, dist = self.signatures.match(shape)
-            if label is not None and label != best.text:
-                LOG.debug(
-                    "cell %d: signature says %r (d=%.3f), overriding OCR %r at %.0f%%",
-                    index, label, dist, best.text, best.confidence,
-                )
-                return CellResult(
-                    index=index, text=label, raw=best.raw,
-                    confidence=best.confidence, match_score=1.0, by_signature=True,
-                )
+        assert best is not None  # results is never empty
         return best
 
     @staticmethod

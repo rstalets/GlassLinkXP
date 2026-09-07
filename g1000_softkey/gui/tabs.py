@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import copy
 import os
-import re
+import shutil
 import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import font as tkfont
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import messagebox, ttk
 from typing import Any
 
 from dataclasses import replace
@@ -25,13 +25,23 @@ from dataclasses import replace
 from ..color import BACKGROUND_NAMES, BLACK
 from ..config import StripGeometry
 from . import checks, commands, configio, geometry, schema
-from .logparse import classify, parse_health, parse_row
+from .logparse import (
+    classify,
+    parse_calibration,
+    parse_colors,
+    parse_health,
+    parse_row,
+    parse_screen_block,
+    parse_tuning_result,
+    parse_window,
+)
 from .runner import Event, Failed, Finished, Line, Started
 from .widgets import (
     CELL_COLORS,
     HELP_COLOR,
     WARN_COLOR,
     GeometryCanvas,
+    HintEntry,
     ImageView,
     LabelBoard,
     OutputPane,
@@ -68,6 +78,23 @@ class Tab(ttk.Frame):
 
     def refresh(self) -> None:
         """Called when the configuration document changes."""
+
+    def show_output_folder(self, spec: commands.CommandSpec, values: dict[str, Any],
+                           nothing_yet: str) -> None:
+        """Open the folder ``spec`` writes into, in the file manager.
+
+        Which folder that is comes from ``spec.output_option`` rather than
+        from each tab knowing which of its own boxes holds it -- the tabs had
+        a copy of this each, and the declared option was read nowhere.
+        """
+        where = commands.output_folder(spec, values)
+        folder = Path(where) if where else None
+        if folder is None or not folder.is_dir():
+            self.app.set_status(nothing_yet, "warning")
+            return
+        error = open_folder(folder)
+        if error:
+            self.app.set_status(error, "error")
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +212,11 @@ class RunTab(Tab):
 
     def __init__(self, app) -> None:
         super().__init__(app)
-        self.publisher = tk.StringVar(value=str(app.prefs.get("publisher") or ""))
+        # The app's own variable, not a copy: it is what gets written back to
+        # the preferences when the window closes, and two variables that could
+        # disagree about one setting would be worse than none -- the same
+        # reasoning as the two debug-output checkboxes below.
+        self.publisher = app.publisher
         self.hz = tk.StringVar(value="")
         self.once = tk.BooleanVar(value=False)
         self.timing = tk.BooleanVar(value=False)
@@ -377,14 +408,6 @@ class RunTab(Tab):
 # ---------------------------------------------------------------------------
 
 
-#: A line of `list-windows` output:
-#:   hwnd=0x00010F42 pid=1234   1288x832 class='X-Plane' title='G1000 PFD'
-_WINDOW_LINE = re.compile(
-    r"hwnd=(?P<hwnd>\S+)\s+pid=(?P<pid>\d+)\s+(?P<size>\d+x\d+)\s+"
-    r"class='(?P<cls>.*?)'\s+title='(?P<title>.*)'\s*$"
-)
-
-
 class WindowsTab(Tab):
     """List the open windows and put one into the config as a display."""
 
@@ -453,13 +476,12 @@ class WindowsTab(Tab):
             return
         found = 0
         for line in lines:
-            match = _WINDOW_LINE.search(line)
-            if match is None:
+            window = parse_window(line)
+            if window is None:
                 continue
             found += 1
             self.tree.insert("", "end", values=(
-                match.group("title"), match.group("size"),
-                match.group("cls"), match.group("pid"),
+                window.title, window.size, window.class_name, window.pid,
             ))
         self.app.set_status(
             f"{found} window(s) listed. Select one and apply it to a display."
@@ -499,12 +521,6 @@ class WindowsTab(Tab):
 # ---------------------------------------------------------------------------
 # Calibrate
 # ---------------------------------------------------------------------------
-
-
-_FRAME_HEADER = re.compile(r"\[(?P<display>[A-Za-z0-9_.-]+)\]\s+frame\s+(?P<size>\d+x\d+)")
-_AUTO_DETECT = re.compile(
-    r"auto-detect:\s*x=(?P<x>[\d.]+)\s+y=(?P<y>[\d.]+)\s+w=(?P<w>[\d.]+)\s+h=(?P<h>[\d.]+)"
-)
 
 
 GEOMETRY_KEYS = ("x", "y", "w", "h", "cell_pad_x", "cell_pad_y")
@@ -1068,15 +1084,7 @@ class CalibrateTab(Tab):
         )
 
     def _parse(self, code: int, lines: list[str]) -> None:
-        current = ""
-        for line in lines:
-            header = _FRAME_HEADER.search(line)
-            if header:
-                current = header.group("display")
-                continue
-            auto = _AUTO_DETECT.search(line)
-            if auto and current:
-                self._suggested[current] = {k: float(auto.group(k)) for k in ("x", "y", "w", "h")}
+        self._suggested = parse_calibration(lines)
         self._load_picture()
         self.auto_button.configure(
             state="normal" if self.display.get() in self._suggested else "disabled"
@@ -1174,13 +1182,10 @@ class CalibrateTab(Tab):
         ))
 
     def _open_folder(self) -> None:
-        folder = Path(self.out.get())
-        if not folder.is_dir():
-            self.app.set_status("There is nothing there yet -- take a picture first.", "warning")
-            return
-        error = open_folder(folder)
-        if error:
-            self.app.set_status(error, "error")
+        self.show_output_folder(
+            commands.CALIBRATE, {"out": self.out.get()},
+            "There is nothing there yet -- take a picture first.",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1189,7 +1194,16 @@ class CalibrateTab(Tab):
 
 
 class CellsTab(Tab):
-    """What Tesseract is actually given, cell by cell."""
+    """What Tesseract is actually given, cell by cell, and the sharpening tuner.
+
+    Tuning used to search against one cell picture at a time, which found a
+    setting that fixed the cell it was aimed at and, in one real capture,
+    quietly turned a different cell's 6 into a 5. So instead of a Tune button
+    per cell, the boxes here are typed into (leave the rest blank) and queued
+    with **Add this page** -- across as many pages, and as many displays, as
+    the run should be checked against -- before **Run tuning** searches for a
+    change that fixes something without breaking anything already queued.
+    """
 
     tab_title = "Cells"
 
@@ -1198,6 +1212,14 @@ class CellsTab(Tab):
         self.display = tk.StringVar(value="")
         self.out = tk.StringVar(value=str(app.project_root / "cells"))
         self._views: list[tuple[ImageView, ImageView, ttk.Label]] = []
+        self._expect: list[tk.StringVar] = [tk.StringVar() for _ in range(12)]
+        #: Pages queued for the tuner: {"dir", "display", "expect"} snapshots
+        #: taken by add_tuning_page(), one per press. Plain dicts rather than
+        #: tuning.TuningCase so this module never has to import the pipeline
+        #: (cv2, Tesseract) that module needs to search them -- the GUI only
+        #: ever shells out to that search, the same as everything else here.
+        self._tuning_cases: list[dict[str, Any]] = []
+        self._suggested: dict[str, Any] | None = None
 
         controls = ttk.Frame(self)
         controls.pack(fill="x")
@@ -1215,35 +1237,95 @@ class CellsTab(Tab):
             "Top row of each pair is the cell as it reaches Tesseract: it should be black "
             "text on a white background, with the letters filling most of the height, and "
             "it should look that way for the highlighted softkey too. Bottom row is the "
-            "raw crop. If a cell is clipped or has its neighbour's label in it, go back to "
-            "Calibrate -- that is a geometry problem and no amount of OCR tuning will fix "
-            "it. If a cell looks right but reads wrong, use Tune on it.",
+            "raw crop. It is shown at the true size Tesseract received, not shrunk to fit -- "
+            "a smoothed-down preview of a binary image is how the last closed-counter bug "
+            "hid, so scroll rather than trust a blurrier picture. If a cell is clipped or has "
+            "its neighbour's label in it, go back to Calibrate -- that is a geometry problem "
+            "and no amount of OCR tuning will fix it. If a cell looks right but reads wrong, "
+            "type what it should say in the box below it and use the sharpening tuner "
+            "underneath.",
             width=900,
         ).pack(anchor="w", pady=(6, 8))
 
-        self.grid_frame = ttk.Frame(self)
-        self.grid_frame.pack(fill="both", expand=True)
-        for column in range(6):
+        # Everything below this point -- the grid, the tuner controls and the
+        # output pane -- lives inside one scrollable body, rather than being
+        # packed directly into the tab. Twelve cells shown at true resolution
+        # cannot fit the window's minsize, and neither, on top of that, can
+        # the tuner section and the output pane both keep their own minimum
+        # size: pack has no way to say "shrink the grid before the output
+        # pane", so once the tab's total content exceeds what it is given,
+        # *something* is squeezed arbitrarily -- which is exactly how the
+        # output pane and the status bar ended up squeezed to nothing before
+        # this tab had a scrollbar at all. Scrolling the lot together sidesteps
+        # that fight rather than trying to referee it.
+        scroll = ScrollableFrame(self)
+        scroll.pack(fill="both", expand=True)
+        body = scroll.body
+
+        #: Native prep size across the offline corpus is up to ~320x152 (a
+        #: ~76x34 raw crop, 4x upscaled, plus an 8px border). Two columns of
+        #: boxes that size fit the window's own minsize width with room to
+        #: spare and no horizontal scrollbar -- this widget only scrolls
+        #: vertically, so a column width tight enough to need one would just
+        #: clip the rightmost column instead. More, narrower columns is the
+        #: shrink-to-fit this tab used to do and the reason its prep picture
+        #: could not be trusted.
+        self.grid_frame = ttk.Frame(body)
+        self.grid_frame.pack(fill="x")
+        columns = 2
+        for column in range(columns):
             self.grid_frame.columnconfigure(column, weight=1)
+        for row in range(-(-12 // columns)):
+            self.grid_frame.rowconfigure(row, weight=1)
         for index in range(12):
-            row, column = divmod(index, 6)
+            row, column = divmod(index, columns)
             block = ttk.LabelFrame(self.grid_frame, text=f" {index + 1} ")
             block.grid(row=row, column=column, sticky="nsew", padx=3, pady=3)
-            prep = ImageView(block, "-")
-            prep.configure(width=170, height=52)
-            prep.pack_propagate(False)
+            # allow_shrink=False on both, and no forced width/height: a fixed
+            # box sized for *this* geometry's ~320x152 prep image would have
+            # clipped the bottom of a taller one instead, since allow_shrink
+            # only refuses to blur an oversized image, it does not resize the
+            # box to fit it. Left unconfigured (and propagating, the default),
+            # the frame just takes the size of the image once it is shown.
+            prep = ImageView(block, "-", allow_shrink=False)
             prep.pack(fill="x")
-            raw = ImageView(block, "-")
-            raw.configure(width=170, height=40)
-            raw.pack_propagate(False)
+            raw = ImageView(block, "-", allow_shrink=False)
             raw.pack(fill="x")
             caption = ttk.Label(block, text="", foreground=HELP_COLOR, anchor="center")
             caption.pack(fill="x")
-            ttk.Button(block, text="Tune", width=6,
-                       command=lambda i=index: self.tune(i + 1)).pack(pady=(0, 3))
+            HintEntry(block, hint="should read", textvariable=self._expect[index],
+                      justify="center").pack(fill="x", pady=(0, 3), padx=2)
             self._views.append((prep, raw, caption))
 
-        self.output = OutputPane(self, height=8)
+        tuner = ttk.LabelFrame(body, text="  Sharpening tuner  ", padding=PAD)
+        tuner.pack(fill="x", pady=(10, 0))
+        row = ttk.Frame(tuner)
+        row.pack(fill="x")
+        ttk.Button(row, text="Add this page", width=14,
+                   command=self.add_tuning_page).pack(side="left")
+        ttk.Button(row, text="Clear queue", width=11,
+                   command=self.clear_tuning_queue).pack(side="left", padx=(6, 0))
+        self.queue_label = ttk.Label(row, text="No pages queued yet.")
+        self.queue_label.pack(side="left", padx=(12, 0))
+        self.save_button = ttk.Button(row, text="Save suggested settings",
+                                      command=self.save_tuning_result, state="disabled")
+        self.save_button.pack(side="right")
+        ttk.Button(row, text="Run tuning", width=11,
+                   command=self.run_tuning).pack(side="right", padx=(0, 10))
+        help_label(
+            tuner,
+            "Type what a cell should read above, leave the rest blank, then Add this page -- "
+            "it copies out the cells you typed against, so reading a different page afterwards "
+            "cannot change what an already-queued page is checked against. Read a different "
+            "page (or point Display at the other one) and add that too, to cover more than one "
+            "page in the same search. Run tuning then searches sharpening, "
+            "upscaling and thresholding settings and keeps only a change that fixes a queued "
+            "cell without making any other queued cell -- on any page -- read wrong. Save "
+            "suggested settings writes what it found into config.toml.",
+            width=900,
+        ).pack(anchor="w", pady=(6, 0))
+
+        self.output = OutputPane(body, height=8)
         self.output.pack(fill="both", expand=True, pady=(10, 0))
         app.on_config_changed(self.refresh)
 
@@ -1268,50 +1350,129 @@ class CellsTab(Tab):
             raw.show(raw_path if raw_path.is_file() else None)
             caption.configure(text="prep / raw" if prep_path.is_file() else "")
 
-    def tune(self, cell: int) -> None:
-        key = self.display.get()
-        path = Path(self.out.get()) / f"{key}_{cell:02d}_raw.png"
-        if not path.is_file():
-            self.app.set_status("Read the cells first -- there is no picture to tune against.",
-                                "warning")
-            return
-        expected = simpledialog.askstring(
-            "Tune cell",
-            f"What does cell {cell} actually say?\n\n"
-            "Type it exactly as the sim draws it, in capitals -- for example 0, or TMR/REF. "
-            "Every combination of upscaling, sharpening and thresholding is then tried "
-            "against this one picture, and the ones that read it correctly are listed, "
-            "most confident first.",
-            parent=self.app.root,
-        )
-        if not expected:
-            return
-        self.app.run_task(
-            commands.TUNE, {"image": str(path), "expect": expected}, self.output,
-            include_image=False,
+    def _open_folder(self) -> None:
+        self.show_output_folder(
+            commands.DUMP_CELLS, {"out": self.out.get()},
+            "There is nothing there yet -- read the cells first.",
         )
 
-    def _open_folder(self) -> None:
+    # -- the sharpening tuner --------------------------------------------
+
+    def add_tuning_page(self) -> None:
+        key = self.display.get()
         folder = Path(self.out.get())
-        if not folder.is_dir():
-            self.app.set_status("There is nothing there yet -- read the cells first.", "warning")
+        expect = {i + 1: v.get().strip().upper() for i, v in enumerate(self._expect)
+                 if v.get().strip()}
+        if not expect:
+            self.app.set_status(
+                "Type what at least one cell should read before adding this page.", "warning"
+            )
             return
-        error = open_folder(folder)
-        if error:
-            self.app.set_status(error, "error")
+        missing = [i for i in expect if not (folder / f"{key}_{i:02d}_raw.png").is_file()]
+        if missing:
+            self.app.set_status(
+                "Read the cells first -- there is no picture for this display yet.", "warning"
+            )
+            return
+        # Copied out now, into a folder of this page's own: "Read the cells"
+        # for a second page overwrites the same out/{key}_{cell:02d}_raw.png
+        # files in place (that is what makes it "the" cells folder rather
+        # than one per capture), so a case still pointing at out/ would
+        # silently start being judged against a *different* page's pixels
+        # the moment the next page was captured -- this page's expected
+        # labels, that page's cells. Queuing this page has to freeze what it
+        # looked like at the moment it was added.
+        snapshot = self.app.project_root / "tuning" / "queue" / f"page{len(self._tuning_cases) + 1}"
+        snapshot.mkdir(parents=True, exist_ok=True)
+        for cell in expect:
+            shutil.copy2(folder / f"{key}_{cell:02d}_raw.png", snapshot / f"{key}_{cell:02d}_raw.png")
+        self._tuning_cases.append({"dir": str(snapshot), "display": key, "expect": expect})
+        for v in self._expect:
+            v.set("")
+        self._update_queue_label()
+        self.app.set_status(
+            f"Queued {key} ({len(expect)} cell(s)). Capture a different page and add it too, "
+            "or press Run tuning."
+        )
+
+    def clear_tuning_queue(self) -> None:
+        self._tuning_cases = []
+        self._suggested = None
+        self.save_button.configure(state="disabled")
+        self._update_queue_label()
+        shutil.rmtree(self.app.project_root / "tuning" / "queue", ignore_errors=True)
+
+    def _update_queue_label(self) -> None:
+        if not self._tuning_cases:
+            self.queue_label.configure(text="No pages queued yet.")
+            return
+        cells = sum(len(case["expect"]) for case in self._tuning_cases)
+        pages = len(self._tuning_cases)
+        self.queue_label.configure(
+            text=f"{pages} page{'s' if pages != 1 else ''} queued, {cells} cell(s)."
+        )
+
+    def run_tuning(self) -> None:
+        if not self._tuning_cases:
+            self.app.set_status("Add at least one page to the queue first.", "warning")
+            return
+        truth_path = self.app.project_root / "tuning" / "truth.toml"
+        try:
+            configio.save_text(truth_path, configio.dumps_truth(self._tuning_cases), backup=False)
+        except configio.ConfigIoError as exc:
+            self.app.set_status(str(exc), "error")
+            return
+        self._suggested = None
+        self.save_button.configure(state="disabled")
+        self.app.run_task(
+            commands.TUNE, {"truth": str(truth_path)}, self.output,
+            include_image=False, on_finish=self._tuning_finished,
+        )
+
+    def _tuning_finished(self, _code: int, lines: list[str]) -> None:
+        self._suggested = parse_tuning_result(lines)
+        self.save_button.configure(state="normal" if self._suggested else "disabled")
+
+    def save_tuning_result(self) -> None:
+        if not self._suggested:
+            return
+        document = copy.deepcopy(self.app.document)
+        for key in ("psm", "threshold", "upscale", "sharpen_ladder"):
+            if key in self._suggested:
+                configio.set_in(document, ("ocr", key), self._suggested[key])
+        base = self.app.config_path.parent if self.app.config_path else None
+        try:
+            configio.validate(document, base_dir=base)
+        except Exception as exc:  # noqa: BLE001 - every failure is a message to show
+            messagebox.showerror("G1000 softkey labels",
+                                 f"Those settings will not load:\n\n{exc}",
+                                 parent=self.app.root)
+            return
+        if self.app.config_path is None:
+            messagebox.showinfo(
+                "G1000 softkey labels",
+                "There is no configuration file open yet. Press New... at the top of the "
+                "window to make one, then run tuning again.",
+                parent=self.app.root,
+            )
+            return
+        try:
+            backup = configio.save(self.app.config_path, document)
+        except configio.ConfigIoError as exc:
+            self.app.set_status(str(exc), "error")
+            return
+        self.app.document = document
+        self.app.notify_config_changed()
+        self.app.set_status(
+            "Saved the suggested OCR settings"
+            + (f" (previous version kept as {backup.name})" if backup else "")
+            + ". Restart the daemon to use them."
+        )
 
 
 # ---------------------------------------------------------------------------
 # Colours
 # ---------------------------------------------------------------------------
-
-
-#: A row of `dump-colors` output:  " 4   250 250 250    0   0 250   white     1"
-_COLOR_ROW = re.compile(
-    r"^\s*(?P<cell>\d+)\s+(?P<b>\d+)\s+(?P<g>\d+)\s+(?P<r>\d+)\s+"
-    r"(?P<h>\d+)\s+(?P<s>\d+)\s+(?P<v>\d+)\s+(?P<name>\S+)\s+(?P<bg>\d+)\s*$"
-)
-_COLOR_HEADER = re.compile(r"^\[(?P<display>[A-Za-z0-9_.-]+)\]\s+ring")
 
 
 class ColorsTab(Tab):
@@ -1363,22 +1524,14 @@ class ColorsTab(Tab):
     def _parse(self, code: int, lines: list[str]) -> None:
         if code != 0:
             return
-        display = ""
-        rows = 0
-        for line in lines:
-            header = _COLOR_HEADER.search(line)
-            if header:
-                display = header.group("display")
-                continue
-            match = _COLOR_ROW.match(line)
-            if match is None:
-                continue
-            rows += 1
-            self.tree.insert("", "end", tags=(match.group("name"),), values=(
-                display, match.group("cell"),
-                f"{match.group('b')} / {match.group('g')} / {match.group('r')}",
-                f"{match.group('h')} / {match.group('s')} / {match.group('v')}",
-                match.group("name"),
+        measured = parse_colors(lines)
+        rows = len(measured)
+        for row in measured:
+            self.tree.insert("", "end", tags=(row.name,), values=(
+                row.display, row.cell,
+                " / ".join(str(v) for v in row.bgr),
+                " / ".join(str(v) for v in row.hsv),
+                row.name,
             ))
         self.app.set_status(
             f"{rows} cell(s) measured. A cell named wrongly means a threshold to move, "
@@ -1419,7 +1572,7 @@ def config_path_setting(app, key: str) -> Path:
 
 
 class PagesTab(Tab):
-    """Teach the daemon which softkey pages exist, and what the glyphs look like."""
+    """Teach the daemon which softkey pages exist."""
 
     tab_title = "Pages"
 
@@ -1427,15 +1580,14 @@ class PagesTab(Tab):
         super().__init__(app)
         self.display = tk.StringVar(value="")
         self.page_name = tk.StringVar(value="")
-        self.labels = tk.StringVar(value="")
         self._block: list[str] = []
 
         help_label(
             self,
             "Reading a ten-pixel digit is hard. Recognising which softkey page is showing, "
             "from the labels that did read cleanly, is easy -- and once the page is known, "
-            "the hard cells can simply be looked up instead of guessed at. These two tools "
-            "build that knowledge from your own display.",
+            "the hard cells can simply be looked up instead of guessed at. This tool "
+            "builds that knowledge from your own display.",
             width=900,
         ).pack(anchor="w", pady=(0, 10))
 
@@ -1460,26 +1612,6 @@ class PagesTab(Tab):
             "anything read below the confidence floor is listed for you to correct first. "
             "Check the block before adding it -- a wrong label recorded here would be "
             "filled into every later frame that matches this page.",
-            width=880,
-        ).pack(anchor="w", pady=(6, 0))
-
-        # -- learn ------------------------------------------------------------
-        learn = ttk.LabelFrame(self, text="  Learn the glyph shapes  ", padding=PAD)
-        learn.pack(fill="x", pady=(10, 0))
-        row = ttk.Frame(learn)
-        row.pack(fill="x")
-        ttk.Label(row, text="This page reads").pack(side="left")
-        ttk.Entry(row, textvariable=self.labels).pack(side="left", fill="x", expand=True, padx=4)
-        ttk.Button(row, text="Learn it", width=10, command=self.learn).pack(side="left")
-        help_label(
-            learn,
-            "One label per cell, separated by commas, with nothing between the commas for "
-            "a blank key -- for example  0,1,2,3,4,5,6,7,IDENT,BKSP,BACK,  which is the "
-            "transponder keypad. The binarised, size-normalised shape of each glyph is "
-            "stored and compared by distance later, so it survives dimming, highlighting "
-            "and a window resize. This is additive: run it on each page you care about. "
-            "It is off until you raise 'Shape fallback below' in the settings, because "
-            "page lookup above covers the same cells with a stronger signal.",
             width=880,
         ).pack(anchor="w", pady=(6, 0))
 
@@ -1509,16 +1641,7 @@ class PagesTab(Tab):
     def _captured(self, code: int, lines: list[str]) -> None:
         if code != 0:
             return
-        block: list[str] = []
-        for line in lines:
-            if line.strip().startswith("[[screen]]"):
-                block = [line.rstrip()]
-            elif block:
-                block.append(line.rstrip())
-        # Trailing blank lines only; the command prints the check-these notes
-        # after the block and they are worth keeping as a comment in the file.
-        while block and not block[-1].strip():
-            block.pop()
+        block = parse_screen_block(lines)
         self._block = block
         if block:
             self.append_button.configure(state="normal")
@@ -1546,15 +1669,6 @@ class PagesTab(Tab):
             return
         self.append_button.configure(state="disabled")
         self.app.set_status(f"Added to {path.name}.")
-
-    def learn(self) -> None:
-        text = self.labels.get().strip()
-        if not text:
-            self.app.set_status("Type what the page says first, one label per cell.", "warning")
-            return
-        self.app.run_task(
-            commands.LEARN, {"display": self.display.get(), "labels": text}, self.output
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -1610,7 +1724,9 @@ class VocabularyTab(Tab):
         self.text.delete("1.0", "end")
         try:
             self.text.insert("1.0", path.read_text(encoding="utf-8"))
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
+            # ValueError covers UnicodeDecodeError: a file that is not UTF-8
+            # is a thing to say in the pane, not an exception into Tk.
             self.text.insert("1.0", f"# could not read {path}: {exc}\n")
         self.text.edit_reset()
 
@@ -1733,11 +1849,12 @@ class SettingsTab(Tab):
         fields.columnconfigure(1, weight=1)
         row = 0
         for setting in group.settings:
-            row = self._add_field(fields, row, setting, (*path, setting.key))
+            row = self._add_field(fields, row, setting, (*path, setting.key),
+                                  section=group.section)
         return None
 
     def _add_field(self, parent: tk.Misc, row: int, setting: schema.Setting,
-                   path: tuple[str, ...]) -> int:
+                   path: tuple[str, ...], section: str = "") -> int:
         value = configio.get_in(self.app.document, path)
         if value is None and not setting.optional:
             value = self._default_for(path, setting)
@@ -1754,17 +1871,38 @@ class SettingsTab(Tab):
                                   state="readonly", width=16)
         else:
             variable = tk.StringVar(value=configio.format_field(setting, value))
-            widget = ttk.Entry(parent, textvariable=variable)
+            # The hint is drawn beside an empty box, never typed into it: a
+            # box holding the package's own path is a box whose contents get
+            # written into config.toml on the next Save, which pins the
+            # configuration to this install. An empty box means "whatever the
+            # package ships with", and it has to stay reachable.
+            widget = HintEntry(parent, textvariable=variable,
+                               hint=self._hint_for(setting, section))
         widget.grid(row=row, column=1, sticky="ew", pady=(2, 0))
         self._fields.append((path, setting, variable))
         row += 1
         if setting.help:
             note = setting.help
-            if setting.optional:
+            if setting.package_default:
+                note += "  (leave empty to use the file that comes with the package)"
+            elif setting.optional:
                 note += "  (leave empty to leave it unset)"
             help_label(parent, note, width=640).grid(row=row, column=1, sticky="w", pady=(0, 6))
             row += 1
         return row
+
+    def _hint_for(self, setting: schema.Setting, section: str) -> str:
+        """What an empty box will actually use, for the hint drawn inside it.
+
+        Only for the settings whose default is a file inside the installed
+        package. Those are the ones where an empty box does something
+        specific and invisible, and where showing the answer as a *value*
+        would write this checkout's path into the user's config file.
+        """
+        if not (section and setting.package_default):
+            return ""
+        default = schema.default_value(section, setting)
+        return f"{default}  (the one that comes with the package)" if default else ""
 
     def _default_for(self, path: tuple[str, ...], setting: schema.Setting) -> Any:
         """The built-in default, so an absent key shows what it will actually be."""
@@ -1856,7 +1994,7 @@ class SettingsTab(Tab):
             return
         try:
             self._raw_loaded = self.app.config_path.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, ValueError) as exc:  # ValueError: not UTF-8 text
             self._raw_loaded = ""
             self.raw.insert("1.0", f"# could not read {self.app.config_path}: {exc}\n")
             return

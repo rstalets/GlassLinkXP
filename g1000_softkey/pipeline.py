@@ -14,16 +14,57 @@ from .ocr import CellResult, SoftkeyReader
 from .screens import ScreenLibrary
 from .strip import (
     changed_cells,
-    clipped_edges,
-    ink_bounds,
-    ink_ratio,
     is_blank,
+    measure_ink,
     preprocess_cell,
     snapshot_cells,
     split_cells,
 )
 
 LOG = logging.getLogger(__name__)
+
+
+class SharpenLadder:
+    """The sharpening variants, preprocessed only as ``read_best`` reads them.
+
+    ``read_best`` stops at the first rung that lands on a known label
+    confidently, which across the offline corpus is 55 cells out of 58. That
+    already saved the OCR calls for the rungs it skipped -- but building the
+    variants as a list meant it never saved the *preprocessing*, and each rung
+    is an unsharp mask, a 4x resize and a threshold, paid whether or not
+    anything ever looked at the result.
+
+    Iterating instead of listing is the whole change; which rungs exist, in
+    what order, and what is done with them are untouched.
+
+    It keeps its own clock because the pipeline reports the two stages
+    separately: preprocessing that now happens inside ``read_best`` still
+    belongs to ``preprocess_ms``, or the -v timings would move one stage's
+    cost into its neighbour without either stage having changed.
+    """
+
+    def __init__(self, cell: np.ndarray, config) -> None:
+        self._cell = cell
+        self._config = config
+        #: Time actually spent preprocessing, in ms -- rungs reached, not rungs
+        #: defined.
+        self.elapsed_ms = 0.0
+        #: How many rungs were asked for.
+        self.rungs = 0
+
+    def __iter__(self):
+        for amount, radius in self._config.sharpen_ladder:
+            t0 = time.perf_counter()
+            image = preprocess_cell(
+                self._cell,
+                upscale=self._config.upscale,
+                method=self._config.threshold,
+                sharpen_amount=amount,
+                sharpen_radius=radius,
+            )
+            self.elapsed_ms += (time.perf_counter() - t0) * 1000.0
+            self.rungs += 1
+            yield image
 
 
 @dataclass
@@ -208,14 +249,18 @@ class DisplayPipeline:
                 continue
 
             t0 = time.perf_counter()
-            ink = ink_ratio(cell, self.reader.config.blank_contrast)
-            blank = ink < self.reader.config.blank_ink_ratio
+            # One pass over the cell's pixels for all three questions asked of
+            # it below -- how much ink, where it reaches, whether it touches an
+            # edge. Asked separately they each re-derived the same grayscale
+            # and the same median.
+            ink = measure_ink(cell, self.reader.config.blank_contrast)
+            blank = ink.ratio < self.reader.config.blank_ink_ratio
             if blank:
                 preprocess_ms += (time.perf_counter() - t0) * 1000.0
                 # Distinguishing "gated out as empty" from "OCR read nothing" is
                 # the whole question when a short label goes missing, so say which.
                 diagnostics[index] = (
-                    f"BLANK   {bg_tag(index)}ink={ink:.4f} < "
+                    f"BLANK   {bg_tag(index)}ink={ink.ratio:.4f} < "
                     f"{self.reader.config.blank_ink_ratio:.4f} "
                     f"(contrast={self.reader.config.blank_contrast}) -- never reached OCR"
                 )
@@ -223,16 +268,7 @@ class DisplayPipeline:
                     CellResult(index=index, blank=True, background=backgrounds[index])
                 )
                 continue
-            variants = [
-                preprocess_cell(
-                    cell,
-                    upscale=self.reader.config.upscale,
-                    method=self.reader.config.threshold,
-                    sharpen_amount=amount,
-                    sharpen_radius=radius,
-                )
-                for amount, radius in self.reader.config.sharpen_ladder
-            ]
+            variants = SharpenLadder(cell, self.reader.config)
             preprocess_ms += (time.perf_counter() - t0) * 1000.0
 
             t0 = time.perf_counter()
@@ -240,16 +276,20 @@ class DisplayPipeline:
                 self.reader.read_best(index, variants), background=backgrounds[index]
             )
             results.append(cell_result)
-            ocr_ms += (time.perf_counter() - t0) * 1000.0
+            # The ladder preprocessed inside that call; charge it to the stage
+            # that did the work rather than to the one that asked for it.
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            preprocess_ms += variants.elapsed_ms
+            ocr_ms += elapsed_ms - variants.elapsed_ms
             ocr_calls += 1
-            x0, x1 = ink_bounds(cell, self.reader.config.blank_contrast)
+            x0, x1 = ink.bounds
             # Named edges rather than a bare marker: which side is being cut
             # is the whole of what to do about it, and the calibration editor
-            # warns from this same function so the two always agree.
-            touching = clipped_edges(cell, self.reader.config.blank_contrast)
+            # measures the same way so the two always agree.
+            touching = ink.clipped_edges()
             clipped = f" CLIPPED? {','.join(touching)}" if touching else ""
             diagnostics[index] = (
-                f"{bg_tag(index)}ink={ink:.4f} x={x0:.2f}-{x1:.2f} "
+                f"{bg_tag(index)}ink={ink.ratio:.4f} x={x0:.2f}-{x1:.2f} "
                 f"raw={cell_result.raw!r:<12} ocr={cell_result.text!r:<12} "
                 f"conf={cell_result.confidence:5.1f} "
                 f"match={cell_result.match_score:.2f}{clipped}"
@@ -287,8 +327,6 @@ class DisplayPipeline:
                     detail += f" -> {result.text!r} FROM PAGE {result.by_screen!r}"
                 elif result.confirmed_by:
                     detail += f" -> CONFIRMED BY PAGE {result.confirmed_by!r}"
-                elif result.by_signature:
-                    detail += f" -> {result.text!r} FROM SIGNATURE"
                 LOG.debug("%s cell %-2d %s", self.display.key, result.index + 1, detail)
 
         self._previous_cells = gray_cells
