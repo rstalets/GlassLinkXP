@@ -149,19 +149,46 @@ if that hash has been pruned).
   `docs/CONFIGURATION.md` for the full reference, generated from the same
   text the GUI's Settings tab shows beside each field.
 
-### A bigger pop-out is not a sharper one
+### Pop-out size has a peak, and it is not at either end
 
-The G1000 renders to a fixed texture and the window scales it. Past that size,
-a larger window is interpolating: more pixels, no more detail, and softer
-edges than it started with. Reported from a live display, raising the pop-out
-10% above the default made readings *worse*, which is the shape you would
-expect -- blur closes the counters of 0, 6, 8 and 9, and a filled counter is
-not a character.
+The G1000 is drawn from a fixed texture and scaled into the window. A larger
+window interpolates it -- more pixels, no more detail, softer edges, and blur
+is what closes the counters of 0, 6, 8 and 9. A smaller window throws away
+pixels Tesseract needed. Both ends read worse than somewhere in the middle.
 
-So "make the window bigger" is not general advice and this document should not
-give it. `[ocr] upscale` enlarges after capture, in one clean resample; the
-window size enlarges before capture and is then resampled again by `upscale`
-on top. If labels are marginal, raise the first.
+Measured on one live display, all else equal:
+
+| `window_management.size` | result |
+| --- | --- |
+| 1024x768 | confidence **down** on many cells |
+| 1280x960 (default) | best of the three |
+| ~10% above the default | confidence **down** |
+
+Two earlier versions of this section were wrong in opposite directions --
+first that a larger pop-out helps, then that the native texture size is the
+reference. Neither is right, and the reason is worth keeping: **the number in
+the config is not the number of pixels capture receives.** `windowmgr` asks
+Windows for a client size and does nothing about display scaling, so on a
+display at 125% the captured frame is larger than the figure in `config.toml`
+by that factor. "Set it to the native texture size" therefore does not do what
+it says on such a machine, which is exactly the display the table above came
+from. `list-windows` reports the client size capture is actually given; that
+is the number to reason about, not the configured one.
+
+So this is a per-machine tunable and the only honest advice is to measure it.
+`bench` reports mean confidence and how many cells landed on a known label
+alongside the timings, so:
+
+```
+glasslinkxp -c config.toml bench -n 20
+```
+
+at one size, then another, is the comparison. Change one thing at a time.
+
+Not verified here: none of this can be run without Windows and X-Plane, and
+the DPI behaviour above is inferred from `windowmgr` having no DPI handling in
+it plus a reported capture larger than the configured size. Nobody has
+confirmed which Windows DPI-awareness mode X-Plane or the daemon runs in.
 
 ### What `tune` prefers, and why it may not hand you a ladder
 

@@ -51,15 +51,23 @@ enabled = true
 # not read, a long way from this line. Anything that is not 4:3 is refused,
 # with a warning, and 1280x960 used instead.
 #
-# 1280x960 by default. BIGGER IS NOT BETTER. The G1000 renders to a fixed
-# texture and the window scales it, so past that size a larger window adds
-# interpolation blur and no detail -- and blur is what closes the counters of
-# 0, 6, 8 and 9, which is the failure that costs you a readable digit. Going
-# up 10% from here has been reported to make readings worse, not better.
+# 1280x960 by default, and THERE IS A BEST SIZE RATHER THAN A BIGGEST. The
+# G1000 is drawn from a fixed texture and scaled into the window, so a larger
+# window adds interpolation and no detail; but a smaller one throws away
+# pixels Tesseract needed. Both ends read worse. Reported from one live
+# display, all else equal: 1024x768 read *worse* than the default, and 10%
+# larger than the default also read worse. The peak was here.
 #
-# If labels are marginal, the thing to raise is [ocr] upscale, which enlarges
-# after capture with one clean resample, rather than this, which enlarges
-# before capture and then gets resampled again.
+# Where the peak falls is not something this file can know, because it depends
+# on your machine -- your Windows display scaling especially. This number is
+# what the daemon asks Windows for; what capture actually receives can be
+# larger. Run `glasslinkxp list-windows` to see the client size capture is
+# given, and compare sizes with:
+#
+#     glasslinkxp -c config.toml bench -n 20
+#
+# which reports mean confidence and how many cells landed on a known label.
+# Change one thing, run it again, keep the winner.
 size = [1280, 960]
 
 # Turning this off leaves the windows entirely to you -- the daemon then only

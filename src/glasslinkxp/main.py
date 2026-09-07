@@ -402,6 +402,11 @@ def cmd_bench(args: argparse.Namespace, config: AppConfig) -> int:
                 samples: list[dict[str, float]] = []
                 totals: list[float] = []
                 calls: list[int] = []
+                #: How well the strip read, not just how fast. Collected on the
+                #: gating-off pass, where every cell is actually OCR'd.
+                confidences: list[float] = []
+                read: list[int] = []
+                legible: list[int] = []
                 for _ in range(args.iterations):
                     start = time.perf_counter()
                     grabbed = source.grab()
@@ -414,6 +419,14 @@ def cmd_bench(args: argparse.Namespace, config: AppConfig) -> int:
                     samples.append(stage)
                     totals.append(total)
                     calls.append(result.ocr_calls)
+                    scored = [c for c in result.cells if not c.blank]
+                    if scored:
+                        confidences.append(statistics.mean(c.confidence for c in scored))
+                        read.append(sum(1 for c in scored if c.text))
+                        legible.append(sum(
+                            1 for c in scored
+                            if c.match_score >= 1.0 and c.confidence >= config.ocr.accept_confidence
+                        ))
 
                 label = "change gating ON " if gating else "change gating OFF"
                 print(f"\n[{display.key}] {label} n={args.iterations} source={source.name}")
@@ -427,6 +440,21 @@ def cmd_bench(args: argparse.Namespace, config: AppConfig) -> int:
                       f"median={statistics.median(totals):7.2f} max={max(totals):7.2f}")
                 if isinstance(source, ImageCapture):
                     print("  note: capture_ms here is PNG decode, not Windows Graphics Capture")
+                # Printed on the pass that actually reads every cell. This
+                # is the number to compare two window sizes by, and until now
+                # there was no instrument for that: bench measured only how
+                # fast the strip was read, never how well. Bigger is not
+                # reliably sharper -- the panel is drawn from a fixed texture
+                # and scaled into the window -- so the best size is a peak
+                # somewhere rather than an end of the range, and where the peak
+                # falls depends on the machine, its display scaling included.
+                if confidences and not gating:
+                    non_blank = statistics.mean(read) and len(scored)
+                    print(f"  {'confidence':<14} mean={statistics.mean(confidences):7.2f} "
+                          f"min={min(confidences):7.2f}")
+                    print(f"  {'cells read':<14} {statistics.mean(read):.1f} of {non_blank} "
+                          f"non-blank, {statistics.mean(legible):.1f} of them on a known "
+                          f"label at or above accept_confidence")
                 print(f"  ocr calls/frame mean={statistics.mean(calls):.2f}  "
                       f"throughput={1000.0 / statistics.mean(totals):.1f} fps  "
                       f"duty cycle at {config.loop_hz:g} Hz="

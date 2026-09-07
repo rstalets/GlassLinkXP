@@ -215,6 +215,18 @@ variant on every change. CAUTION and WARNING were missing; adding them took
 one synthetic page from 19 preprocessing passes to 9. If a page seems
 expensive, check the vocabulary before the ladder.
 
+**The pop-out size in the config is not the size capture receives, and the
+best size is a peak rather than an end.** `windowmgr` asks Windows for a
+client size and does nothing about display scaling, so at 125% the captured
+frame is 25% larger than the figure in `config.toml`. And the panel is drawn
+from a fixed texture and scaled, so a larger window interpolates while a
+smaller one discards -- both read worse than the middle. Measured on one live
+display: 1024x768 worse, the 1280x960 default best, 10% above the default
+worse. Two versions of the docs got this wrong in opposite directions before
+anyone measured it. It is a per-machine tunable; `bench` reports mean
+confidence and how many cells landed on a known label, which is the
+instrument, and `list-windows` reports the client size capture really gets.
+
 **Windows-only paths cannot be tested here**: capture, window enumeration,
 resizing and placement, the installer scripts, anything touching a live
 X-Plane, and three things in the GUI -- `pythonw.exe`, `CTRL_BREAK_EVENT` as
