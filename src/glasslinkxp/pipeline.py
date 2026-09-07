@@ -14,28 +14,50 @@ from .ocr import CellResult, SoftkeyReader
 from .screens import ScreenLibrary
 from .strip import (
     changed_cells,
+    finish_cell,
     is_blank,
     measure_ink,
-    preprocess_cell,
     snapshot_cells,
     split_cells,
+    threshold_cell,
 )
 
 LOG = logging.getLogger(__name__)
 
 
-class SharpenLadder:
-    """The sharpening variants, preprocessed only as ``read_best`` reads them.
+def variant_ladder(config) -> tuple[tuple[str, float, float], ...]:
+    """Every (polarity, sharpen amount, sharpen radius) the reader may try.
 
-    ``read_best`` stops at the first rung that lands on a known label
+    Polarity is the *outer* loop, and that ordering is the guarantee rather
+    than an arrangement: the first pass is the sharpening ladder exactly as it
+    has always been, so a cell that reads today reads today's answer at
+    today's rung and never sees an opposite-polarity variant at all. Only a
+    cell that no rung could read reaches the second pass.
+    """
+    rungs = tuple(config.sharpen_ladder)
+    polarities = ("auto", "opposite") if config.retry_opposite_polarity else ("auto",)
+    return tuple(
+        (polarity, amount, radius) for polarity in polarities for amount, radius in rungs
+    )
+
+
+class SharpenLadder:
+    """The preprocessing variants, built only as ``read_best`` reads them.
+
+    ``read_best`` stops at the first variant that lands on a known label
     confidently, which across the offline corpus is 55 cells out of 58. That
     already saved the OCR calls for the rungs it skipped -- but building the
     variants as a list meant it never saved the *preprocessing*, and each rung
     is an unsharp mask, a 4x resize and a threshold, paid whether or not
     anything ever looked at the result.
 
-    Iterating instead of listing is the whole change; which rungs exist, in
-    what order, and what is done with them are untouched.
+    Two things vary, and they cost very different amounts. Sharpening changes
+    the threshold, so each rung is a full preprocessing pass. Polarity does
+    not: both polarities of a rung come from the same thresholded image, and
+    differ by a ``bitwise_not`` and a crop. So the threshold is computed once
+    per rung and kept, and the second pass finishes the same images the other
+    way round -- trying both polarities costs a fraction of one rung, not a
+    second ladder's worth.
 
     It keeps its own clock because the pipeline reports the two stages
     separately: preprocessing that now happens inside ``read_best`` still
@@ -43,27 +65,55 @@ class SharpenLadder:
     cost into its neighbour without either stage having changed.
     """
 
-    def __init__(self, cell: np.ndarray, config) -> None:
+    def __init__(self, cell: np.ndarray, config, light_background: bool | None = None) -> None:
         self._cell = cell
         self._config = config
-        #: Time actually spent preprocessing, in ms -- rungs reached, not rungs
-        #: defined.
+        #: Which way up this cell is, measured on the *raw* pixels rather than
+        #: on the thresholded ones -- the pipeline has already classified every
+        #: cell's background colour off the same border ring, so this costs
+        #: nothing and is the robust statistic. See
+        #: ``color.background_is_light``. None falls back to reading the
+        #: binarised ring, which is what a caller with no colour config gets.
+        self._light_background = light_background
+        #: Time actually spent preprocessing, in ms -- variants reached, not
+        #: variants defined.
         self.elapsed_ms = 0.0
-        #: How many rungs were asked for.
+        #: How many variants were asked for.
         self.rungs = 0
+        #: Which of them were opposite-polarity retries. Reported by ``-v``:
+        #: a cell that only reads on a retry is a cell whose polarity the ring
+        #: called wrong, which is a calibration symptom worth seeing rather
+        #: than a silently recovered one.
+        self.retries = 0
 
     def __iter__(self):
+        thresholded: list[np.ndarray] = []
         for amount, radius in self._config.sharpen_ladder:
             t0 = time.perf_counter()
-            image = preprocess_cell(
+            binary = threshold_cell(
                 self._cell,
                 upscale=self._config.upscale,
                 method=self._config.threshold,
                 sharpen_amount=amount,
                 sharpen_radius=radius,
             )
+            image = finish_cell(binary, "auto", light_background=self._light_background)
             self.elapsed_ms += (time.perf_counter() - t0) * 1000.0
             self.rungs += 1
+            thresholded.append(binary)
+            yield image
+
+        if not self._config.retry_opposite_polarity:
+            return
+
+        for binary in thresholded:
+            t0 = time.perf_counter()
+            image = finish_cell(
+                binary, "opposite", light_background=self._light_background
+            )
+            self.elapsed_ms += (time.perf_counter() - t0) * 1000.0
+            self.rungs += 1
+            self.retries += 1
             yield image
 
 
@@ -268,7 +318,16 @@ class DisplayPipeline:
                     CellResult(index=index, blank=True, background=backgrounds[index])
                 )
                 continue
-            variants = SharpenLadder(cell, self.reader.config)
+            # backgrounds[] is already the border-ring classification of this
+            # very cell, computed above for every cell of every frame. Polarity
+            # is the same question of the same pixels, so it is answered by the
+            # same measurement rather than by a second one that could disagree.
+            variants = SharpenLadder(
+                cell, self.reader.config,
+                light_background=(
+                    backgrounds[index] != BLACK if self.app.color.enabled else None
+                ),
+            )
             preprocess_ms += (time.perf_counter() - t0) * 1000.0
 
             t0 = time.perf_counter()
@@ -288,11 +347,24 @@ class DisplayPipeline:
             # measures the same way so the two always agree.
             touching = ink.clipped_edges()
             clipped = f" CLIPPED? {','.join(touching)}" if touching else ""
+            # Reported on the variant that *won*, not on the retries that were
+            # reached. Reaching one means only that no sharpening rung scored a
+            # confident exact hit, which any label missing from the vocabulary
+            # does while reading perfectly; being decided by one means the
+            # border ring answered for the wrong rectangle. Said out loud
+            # rather than silently recovered: the ring carries no glyphs on a
+            # crop that is on its cell, so a cell that needs the retry is
+            # usually a crop that has slipped onto a separator or a neighbour.
+            polarity = (
+                " POLARITY read the wrong way up -- answer came from the retry"
+                if cell_result.variant >= len(self.reader.config.sharpen_ladder)
+                else ""
+            )
             diagnostics[index] = (
                 f"{bg_tag(index)}ink={ink.ratio:.4f} x={x0:.2f}-{x1:.2f} "
                 f"raw={cell_result.raw!r:<12} ocr={cell_result.text!r:<12} "
                 f"conf={cell_result.confidence:5.1f} "
-                f"match={cell_result.match_score:.2f}{clipped}"
+                f"match={cell_result.match_score:.2f}{clipped}{polarity}"
             )
 
         timings["preprocess_ms"] = preprocess_ms

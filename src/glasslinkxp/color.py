@@ -120,6 +120,38 @@ def classify_cell(cell: np.ndarray, config: ColorConfig) -> int:
     return classify_hsv(bgr_to_hsv(border_ring_bgr(cell, config.ring_fraction)), config)
 
 
+def background_is_light(cell: np.ndarray, config: ColorConfig) -> bool:
+    """Is this cell's background anything other than black?
+
+    The polarity question, answered by the classifier that already answers the
+    colour one, so the two can never disagree about the same cell.
+
+    Worth being explicit about *why* this is the measurement to ask, because
+    ``strip.ring_bright_fraction`` asks the same question of the same pixels
+    and is worse at it. That one is a **mean** over the binarised ring: any
+    glyph reaching the band moves it, in proportion, and a glyph does reach it
+    -- a tall one into the top and bottom bands, a full-width word into the
+    left and right ones. This one is a per-channel **median** over the raw
+    ring, which does not move at all until the contamination passes half the
+    ring.
+
+    Measured on rendered words, varying only how much of the cell height the
+    glyph fills, dark cells against light ones:
+
+        55%   mean 0.09 / 0.91      median V 8 / 235
+        80%   mean 0.77 / 0.84      median V 8 / 235
+        90%   mean 0.67 / 0.73      median V 8 / 235
+        97%   mean 0.66 / 0.66      median V 8 / 235
+
+    The mean's two populations close as the crop tightens and meet at 97%,
+    where no threshold on it can work. The median's do not move at all, and
+    ``value_max`` at 60 sits between 8 and 235 at every crop tried. That is
+    the whole reason this function exists rather than a threshold on the other
+    one.
+    """
+    return classify_cell(cell, config) != BLACK
+
+
 def measure_cell(cell: np.ndarray, config: ColorConfig) -> tuple[tuple[int, int, int], tuple[int, int, int], int]:
     """(border-ring BGR, its HSV, classification) -- what ``dump-colors`` prints."""
     bgr = border_ring_bgr(cell, config.ring_fraction)

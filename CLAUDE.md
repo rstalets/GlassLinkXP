@@ -157,6 +157,88 @@ frame, because a softkey becoming selected changes the background while leaving
 the label identical -- so anything cheap that must not miss that case belongs
 outside the gate too.
 
+**Which way up a cell is drawn is measured on the border ring, and the ring
+is the only place that has no glyphs in it.** A softkey is light-on-dark
+normally and dark-on-light when selected, so polarity has to come out of the
+pixels. `strip._background_is_white` used to count bright pixels in the
+*middle* of the cell and assume the glyphs were the minority there, and that
+cost a bug report: on a live MFD, TERRAIN and NEXRAD came out of preprocessing
+still white-on-black while DCLTR-1 -- a longer word, same cells, same
+geometry -- read perfectly. What crosses the line is the ink coverage of the
+middle band, which depends on the crop *and on which letters the word is made
+of*; there was no crop tight enough to predict from, and the fix was not a
+better threshold on that quantity but a different quantity.
+
+`color.py` had already worked this out for the colour stage and says so in its
+own docstring, naming the failure ("the assumption `preprocess_cell()`
+makes"). The ring measurement was simply never wired through. It is now, and
+both stages share one `ring_fraction`. Over the corpus the ring separates the
+two cases by 0.83 where the middle band separated them by 0.41.
+
+**Polarity comes from `color.classify_cell`, the same call that publishes
+`/bg`.** One measurement answers both, so they cannot disagree about a cell.
+That matters because the obvious alternative -- a bright-pixel fraction over
+the binarised ring -- has a floor, and a live display is under it: A band is clean
+only while the glyph stays out of it, and nothing keeps it out: a tall glyph
+reaches the top and bottom bands, a full-width word the left and right ones,
+and the contamination lifts a dark cell's fraction while lowering a light
+cell's. Measured on rendered words, varying only how much of the cell height
+the glyph fills: at 55% the populations are 0.09 / 0.91 apart, at 80% they are
+0.77 / 0.84, at 90% they overlap -- and taking the worst single edge instead
+of the whole ring is worse still (0.59 / 0.56). A 27 px cell whose label
+nearly fills it is in that regime. Do not answer a report from there by moving
+`ring_fraction` or `LIGHT_BACKGROUND_RING`; there is nothing to move it to.
+
+The fix was not a threshold but a different statistic, and it was already in
+the tree: `color.border_ring_bgr` takes a per-channel **median** of the *raw*
+ring, which does not move at all until contamination passes half the ring,
+where a mean moves with every pixel. Same ring, same question. Across every
+crop above, the median reads V 8 for a dark cell and V 235 for a light one,
+with `value_max` at 60 between them -- it does not degrade at all. It had been
+driving `/bg` correctly the whole time while polarity used the fragile
+statistic beside it.
+
+**`_crop_to_content` runs after the polarity is settled, and that ordering is
+load-bearing.** It was moved ahead of it so the fallback ring reading would
+see the label's own background rather than the surround around a highlight
+box. Its guard -- four or more rows and columns more than half bright -- was
+described in the comment as "a box and never a row of glyphs", and that is
+false: a full-width word at a tight vertical crop satisfies it. A hit was then
+read as "light background", overriding `classify_cell`, so a cell measured
+correctly as black came out white-on-black anyway -- with `dump-cells`
+printing `background black` on the line above the picture that disagreed with
+it. The shape of a crop is not evidence about polarity when a real
+measurement is in hand.
+
+The opposite-polarity rung stays as the backstop, and the vocabulary decides
+there: `retry_opposite_polarity` is that decision, and
+`SoftkeyReader._rank` is what keeps it honest: a retry wins only by landing on
+a known label. Tesseract reads *something* out of a cell that is the wrong way
+up, with a confidence that means nothing, so without that rule a cell that
+does not read hands its answer to the most confident garbage -- publishing a
+wrong label and blaming the polarity in the debug line for a cell whose
+polarity was fine. Both stages default the same way: ambiguous means the
+common case, which is black. Do not put the centre test back.
+
+**A label missing from `labels.txt` costs more than a wrong reading.** It is
+reported raw, which is usually right, so it looks harmless -- but it can never
+score an exact match, so it never stops the ladder early and walks every
+variant on every change. CAUTION and WARNING were missing; adding them took
+one synthetic page from 19 preprocessing passes to 9. If a page seems
+expensive, check the vocabulary before the ladder.
+
+**The pop-out size in the config is not the size capture receives, and the
+best size is a peak rather than an end.** `windowmgr` asks Windows for a
+client size and does nothing about display scaling, so at 125% the captured
+frame is 25% larger than the figure in `config.toml`. And the panel is drawn
+from a fixed texture and scaled, so a larger window interpolates while a
+smaller one discards -- both read worse than the middle. Measured on one live
+display: 1024x768 worse, the 1280x960 default best, 10% above the default
+worse. Two versions of the docs got this wrong in opposite directions before
+anyone measured it. It is a per-machine tunable; `bench` reports mean
+confidence and how many cells landed on a known label, which is the
+instrument, and `list-windows` reports the client size capture really gets.
+
 **Windows-only paths cannot be tested here**: capture, window enumeration,
 resizing and placement, the installer scripts, anything touching a live
 X-Plane, and three things in the GUI -- `pythonw.exe`, `CTRL_BREAK_EVENT` as
@@ -205,6 +287,7 @@ None of these couplings is visible to the type checker:
 | `WindowInfo.__str__` | `test_gui_logparse.py` -- `parse_window` is fed a formatted `WindowInfo`, over quoting, backslashes, non-ASCII, and the negative screen coordinates a monitor left of or above the primary is addressed by |
 | which displays `manage_windows` reports as managed | `test_capture.py` -- `sources_for` must not resize a window window management already sized |
 | what `calibrate`, `dump-colors`, `screen-template` or `tune` print | `test_gui_logparse.py` -- `parse_calibration` / `parse_colors` / `parse_screen_block` / `parse_tuning_result` are fed the real commands' output over synthetic frames or a scripted search |
+| the order of the preprocessing variants | `test_tuning.py` -- `pipeline.variant_ladder` and `tuning._variants` are run over one config and compared. `pick_best` stops early, so the order decides the answer, and the tuner's whole claim is that what it measures is what the daemon will do |
 | the shape of a `tune --truth` file | `test_tuning.py` -- the GUI's `configio.dumps_truth` (which cannot import `tuning.py`: that pulls in cv2 and Tesseract, and the GUI must never run the pipeline in its own process) is fed through the real `tuning.load_truth` |
 | a field on any config dataclass | `test_gui_schema.py` -- a field must be in `gui/schema.py` or in `NOT_IN_THE_FORM` with a reason |
 | `strip_rect` or `cell_rects` | `test_gui_geometry.py` and `test_gui_canvas.py` -- the calibration editor draws what `cell_rects` returns, and both check it against the real thing |

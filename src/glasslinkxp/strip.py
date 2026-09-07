@@ -13,7 +13,8 @@ from functools import cached_property
 import cv2
 import numpy as np
 
-from .config import StripGeometry
+from .color import border_ring_mask
+from .config import ColorConfig, StripGeometry
 
 LOG = logging.getLogger(__name__)
 
@@ -261,21 +262,44 @@ def sharpen(gray: np.ndarray, amount: float, radius: float) -> np.ndarray:
     return cv2.addWeighted(gray, 1.0 + amount, blurred, -amount, 0)
 
 
-def preprocess_cell(
+#: How much of a cell counts as its border ring when deciding polarity.
+#:
+#: The colour stage's ``ring_fraction``, deliberately the same number rather
+#: than one of its own: the two stages ask the same question -- what is this
+#: cell's background -- of the same pixels, and a second value for one
+#: affordance is a value that drifts. Sourced from the dataclass default so
+#: there is one place to change it.
+RING_FRACTION: float = ColorConfig.ring_fraction
+
+
+#: The polarities :func:`preprocess_cell` will finish a thresholded cell in.
+#:
+#: ``"auto"`` is :func:`_background_is_white`'s answer and is what the first
+#: pass of the ladder uses; ``"opposite"`` is the other one. There is
+#: deliberately no way to name a polarity absolutely: the caller that needs
+#: the second option needs it *because* the first was wrong, and "the other
+#: one" is the only description of it that cannot itself be wrong.
+POLARITIES = ("auto", "opposite")
+
+
+def threshold_cell(
     cell: np.ndarray,
     upscale: float = 4.0,
     method: str = "otsu",
-    border: int = 8,
     sharpen_amount: float = 1.2,
     sharpen_radius: float = 1.4,
 ) -> np.ndarray:
-    """Return a binarised, OCR-ready cell: black text on a white background.
+    """Sharpen, upscale and binarise one cell, without deciding its polarity.
+
+    Split out from :func:`preprocess_cell` because this is the expensive half
+    -- an unsharp mask, a 4x resize and a threshold -- and both polarities of
+    a given rung share it exactly. The ladder thresholds once per rung and
+    finishes the result twice.
 
     Thresholding is done *per cell* rather than once for the whole strip
     because the selected softkey is drawn with a bright highlight box behind
     it; a single global threshold either loses that cell or blows out the
-    others. Polarity is then normalised by assuming the glyphs are the
-    minority class, which handles the highlighted cell for free.
+    others.
     """
     gray = to_gray(cell)
     gray = sharpen(gray, sharpen_amount, sharpen_radius)
@@ -284,19 +308,78 @@ def preprocess_cell(
 
     if method == "adaptive":
         block = max(3, (min(gray.shape) // 2) | 1)
-        binary = cv2.adaptiveThreshold(
+        return cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, block, 5
         )
-    elif method == "otsu":
+    if method == "otsu":
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    else:
-        raise ValueError(f"unknown threshold method {method!r} (use 'otsu' or 'adaptive')")
+        return binary
+    raise ValueError(f"unknown threshold method {method!r} (use 'otsu' or 'adaptive')")
 
-    if not _background_is_white(binary):
+
+def finish_cell(
+    binary: np.ndarray,
+    polarity: str = "auto",
+    border: int = 8,
+    ring_fraction: float = RING_FRACTION,
+    light_background: bool | None = None,
+) -> np.ndarray:
+    """Normalise a thresholded cell to dark glyphs on light paper.
+
+    ``polarity`` selects between :func:`_background_is_white`'s answer and the
+    other one; see :data:`POLARITIES`. Cheap on purpose -- a ``bitwise_not``,
+    a crop and a border -- so that trying both costs a fraction of a rung
+    rather than a whole one.
+
+    ``light_background`` is the polarity, already measured from the *raw*
+    cell -- normally :func:`color.background_is_light`, which the pipeline has
+    computed for every cell of every frame anyway. Pass it. The fallback when
+    it is ``None`` reads the binarised ring instead, and that reading degrades
+    as the crop tightens in a way the raw one does not; it is here for callers
+    that have no colour configuration, not as an equal option.
+
+    :func:`_crop_to_content` runs *after* the polarity is settled, which is
+    where it has always run and where it is safe. Moving it earlier, so that
+    the fallback ring reading would see the label's own background rather than
+    the surround around a highlight box, looked harmless and was not: its
+    guard -- four or more rows and columns more than half bright -- is not
+    specific to a box. A full-width word at a tight vertical crop satisfies it
+    too, and a hit was then being read as "this cell has a light background",
+    overriding the classifier that had just said otherwise. A cell whose
+    polarity was measured correctly came out the wrong way up anyway. The
+    shape of a crop is not evidence about polarity when a real measurement is
+    in hand, and it is only used as a hint on the fallback path where there is
+    nothing better.
+    """
+    if polarity not in POLARITIES:
+        raise ValueError(f"unknown polarity {polarity!r} (use one of {POLARITIES})")
+
+    if light_background is not None:
+        light = light_background
+    else:
+        # No classification to go on. Read the binarised ring instead, and
+        # crop any dark frame away first so the ring is the label's own
+        # background rather than the surround around a highlight box; a crop
+        # that fires here is itself weak evidence of such a box. Weak evidence
+        # is worth having only when there is no strong evidence, which is why
+        # this whole branch sits under the `is None`.
+        probe = _crop_to_content(binary)
+        light = (
+            True if probe.shape != binary.shape
+            else _background_is_white(probe, ring_fraction)
+        )
+
+    flip = not light
+    if polarity == "opposite":
+        flip = not flip
+    if flip:
         # The bright class is the text, not the paper -> flip so that
         # Tesseract gets dark glyphs on a light background.
         binary = cv2.bitwise_not(binary)
 
+    # Now that the cell is dark-on-light, a dark frame around a highlight box
+    # is the only thing left that looks like one, and a plain word's border is
+    # white so this returns it untouched.
     binary = _crop_to_content(binary)
 
     if border > 0:
@@ -306,22 +389,114 @@ def preprocess_cell(
     return binary
 
 
-def _background_is_white(binary: np.ndarray) -> bool:
+def preprocess_cell(
+    cell: np.ndarray,
+    upscale: float = 4.0,
+    method: str = "otsu",
+    border: int = 8,
+    sharpen_amount: float = 1.2,
+    sharpen_radius: float = 1.4,
+    polarity: str = "auto",
+    color_config: "ColorConfig | None" = None,
+) -> np.ndarray:
+    """Return a binarised, OCR-ready cell: black text on a white background.
+
+    ``color_config`` is what lets the polarity be measured on the raw cell
+    rather than on the thresholded one; without it this falls back to the
+    binarised ring. See :func:`finish_cell`.
+    """
+    binary = threshold_cell(cell, upscale, method, sharpen_amount, sharpen_radius)
+    light = None
+    if color_config is not None:
+        from .color import background_is_light
+
+        light = background_is_light(cell, color_config)
+    return finish_cell(binary, polarity, border, light_background=light)
+
+
+def ring_bright_fraction(binary: np.ndarray, ring_fraction: float = RING_FRACTION) -> float:
+    """What fraction of the cell's border ring is the bright class.
+
+    The number :func:`_background_is_white` decides on, exposed so that a
+    human can look at it: this is a threshold on a measured quantity, and
+    every other one in this project has a diagnostic that prints the real
+    value from a real capture. ``dump-cells`` prints this one.
+    """
+    ring = binary[border_ring_mask(binary.shape, ring_fraction)]
+    if ring.size == 0:
+        return float(np.mean(binary > 0)) if binary.size else 1.0
+    return float(np.mean(ring > 0))
+
+
+#: How bright a cell's ring has to be before it counts as a light background.
+#:
+#: Not the midpoint, and that asymmetry is the point. Light-on-dark is the
+#: rule and a light background is the exception -- a selected key, a caution,
+#: a warning -- so the exception is what has to prove itself, and an ambiguous
+#: ring means black rather than a coin toss. ``color.py`` already works this
+#: way for the same pixels: its ``value_max`` is tested first "so brightness
+#: can only ever push a cell into black".
+#:
+#: Where the number sits, and the limit past which no number works.
+#:
+#: On a roomy crop the two populations are nowhere near each other: over the
+#: 58 non-blank cells of the offline corpus, light-on-dark rings run 0.00-0.08
+#: and light-background rings 0.91-1.00, so anything from about 0.1 to 0.9
+#: separates them equally well and the value is chosen for which way it fails.
+#:
+#: On a tight one they close. A ring band is only clean while the glyph stays
+#: out of it, and nothing keeps it out: a tall glyph reaches the top and
+#: bottom bands, a full-width word reaches the left and right ones, and the
+#: contamination is one-directional -- it lifts a dark cell's fraction and
+#: lowers a light cell's. Rendered words at one geometry, varying only how
+#: much of the cell height the glyph fills:
+#:
+#:     glyph fills 55% of the cell    dark <= 0.09    light >= 0.91
+#:     glyph fills 80%                dark <= 0.77    light >= 0.84
+#:     glyph fills 90%                dark <= 0.67    light >= 0.71
+#:
+#: At 90% they overlap once the light side's own contamination is counted, and
+#: judging each edge band separately and taking the worst does not rescue it
+#: (dark <= 0.59 against light >= 0.56 -- worse, because the light side loses
+#: more). There is no threshold there, on any band or combination of them.
+#:
+#: So this bar is not a fix for a crop that tight, and must not be tuned as
+#: though it were. What it does is decide which way the answer falls while it
+#: is still ambiguous, and it falls to black because black is the rule and a
+#: light background -- a selected key, a caution, a warning -- is the
+#: exception. Past the limit the ring stops being the answer and becomes only
+#: the polarity tried *first*; what settles it there is the vocabulary, via
+#: the opposite-polarity rung and ``SoftkeyReader._rank``.
+LIGHT_BACKGROUND_RING = 0.75
+
+
+def _background_is_white(binary: np.ndarray, ring_fraction: float = RING_FRACTION) -> bool:
     """Is the bright class the background rather than the glyphs?
 
-    Decided on the *centre* of the cell, where the label lives: glyphs are
-    always the minority there. Looking at the whole cell would get the
-    highlighted softkey wrong whenever its box covers less than half the
-    cell, which happens as soon as the crop is a little generous.
+    Decided on the cell's **border ring**, for the reason ``color.py`` sets
+    out at length and had already worked out for the colour stage: labels are
+    centred, so the outermost few pixels of a cell are essentially never
+    glyph, whatever the cell is doing. The ring is therefore background by
+    construction, and a majority test over it needs no assumption at all.
+
+    It used to be decided on the *centre* of the cell instead, on the
+    assumption that the glyphs are the minority there. That is a real
+    assumption and it fails, which cost this project a bug report: what
+    crosses the line is the ink coverage of the middle band, which depends on
+    how tight the crop is *and on which letters the word is made of*. TERRAIN
+    and NEXRAD came out of preprocessing still white-on-black off a live MFD
+    while DCLTR-1, a longer word in the same cells at the same geometry, read
+    perfectly -- because D, C, L, T, R, hyphen and 1 are thin open shapes and
+    E, R, A, N, X and D are not. There was never a crop tight enough to
+    predict from, and the fix was not a better threshold on that quantity but
+    a different quantity. ``color.py``'s own docstring named this failure
+    ("the assumption ``preprocess_cell()`` makes") before anything hit it;
+    the ring measurement was simply never wired through to here.
+
+    The ring is still only a first choice, not a proof: ``POLARITIES`` gives
+    the ladder the other one to fall back to. Do not put the centre test back.
     """
-    height, width = binary.shape[:2]
-    centre = binary[
-        int(height * 0.20): max(1, int(height * 0.80)),
-        int(width * 0.15): max(1, int(width * 0.85)),
-    ]
-    if centre.size == 0:
-        centre = binary
-    return float(np.mean(centre > 0)) > 0.5
+    return ring_bright_fraction(binary, ring_fraction) > LIGHT_BACKGROUND_RING
 
 
 def _crop_to_content(binary: np.ndarray, margin: int = 2) -> np.ndarray:

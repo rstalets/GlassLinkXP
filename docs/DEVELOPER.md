@@ -149,6 +149,87 @@ if that hash has been pruned).
   `docs/CONFIGURATION.md` for the full reference, generated from the same
   text the GUI's Settings tab shows beside each field.
 
+### Pop-out size has a peak, and it is not at either end
+
+The G1000 is drawn from a fixed texture and scaled into the window. A larger
+window interpolates it -- more pixels, no more detail, softer edges, and blur
+is what closes the counters of 0, 6, 8 and 9. A smaller window throws away
+pixels Tesseract needed. Both ends read worse than somewhere in the middle.
+
+Measured on one live display, all else equal:
+
+| `window_management.size` | result |
+| --- | --- |
+| 1024x768 | confidence **down** on many cells |
+| 1280x960 (default) | best of the three |
+| ~10% above the default | confidence **down** |
+
+Two earlier versions of this section were wrong in opposite directions --
+first that a larger pop-out helps, then that the native texture size is the
+reference. Neither is right, and the reason is worth keeping: **the number in
+the config is not the number of pixels capture receives.** `windowmgr` asks
+Windows for a client size and does nothing about display scaling, so on a
+display at 125% the captured frame is larger than the figure in `config.toml`
+by that factor. "Set it to the native texture size" therefore does not do what
+it says on such a machine, which is exactly the display the table above came
+from. `list-windows` reports the client size capture is actually given; that
+is the number to reason about, not the configured one.
+
+So this is a per-machine tunable and the only honest advice is to measure it.
+`bench` reports mean confidence and how many cells landed on a known label
+alongside the timings, so:
+
+```
+glasslinkxp -c config.toml bench -n 20
+```
+
+at one size, then another, is the comparison. Change one thing at a time.
+
+Not verified here: none of this can be run without Windows and X-Plane, and
+the DPI behaviour above is inferred from `windowmgr` having no DPI handling in
+it plus a reported capture larger than the configured size. Nobody has
+confirmed which Windows DPI-awareness mode X-Plane or the daemon runs in.
+
+### What `tune` prefers, and why it may not hand you a ladder
+
+Candidates are ranked on, in order: how many previously-wrong cells they fix;
+how many of `psm`, `threshold` and `upscale` they leave **unchanged**; then how
+short the ladder is; then confidence. A candidate that breaks a cell which
+already read correctly is refused outright, whatever it fixes.
+
+The middle two used to be the other way round, on the reasoning that a longer
+ladder costs an extra OCR call on every cell of every frame. It does not:
+`read_best` stops at the first variant that lands on a known label
+confidently, so a rung is only ever paid for by a cell that already failed --
+across the offline corpus, the two extra rungs cost no OCR calls at all.
+Changing `psm` is not like that. It changes what Tesseract is asked for every
+cell of every frame, including every cell that is not in the truth file and
+whose reading therefore moved without being measured.
+
+So if `tune` reports `psm = 10` and a bare `sharpen_ladder = [[0.0, 0.0]]`, it
+now also says whether a ladder alone would have done the job, and by how much.
+"No ladder was suggested" and "no ladder helped" are different answers and the
+report distinguishes them.
+
+### If a label reads as garbage after a good-looking calibration
+
+Check `run -v` for `POLARITY read the wrong way up`, and check that the
+label is in `labels.txt`. Those are the two failures that look like bad OCR
+and are not.
+
+The first means the border ring answered for the wrong rectangle -- see
+*Which way up a cell is* in `docs/PIPELINE.md`. In practice that is a crop
+that has slipped off its cell onto a separator bar or a neighbour, since the
+ring is background by construction on a crop that is on its cell. The
+polarity rung reads it anyway, so the label comes out right; the line is
+there because the calibration is worth another look.
+
+The second is quieter. A label the vocabulary does not know is reported raw,
+which is usually right, but it can never score an exact match -- so it never
+stops the ladder early and walks every variant there is on every change. On
+the offline corpus, adding the two missing labels took `alerts` from 19
+preprocessing passes to 9.
+
 ## Latency
 
 Where the delay between a softkey press and the Stream Deck face actually
@@ -190,6 +271,40 @@ than there really are.
 ## Verified offline
 
 On Linux/CPython 3.11, Tesseract 5.3.4 (system) with `tesserocr` 2.11:
+
+* The polarity failure and the measurement that replaced the guess.
+  `eng.traineddata` here is byte-identical to the file `install.ps1`
+  downloads (sha256 `7d4322bd...70b2`, tessdata_fast 4.1.0), so this is the
+  model a user's install runs.
+
+  Polarity was decided on the middle of the cell, on the assumption that the
+  glyphs are the minority there. Over the 58 non-blank cells of the offline
+  corpus, that band puts the two cases 0.41 apart (0.13-0.31 light-on-dark,
+  0.72-0.87 light background) with the threshold at 0.50. The border ring
+  puts them 0.83 apart (0.00-0.08 against 0.91-1.00). Both get today's frames
+  right; the difference is how close each comes to getting them wrong, and a
+  live MFD closed the first gap while leaving the second untouched.
+
+  Rendered words at one cell size and one font, only the word changing, ring
+  fraction against the middle band:
+
+  | word | middle band | border ring |
+  | --- | --- | --- |
+  | TERRAIN | 0.44 | 0.05 |
+  | NEXRAD | 0.42 | 0.06 |
+  | ENGINE | 0.43 | 0.00 |
+  | DCLTR-1 | 0.36 | 0.02 |
+  | MAP | 0.27 | 0.00 |
+
+  which is the shape of the reported failure: `DCLTR-1` is the longest string
+  in the list and among the lowest on both, because what fills the middle of a
+  cell is which letters a word is made of, not how many. The rendering is
+  DejaVu, not X-Plane's font, so these locate the *mechanism* -- the live
+  capture is the measurement that matters, and on that one TERRAIN and NEXRAD
+  were over the line and DCLTR-1 was not.
+* The fallback is free on everything that already read: 59 preprocessing
+  variants built across the six synthetic menus, none of them a retry, every
+  label identical with `retry_opposite_polarity` on and off.
 
 * The tests pass (`python -m pytest -q`), including the full frame -> labels
   pipeline over 5 synthetic softkey menus (60 cells: 49 labels + 11 blanks),

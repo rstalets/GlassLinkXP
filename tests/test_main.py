@@ -431,3 +431,46 @@ def test_a_healthy_source_is_left_alone_by_the_run_loop(monkeypatch):
 
     assert main(["run", "--once", "--publisher", "console"]) == 0
     assert seen == []
+
+
+def test_dump_cells_writes_the_picture_the_daemon_actually_uses(tmp_path, monkeypatch):
+    """The prep image is a diagnostic that gets believed, so it has to be the
+    daemon's first variant and not an approximation of it.
+
+    It has been wrong twice. First it used ``preprocess_cell``'s own default
+    sharpening, which no shipped ladder rung produces. Then it fell back to
+    reading polarity off the binarised ring while the pipeline read it off the
+    colour classifier -- so a cell the daemon inverted correctly was dumped
+    un-inverted, and the picture said the opposite of the truth. This pins it
+    to the real thing rather than to a description of it.
+    """
+    import cv2
+
+    from glasslinkxp import synth
+    from glasslinkxp.color import background_is_light
+    from glasslinkxp.config import AppConfig, ColorConfig, DisplayConfig, OcrConfig, StripGeometry
+    from glasslinkxp.main import build_parser, cmd_dump_cells
+    from glasslinkxp.pipeline import SharpenLadder
+    from glasslinkxp.strip import split_cells
+
+    frame_dir = tmp_path / "frames"
+    frame_dir.mkdir()
+    frame = synth.render_menu("pfd_top")
+    cv2.imwrite(str(frame_dir / "pfd.png"), frame)
+
+    display = DisplayConfig(key="pfd", geometry=StripGeometry())
+    config = AppConfig(displays=(display,), ocr=OcrConfig(), color=ColorConfig())
+    out = tmp_path / "cells"
+    args = build_parser().parse_args(
+        ["dump-cells", "--out", str(out), "--image", str(frame_dir / "pfd.png")]
+    )
+    assert cmd_dump_cells(args, config) == 0
+
+    for index, cell in enumerate(split_cells(frame, display.geometry), start=1):
+        expected = next(iter(SharpenLadder(
+            cell, config.ocr, light_background=background_is_light(cell, config.color)
+        )))
+        written = cv2.imread(str(out / f"pfd_{index:02d}_prep.png"), cv2.IMREAD_GRAYSCALE)
+        assert written is not None, f"cell {index} was not written"
+        assert written.shape == expected.shape, f"cell {index} is not the daemon's first variant"
+        assert (written == expected).all(), f"cell {index} differs from what run() would OCR"

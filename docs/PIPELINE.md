@@ -165,14 +165,18 @@ flowchart TD
     GATE -->|yes| INK{"ink ratio >= blank_ink_ratio?"}
 
     INK -->|no| BLANK["Empty cell<br/>never reaches OCR"]
-    INK -->|yes| LADDER["Preprocess the next sharpen_ladder rung:<br/>unsharp mask, upscale, threshold,<br/>normalise polarity, crop to content"]
+    INK -->|yes| LADDER["Threshold the next sharpen_ladder rung:<br/>unsharp mask, upscale, threshold"]
 
-    LADDER --> OCR["Tesseract reads each variant"]
+    LADDER --> POL["Finish it at the guessed polarity:<br/>normalise light/dark, crop to content"]
+    POL --> OCR["Tesseract reads each variant"]
     OCR --> SNAP["Normalise, then snap to the<br/>nearest label in labels.txt"]
     SNAP --> RANK{"Exact label hit<br/>and confidence >= accept_confidence?"}
-    RANK -->|yes| TAKE["Take it, skip the remaining rungs"]
+    RANK -->|yes| TAKE["Take it, skip the remaining variants"]
     RANK -->|"no, rungs left"| LADDER
-    RANK -->|"no, rungs exhausted"| BEST["Keep the best:<br/>exact hit first, then confidence"]
+    RANK -->|"no, rungs exhausted"| RETRY{"retry_opposite_polarity<br/>and not yet retried?"}
+    RETRY -->|yes| FLIP["Finish every rung the other way up<br/>(bitwise_not + crop, no re-threshold)"]
+    FLIP --> OCR
+    RETRY -->|no| BEST["Keep the best:<br/>exact hit first, then confidence"]
 
     TAKE --> CELLS[12 cell results]
     BEST --> CELLS
@@ -295,7 +299,118 @@ pfd cell 3  CACHED  bg=white  was bg=black -- colour changed, label unchanged, n
 | `BLANK` | discarded before OCR; the ink figure says by how much |
 | `x=` | horizontal extent of the ink |
 | `CLIPPED?` | the ink reaches the outermost pixel of the crop, and the edges it reaches are named. Ink one pixel in is not flagged: at a geometry known to be right, long labels legitimately come that close, so the boundary itself is the only line that separates a cut glyph from a full one. Both kinds of error are possible -- a label drawn hard against its own cell edge reports a clipping that is really the sim's layout, and a crop that has slipped onto a solid background reports nothing at all. The calibration editor warns from this same function. |
+| `POLARITY read the wrong way up` | the answer came from an opposite-polarity retry, so the border ring (see below) answered for the wrong rectangle -- usually a crop that has slipped off the cell onto a separator bar or a neighbour. The label is right; the calibration is the thing to look at. Printed on the variant that *won*, not on the retries that were reached: a label missing from `labels.txt` reaches every rung there is while reading perfectly. |
 
 The distinction between the middle two matters when a label looks wrong: a cell
 carrying `CONFIRMED` was checked against a known page, while a bare line means
 nothing corroborated it.
+
+## Which way up a cell is
+
+A softkey is drawn light-on-dark normally and dark-on-light when it is
+selected, so the polarity has to come out of the pixels.
+
+It is read off the cell's **border ring**. Labels are centred, so the
+outermost few pixels of a cell are essentially never glyph, whatever the cell
+is doing -- the ring is background by construction, and a majority test over
+it needs no assumption at all. This is the same measurement, at the same
+`ring_fraction`, that the colour stage uses to name the background; `color.py`
+sets out the argument for it at length.
+
+It used to be read off the **middle** of the cell instead, on the assumption
+that the glyphs are the minority there, and that is a real assumption that
+fails. What crosses the line is the ink coverage of the middle band, which
+depends on how tight the crop is *and on which letters the word is made of*.
+On a live MFD at `h = 0.0267`, `cell_pad_y = 0.08`, TERRAIN and NEXRAD came
+out of preprocessing still white-on-black while `DCLTR-1` -- a longer word, in
+the same cells, at the same geometry -- read perfectly: D, C, L, T, R, hyphen
+and 1 are thin open shapes and E, R, A, N, X and D are not. There was no crop
+tight enough to predict from.
+
+The two tests, measured over the 58 non-blank cells of the offline corpus:
+
+| | light-on-dark cells | light-background cells | gap |
+| --- | --- | --- | --- |
+| middle band (old) | 0.13 – 0.31 | 0.72 – 0.87 | 0.41 |
+| border ring (new) | 0.00 – 0.08 | 0.91 – 1.00 | **0.83** |
+
+The threshold is 0.50 either way. What changed is that it now sits in the
+middle of a gap rather than near the edge of one.
+
+The dark surround around a small highlight box is cropped away *before* the
+ring is read -- until it is gone, the ring is that surround rather than the
+label's own background. `_crop_to_content` guards itself (it fires only on
+four or more rows and columns that are more than half bright, which is a box
+and never a row of glyphs), so running it earlier changes nothing for a cell
+that has no frame.
+
+The bar is **0.75, not the midpoint**, and that asymmetry is deliberate:
+light-on-dark is the rule and a light background -- a selected key, a caution,
+a warning -- is the exception, so the exception is what has to prove itself
+and an ambiguous ring means black. `color.py` already works this way on the
+same pixels; its `value_max` is tested first "so brightness can only ever push
+a cell into black".
+
+### Where the ring stops working
+
+A band is only clean while the glyph stays out of it, and nothing keeps it
+out. A tall glyph reaches the top and bottom bands; a full-width word reaches
+the left and right ones. The contamination is one-directional -- it lifts a
+dark cell's fraction and lowers a light cell's -- so the two populations close
+as the crop tightens. Rendered words at one geometry, varying only how much of
+the cell height the glyph fills:
+
+| glyph fills | light-on-dark | light background |
+| --- | --- | --- |
+| 55% of the cell | ≤ 0.09 | ≥ 0.91 |
+| 80% | ≤ 0.77 | ≥ 0.84 |
+| 90% | ≤ 0.67 | ≥ 0.71 |
+
+At 90% they overlap, and judging each edge separately and taking the worst
+makes it worse rather than better (≤ 0.59 against ≥ 0.56 — the light side
+loses more). **There is no threshold there, on any band or combination of
+them.** A 27 px cell whose label nearly fills it is in that regime, and no
+amount of moving `ring_fraction` or the bar will get it out.
+
+Past that limit the ring is not the answer. It only decides which polarity is
+tried **first**, and what settles the cell is the vocabulary -- the
+opposite-polarity rung, and the rule in `SoftkeyReader._rank` that a retry
+wins only by landing on a known label. Nothing downstream can undo a wrong
+answer either: sharpening, upscaling and the threshold method all leave
+polarity alone, which is why `tune` reports that no candidate helped and hands
+back the defaults -- truthfully, because polarity was not in the space it
+searched.
+
+So the other polarity is also a rung, the same answer the sharpening ladder
+gave to a value that could not be guessed:
+
+```
+auto,     rung 1   <- the sharpening ladder, exactly as it was
+auto,     rung 2
+auto,     rung 3
+opposite, rung 1   <- reached only when nothing above scored a confident hit
+opposite, rung 2
+opposite, rung 3
+```
+
+A retry wins only by landing on a known label. Tesseract reads *something*
+out of a cell that is the wrong way up and reports a confidence for it that
+means nothing, so without that rule a cell which simply does not read hands
+its answer to whichever variant produced the most confident garbage -- and
+with six variants rather than three, that is often a retry. The published
+label is then wrong *and* the debug line blames the polarity for a cell whose
+polarity was never the problem. Landing on a known label is the only evidence
+there is that flipping was right; without it, the polarity the ring chose
+keeps the cell. Same rule as the bar one stage earlier: ambiguous means the
+common case.
+
+Polarity is the *outer* loop on purpose. A cell that reads today stops at the
+first variant that lands on a known label confidently, so it never sees a
+retry, never pays for one, and cannot have its answer outranked by one. Over
+the offline corpus that is every cell: 59 variants built across the six menus
+and not one retry. And the retries are cheap when they do run -- both
+polarities of a rung come from the same thresholded image and differ by a
+`bitwise_not` and a crop, so the second pass is a fraction of the first rather
+than a second ladder.
+
+`ocr.retry_opposite_polarity = false` restores the old behaviour.

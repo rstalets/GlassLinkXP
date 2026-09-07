@@ -51,9 +51,23 @@ enabled = true
 # not read, a long way from this line. Anything that is not 4:3 is refused,
 # with a warning, and 1280x960 used instead.
 #
-# 1280x960 by default: the G1000 renders to a 1024x768 texture, so this is
-# comfortably above the point where detail is thrown away before capture sees
-# it, and going much larger only interpolates.
+# 1280x960 by default, and THERE IS A BEST SIZE RATHER THAN A BIGGEST. The
+# G1000 is drawn from a fixed texture and scaled into the window, so a larger
+# window adds interpolation and no detail; but a smaller one throws away
+# pixels Tesseract needed. Both ends read worse. Reported from one live
+# display, all else equal: 1024x768 read *worse* than the default, and 10%
+# larger than the default also read worse. The peak was here.
+#
+# Where the peak falls is not something this file can know, because it depends
+# on your machine -- your Windows display scaling especially. This number is
+# what the daemon asks Windows for; what capture actually receives can be
+# larger. Run `glasslinkxp list-windows` to see the client size capture is
+# given, and compare sizes with:
+#
+#     glasslinkxp -c config.toml bench -n 20
+#
+# which reports mean confidence and how many cells landed on a known label.
+# Change one thing, run it again, keep the winner.
 size = [1280, 960]
 
 # Turning this off leaves the windows entirely to you -- the daemon then only
@@ -142,6 +156,26 @@ screen_confidence = 80.0
 # would propagate that guess into every cell it fills.
 screen_match_confidence = 85.0
 threshold = "otsu"       # otsu | adaptive -- per cell, never global
+# After the sharpening ladder, try every rung again with light and dark
+# swapped.
+#
+# Which way up a cell is drawn has to be worked out from the pixels, because
+# both happen: a normal softkey is light text on a dark box, a selected one is
+# dark text on a light box. It is decided by the very same classification the
+# [color] section below publishes as /bg -- one measurement, so the label's
+# polarity and the colour your Stream Deck draws can never disagree about the
+# same cell.
+#
+# That leaves a wide margin, but it is still one measurement of one frame, and
+# a cell read the wrong way up reaches Tesseract white-on-black and comes back
+# as nothing or as garbage. No sharpening rung, upscale or threshold method
+# can undo it: none of them changes polarity. That is also why a tuning run
+# against such a cell reports that nothing helped.
+#
+# So the other polarity is a rung rather than an argument. The retries come
+# after every sharpening rung, and an exact vocabulary hit stops the ladder
+# before it reaches them, so a cell that reads costs exactly what it did.
+retry_opposite_polarity = true
 fuzzy_cutoff = 0.62      # difflib cutoff for snapping to labels.txt
 blank_ink_ratio = 0.004  # below this fraction of "ink" a cell is reported as ""
 # How far a pixel must sit from the cell's dominant tone to count as ink. The

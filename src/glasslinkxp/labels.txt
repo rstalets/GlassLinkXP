@@ -24,6 +24,12 @@ TMR/REF
 NRST
 ALERTS
 BACK
+# The annunciation softkey, which replaces ALERTS in cell 12 and is drawn on a
+# yellow or red background. Missing until now, which cost more than a wrong
+# reading: a label the vocabulary does not know never scores an exact match,
+# so it never stops the ladder early and pays every rung on every change.
+CAUTION
+WARNING
 
 # --- PFD configuration menu ---------------------------------------------
 SYN VIS

@@ -112,16 +112,6 @@ class OcrConfig:
     psm: int = 7  # single text line
     whitelist: str = DEFAULT_WHITELIST
     upscale: float = 4.0
-    #: Unsharp mask settings tried in order, as (amount, radius) pairs.
-    #:
-    #: The glyphs are ~10 px tall and slightly soft, and thresholding at that
-    #: size can close the counters of 0/6/8/9 -- a filled counter is not a
-    #: character, so Tesseract returns nothing. Sharpening reopens them, but
-    #: too much of it rings and grows strokes instead, turning a 0 into a B.
-    #: The right amount depends on the font and the capture scale, which is not
-    #: knowable in advance, so instead of guessing one value we try several and
-    #: keep whichever result the vocabulary and Tesseract agree on. The first
-    #: rung is no sharpening at all, so this can never do worse than not trying.
     #: Confidence above which an exact vocabulary hit ends the ladder early.
     #:
     #: Landing on a known label is not proof of being right when the label set
@@ -141,12 +131,39 @@ class OcrConfig:
     #: made from a guess would propagate that guess into every cell it fills.
     screen_match_confidence: float = 85.0
     screens_file: str = str(PACKAGE_DIR / "screens.toml")
+    #: Unsharp mask settings tried in order, as (amount, radius) pairs.
+    #:
+    #: The glyphs are ~10 px tall and slightly soft, and thresholding at that
+    #: size can close the counters of 0/6/8/9 -- a filled counter is not a
+    #: character, so Tesseract returns nothing. Sharpening reopens them, but
+    #: too much of it rings and grows strokes instead, turning a 0 into a B.
+    #: The right amount depends on the font and the capture scale, which is not
+    #: knowable in advance, so instead of guessing one value we try several and
+    #: keep whichever result the vocabulary and Tesseract agree on. The first
+    #: rung is no sharpening at all, so this can never do worse than not trying.
     sharpen_ladder: tuple[tuple[float, float], ...] = (
         (0.0, 0.0),
         (0.5, 1.0),
         (1.0, 1.4),
     )
     threshold: str = "otsu"  # otsu | adaptive
+    #: After the sharpening ladder, try every rung again with its light/dark
+    #: polarity the other way round.
+    #:
+    #: A cell's polarity is read off its border ring, where there is never a
+    #: glyph (see ``strip._background_is_white``). That is a wide margin
+    #: rather than a guess, but it is still one measurement of one frame, and
+    #: a cell it gets wrong reaches Tesseract white-on-black and reads as
+    #: nothing or as garbage. Nothing else in the ladder can recover that:
+    #: sharpening, upscaling and the threshold method all leave polarity
+    #: alone, which is why a tuning run against such a cell reports that no
+    #: candidate helped.
+    #:
+    #: On by default, and it costs nothing on a cell that reads: the retries
+    #: sit *after* every sharpening rung, and ``read_best`` stops at the first
+    #: variant that lands on a known label confidently. Turn it off only to
+    #: reproduce the old behaviour.
+    retry_opposite_polarity: bool = True
     labels_file: str = str(PACKAGE_DIR / "labels.txt")
     fuzzy_cutoff: float = 0.62
     #: fraction of a cell's pixels that must deviate from the cell's dominant

@@ -52,6 +52,18 @@ class CellResult:
     match_score: float = 0.0  # difflib ratio of raw -> text, 0..1
     blank: bool = False
     ocr_ran: bool = True     # False when served from the change-gating cache
+    #: Which variant of the preprocessing ladder this reading came from, as an
+    #: index into it. Zero for a cell read straight off the gentle path, which
+    #: is nearly all of them. It is here so the pipeline can say *which* rung
+    #: won without anything having to re-derive it: "reached a polarity retry"
+    #: and "was decided by one" are different facts, and only the second is
+    #: worth printing -- an out-of-vocabulary label reaches every rung there is
+    #: while reading perfectly.
+    variant: int = 0
+    #: Whether this reading came from an opposite-polarity retry rather than
+    #: from the cell the way the ring read it. Retries are the exception arm
+    #: of the ladder and are ranked as one: see :meth:`SoftkeyReader._rank`.
+    fallback: bool = False
     by_screen: str = ""      # value came from this known softkey page
     confirmed_by: str = ""   # page agreed with a reading OCR was unsure of
     #: Background colour class, 0=black 1=white 2=yellow 3=red (see color.py).
@@ -256,9 +268,18 @@ class SoftkeyReader:
         preprocessing being about as expensive per rung as the early exit was
         saving on OCR.
         """
-        return self.pick_best(
-            (self.read(index, image) for image in images), self.config.accept_confidence
+        retries_from = (
+            len(self.config.sharpen_ladder) if self.config.retry_opposite_polarity else None
         )
+
+        def numbered():
+            for position, image in enumerate(images):
+                result = self.read(index, image)
+                result.variant = position
+                result.fallback = retries_from is not None and position >= retries_from
+                yield result
+
+        return self.pick_best(numbered(), self.config.accept_confidence)
 
     @staticmethod
     def pick_best(results: Iterable["CellResult"], accept_confidence: float) -> "CellResult":
@@ -288,7 +309,29 @@ class SoftkeyReader:
 
     @staticmethod
     def _rank(result: CellResult) -> tuple[int, float]:
+        """Exact vocabulary hit first, then Tesseract's own confidence.
+
+        An opposite-polarity retry that did *not* land on a known label ranks
+        below everything else rather than competing on confidence, and that
+        asymmetry is doing real work.
+
+        Tesseract reads *something* out of a cell that is the wrong way up,
+        and reports a confidence for it that means nothing. Without this, a
+        cell that simply does not read hands its answer to whichever variant
+        produced the most confident garbage -- and with six variants instead
+        of three, that is now often a retry. The published label is then
+        wrong, and the debug line blames the polarity for a cell whose
+        polarity was never the problem.
+
+        Landing on a known label is the only evidence there is that flipping
+        was the right thing to do. Without it there is no evidence, so the
+        polarity the ring chose keeps the cell. That is the same rule as
+        ``LIGHT_BACKGROUND_RING`` one stage earlier: the exception has to
+        prove itself, and an ambiguous answer means the common case.
+        """
         exact = 1 if (result.text and result.match_score >= 1.0) else 0
+        if result.fallback and not exact:
+            return (-1, 0.0)
         return (exact, result.confidence)
 
     def close(self) -> None:

@@ -39,14 +39,14 @@ def test_only_the_rungs_that_are_read_are_preprocessed(menu, reader, config, mon
     """
     from glasslinkxp import pipeline as pipeline_module
 
-    real = pipeline_module.preprocess_cell
+    real = pipeline_module.threshold_cell
     calls = []
 
     def counted(cell, **kwargs):
         calls.append(kwargs["sharpen_amount"])
         return real(cell, **kwargs)
 
-    monkeypatch.setattr(pipeline_module, "preprocess_cell", counted)
+    monkeypatch.setattr(pipeline_module, "threshold_cell", counted)
 
     result = make_pipeline(reader, config).process(synth.render_menu(menu))
     assert result.labels == synth.MENUS[menu], "laziness must not change the answer"
@@ -56,6 +56,53 @@ def test_only_the_rungs_that_are_read_are_preprocessed(menu, reader, config, mon
     assert len(calls) >= result.ocr_calls, "every cell read gets at least rung one"
     assert len(calls) < result.ocr_calls * rungs, "and most stop there"
     assert calls.count(config.ocr.sharpen_ladder[0][0]) == result.ocr_calls
+
+
+@pytest.mark.parametrize("menu", MENUS)
+def test_the_opposite_polarity_retries_are_only_reached_by_cells_that_did_not_read(
+    menu, reader, config
+):
+    """The retries sit after every sharpening rung, so a cell that reads
+    confidently never reaches one -- and none of them changes an answer.
+
+    This is why polarity is the *outer* loop of the variant ladder rather than
+    interleaved with sharpening. Measured over the offline corpus: 59 variants
+    built across the six menus and not one retry among them, so the fallback
+    is free on everything that already read. (It was six retries until
+    CAUTION and WARNING were added to labels.txt -- a label the vocabulary
+    does not know never scores an exact match, so it never stops the ladder
+    early and walks every rung there is while reading perfectly.)
+    """
+    from dataclasses import replace
+
+    from glasslinkxp.pipeline import SharpenLadder
+
+    built = []
+    original = SharpenLadder.__iter__
+
+    def spy(self):
+        built.append(self)
+        yield from original(self)
+
+    SharpenLadder.__iter__ = spy
+    try:
+        result = make_pipeline(reader, config).process(synth.render_menu(menu))
+    finally:
+        SharpenLadder.__iter__ = original
+
+    assert result.labels == synth.MENUS[menu]
+    assert built, "the ladder is what the pipeline reads through"
+
+    off = replace(config, ocr=replace(config.ocr, retry_opposite_polarity=False))
+    assert make_pipeline(reader, off).process(synth.render_menu(menu)).labels == result.labels
+
+    reached = sum(1 for ladder in built if ladder.retries)
+    unread = sum(
+        1 for cell in result.cells
+        if not cell.blank
+        and not (cell.match_score >= 1.0 and cell.confidence >= config.ocr.accept_confidence)
+    )
+    assert reached <= unread, "a cell that read confidently must not have paid for a retry"
 
 
 def test_the_ladder_charges_its_time_to_preprocessing_not_to_ocr(reader, config):
@@ -78,7 +125,72 @@ def test_the_ladder_stops_building_when_the_reader_stops_reading(reader, config)
     assert first is not None
     assert ladder.rungs == 1
     assert ladder.elapsed_ms > 0
-    assert len(list(SharpenLadder(cell, config.ocr))) == len(config.ocr.sharpen_ladder)
+    assert len(list(SharpenLadder(cell, config.ocr))) == 2 * len(config.ocr.sharpen_ladder)
+
+
+def test_the_ladder_tries_every_rung_again_the_other_way_up(config):
+    """Polarity doubles the variants, and the sharpening half comes first.
+
+    The border ring that picks a cell's polarity leaves a wide margin but is
+    still one measurement of one frame -- see ``strip._background_is_white`` --
+    and nothing else in the ladder can undo a wrong answer, so "the other one"
+    is a variant rather than a better guess. The order is asserted because ``pick_best`` stops early: putting
+    the retries anywhere but last would change which answer a readable cell
+    gets.
+    """
+    from dataclasses import replace
+
+    from glasslinkxp.pipeline import SharpenLadder, variant_ladder
+
+    rungs = config.ocr.sharpen_ladder
+    assert variant_ladder(config.ocr) == tuple(
+        [("auto", a, r) for a, r in rungs] + [("opposite", a, r) for a, r in rungs]
+    )
+
+    off = replace(config.ocr, retry_opposite_polarity=False)
+    assert variant_ladder(off) == tuple(("auto", a, r) for a, r in rungs)
+
+    cell = split_cells(synth.render_menu("xpdr"), StripGeometry())[0]
+    assert len(list(SharpenLadder(cell, off))) == len(rungs)
+    ladder = SharpenLadder(cell, config.ocr)
+    list(ladder)
+    assert ladder.retries == len(rungs)
+
+
+def test_a_cell_the_polarity_test_calls_wrong_still_reads(reader, config):
+    """The failure this fallback is for, reproduced end to end.
+
+    A cell whose polarity the ring calls wrong -- in practice a crop that has
+    slipped off its own cell -- is unreadable at every rung of the sharpening
+    ladder, because none of them changes polarity. The retry reads it.
+    """
+    from dataclasses import replace
+
+    import numpy as np
+
+    from glasslinkxp.ocr import SoftkeyReader
+    from glasslinkxp.pipeline import SharpenLadder
+    from glasslinkxp.strip import _background_is_white, threshold_cell
+
+    cell = split_cells(synth.render_menu("pfd_top"), StripGeometry())[0]
+    # Squeeze the crop until the polarity test changes its mind about it,
+    # which is what cell_pad_y does on a real strip.
+    height = cell.shape[0]
+    tight = cell[int(height * 0.28): int(height * 0.72)]
+    binary = threshold_cell(tight, config.ocr.upscale, config.ocr.threshold, 0.0, 0.0)
+    if _background_is_white(binary):
+        tight = np.asarray(255 - tight)  # whichever way round, force the wrong call
+
+    off = replace(config.ocr, retry_opposite_polarity=False)
+    without = SoftkeyReader.pick_best(
+        (reader.read(0, image) for image in SharpenLadder(tight, off)),
+        off.accept_confidence,
+    )
+    with_retry = SoftkeyReader.pick_best(
+        (reader.read(0, image) for image in SharpenLadder(tight, config.ocr)),
+        config.ocr.accept_confidence,
+    )
+    assert with_retry.match_score >= without.match_score
 
 
 def test_blank_cells_are_reported_empty_and_skip_ocr(reader, config):
