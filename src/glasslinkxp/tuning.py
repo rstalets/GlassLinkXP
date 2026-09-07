@@ -32,7 +32,7 @@ from typing import Callable, Iterable, Mapping, Sequence
 
 import numpy as np
 
-from .config import OcrConfig
+from .config import ColorConfig, OcrConfig
 from .ocr import CellResult, OcrUnavailable, SoftkeyReader, TesserocrEngine
 from .strip import measure_ink, preprocess_cell
 
@@ -201,7 +201,9 @@ def _candidate_ladders(
 Evaluator = Callable[[np.ndarray, int, str, float, float, float, str], CellResult]
 
 
-def default_evaluator(base: OcrConfig) -> tuple[Evaluator, Callable[[], None]]:
+def default_evaluator(
+    base: OcrConfig, color: ColorConfig | None = None
+) -> tuple[Evaluator, Callable[[], None]]:
     """Build the default (real OCR) evaluator, plus a function to close it.
 
     One :class:`~.ocr.SoftkeyReader` per ``psm`` actually asked for, built
@@ -229,7 +231,7 @@ def default_evaluator(base: OcrConfig) -> tuple[Evaluator, Callable[[], None]]:
         try:
             image = preprocess_cell(
                 cell, upscale=upscale, method=method, sharpen_amount=amount,
-                sharpen_radius=radius, polarity=polarity,
+                sharpen_radius=radius, polarity=polarity, color_config=color,
             )
             return reader.read(0, image)
         except Exception:  # noqa: BLE001 - a bad combination is just a miss
@@ -392,6 +394,7 @@ def run_tuning(
     base: OcrConfig,
     *,
     evaluator_factory: Callable[[OcrConfig], tuple[Evaluator, Callable[[], None]]] = default_evaluator,
+    color: ColorConfig | None = None,
     psms: Sequence[int] = PSMS,
     methods: Sequence[str] = METHODS,
     upscales: Sequence[float] = UPSCALES,
@@ -433,7 +436,13 @@ def run_tuning(
     total_settings = len(search_psms) * len(search_methods) * len(search_upscales)
     done_settings = 0
     for psm in search_psms:
-        evaluate, close = evaluator_factory(replace(base, psm=psm))
+        try:
+            evaluate, close = evaluator_factory(replace(base, psm=psm), color)
+        except TypeError:
+            # A scripted evaluator from the tests takes the config alone. The
+            # colour config is only ever the polarity measurement, which a
+            # scripted evaluator does not make.
+            evaluate, close = evaluator_factory(replace(base, psm=psm))
         try:
             for method in search_methods:
                 for upscale in search_upscales:

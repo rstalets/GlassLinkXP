@@ -175,7 +175,10 @@ makes"). The ring measurement was simply never wired through. It is now, and
 both stages share one `ring_fraction`. Over the corpus the ring separates the
 two cases by 0.83 where the middle band separated them by 0.41.
 
-**The ring has a floor, and past it no threshold exists.** A band is clean
+**Polarity comes from `color.classify_cell`, the same call that publishes
+`/bg`.** One measurement answers both, so they cannot disagree about a cell.
+That matters because the obvious alternative -- a bright-pixel fraction over
+the binarised ring -- has a floor, and a live display is under it: A band is clean
 only while the glyph stays out of it, and nothing keeps it out: a tall glyph
 reaches the top and bottom bands, a full-width word the left and right ones,
 and the contamination lifts a dark cell's fraction while lowering a light
@@ -186,8 +189,17 @@ of the whole ring is worse still (0.59 / 0.56). A 27 px cell whose label
 nearly fills it is in that regime. Do not answer a report from there by moving
 `ring_fraction` or `LIGHT_BACKGROUND_RING`; there is nothing to move it to.
 
-Past that limit the ring only chooses which polarity is tried *first*, and the
-vocabulary decides. `retry_opposite_polarity` is that decision, and
+The fix was not a threshold but a different statistic, and it was already in
+the tree: `color.border_ring_bgr` takes a per-channel **median** of the *raw*
+ring, which does not move at all until contamination passes half the ring,
+where a mean moves with every pixel. Same ring, same question. Across every
+crop above, the median reads V 8 for a dark cell and V 235 for a light one,
+with `value_max` at 60 between them -- it does not degrade at all. It had been
+driving `/bg` correctly the whole time while polarity used the fragile
+statistic beside it.
+
+The opposite-polarity rung stays as the backstop, and the vocabulary decides
+there: `retry_opposite_polarity` is that decision, and
 `SoftkeyReader._rank` is what keeps it honest: a retry wins only by landing on
 a known label. Tesseract reads *something* out of a cell that is the wrong way
 up, with a confidence that means nothing, so without that rule a cell that

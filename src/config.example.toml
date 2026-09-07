@@ -51,9 +51,15 @@ enabled = true
 # not read, a long way from this line. Anything that is not 4:3 is refused,
 # with a warning, and 1280x960 used instead.
 #
-# 1280x960 by default: the G1000 renders to a 1024x768 texture, so this is
-# comfortably above the point where detail is thrown away before capture sees
-# it, and going much larger only interpolates.
+# 1280x960 by default. BIGGER IS NOT BETTER. The G1000 renders to a fixed
+# texture and the window scales it, so past that size a larger window adds
+# interpolation blur and no detail -- and blur is what closes the counters of
+# 0, 6, 8 and 9, which is the failure that costs you a readable digit. Going
+# up 10% from here has been reported to make readings worse, not better.
+#
+# If labels are marginal, the thing to raise is [ocr] upscale, which enlarges
+# after capture with one clean resample, rather than this, which enlarges
+# before capture and then gets resampled again.
 size = [1280, 960]
 
 # Turning this off leaves the windows entirely to you -- the daemon then only
@@ -147,9 +153,10 @@ threshold = "otsu"       # otsu | adaptive -- per cell, never global
 #
 # Which way up a cell is drawn has to be worked out from the pixels, because
 # both happen: a normal softkey is light text on a dark box, a selected one is
-# dark text on a light box. It is read off the cell's border ring, where there
-# is never a glyph -- the same measurement the [color] section below uses to
-# name the background, and for the same reason.
+# dark text on a light box. It is decided by the very same classification the
+# [color] section below publishes as /bg -- one measurement, so the label's
+# polarity and the colour your Stream Deck draws can never disagree about the
+# same cell.
 #
 # That leaves a wide margin, but it is still one measurement of one frame, and
 # a cell read the wrong way up reaches Tesseract white-on-black and comes back

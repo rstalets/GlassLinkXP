@@ -149,6 +149,20 @@ if that hash has been pruned).
   `docs/CONFIGURATION.md` for the full reference, generated from the same
   text the GUI's Settings tab shows beside each field.
 
+### A bigger pop-out is not a sharper one
+
+The G1000 renders to a fixed texture and the window scales it. Past that size,
+a larger window is interpolating: more pixels, no more detail, and softer
+edges than it started with. Reported from a live display, raising the pop-out
+10% above the default made readings *worse*, which is the shape you would
+expect -- blur closes the counters of 0, 6, 8 and 9, and a filled counter is
+not a character.
+
+So "make the window bigger" is not general advice and this document should not
+give it. `[ocr] upscale` enlarges after capture, in one clean resample; the
+window size enlarges before capture and is then resampled again by `upscale`
+on top. If labels are marginal, raise the first.
+
 ### What `tune` prefers, and why it may not hand you a ladder
 
 Candidates are ranked on, in order: how many previously-wrong cells they fix;

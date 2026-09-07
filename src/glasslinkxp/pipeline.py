@@ -65,9 +65,16 @@ class SharpenLadder:
     cost into its neighbour without either stage having changed.
     """
 
-    def __init__(self, cell: np.ndarray, config) -> None:
+    def __init__(self, cell: np.ndarray, config, light_background: bool | None = None) -> None:
         self._cell = cell
         self._config = config
+        #: Which way up this cell is, measured on the *raw* pixels rather than
+        #: on the thresholded ones -- the pipeline has already classified every
+        #: cell's background colour off the same border ring, so this costs
+        #: nothing and is the robust statistic. See
+        #: ``color.background_is_light``. None falls back to reading the
+        #: binarised ring, which is what a caller with no colour config gets.
+        self._light_background = light_background
         #: Time actually spent preprocessing, in ms -- variants reached, not
         #: variants defined.
         self.elapsed_ms = 0.0
@@ -90,7 +97,7 @@ class SharpenLadder:
                 sharpen_amount=amount,
                 sharpen_radius=radius,
             )
-            image = finish_cell(binary, "auto")
+            image = finish_cell(binary, "auto", light_background=self._light_background)
             self.elapsed_ms += (time.perf_counter() - t0) * 1000.0
             self.rungs += 1
             thresholded.append(binary)
@@ -101,7 +108,9 @@ class SharpenLadder:
 
         for binary in thresholded:
             t0 = time.perf_counter()
-            image = finish_cell(binary, "opposite")
+            image = finish_cell(
+                binary, "opposite", light_background=self._light_background
+            )
             self.elapsed_ms += (time.perf_counter() - t0) * 1000.0
             self.rungs += 1
             self.retries += 1
@@ -309,7 +318,16 @@ class DisplayPipeline:
                     CellResult(index=index, blank=True, background=backgrounds[index])
                 )
                 continue
-            variants = SharpenLadder(cell, self.reader.config)
+            # backgrounds[] is already the border-ring classification of this
+            # very cell, computed above for every cell of every frame. Polarity
+            # is the same question of the same pixels, so it is answered by the
+            # same measurement rather than by a second one that could disagree.
+            variants = SharpenLadder(
+                cell, self.reader.config,
+                light_background=(
+                    backgrounds[index] != BLACK if self.app.color.enabled else None
+                ),
+            )
             preprocess_ms += (time.perf_counter() - t0) * 1000.0
 
             t0 = time.perf_counter()

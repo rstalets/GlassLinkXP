@@ -611,7 +611,7 @@ def cmd_tune(args: argparse.Namespace, config: AppConfig) -> int:
 
     LOG.info("tuning against %d case(s): %s", len(cases), ", ".join(c.label for c in cases))
     try:
-        result = run_tuning(cases, config.ocr, progress=LOG.info)
+        result = run_tuning(cases, config.ocr, color=config.color, progress=LOG.info)
     except TuningError as exc:
         LOG.error("%s", exc)
         return 2

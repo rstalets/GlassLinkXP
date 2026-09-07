@@ -322,6 +322,7 @@ def finish_cell(
     polarity: str = "auto",
     border: int = 8,
     ring_fraction: float = RING_FRACTION,
+    light_background: bool | None = None,
 ) -> np.ndarray:
     """Normalise a thresholded cell to dark glyphs on light paper.
 
@@ -330,21 +331,36 @@ def finish_cell(
     a crop and a border -- so that trying both costs a fraction of a rung
     rather than a whole one.
 
-    The frame is cropped away *before* the polarity is decided, which is the
-    other half of reading it off the ring: until the dark surround around a
-    small highlight box is gone, the ring of the crop is that surround rather
-    than the label's own background, and the ring would answer for the wrong
-    rectangle. :func:`_crop_to_content` guards itself -- it only fires on four
-    or more rows and columns that are more than half bright, which is a box
-    and never a row of glyphs -- so running it earlier changes nothing for a
-    cell that has no frame.
+    ``light_background`` is the polarity, already measured from the *raw*
+    cell -- normally :func:`color.background_is_light`, which the pipeline has
+    computed for every cell of every frame anyway. Pass it. The fallback when
+    it is ``None`` reads the binarised ring instead, and that reading degrades
+    as the crop tightens in a way the raw one does not; it is here for callers
+    that have no colour configuration, not as an equal option.
+
+    The frame is cropped away first either way. :func:`_crop_to_content` only
+    fires on a bright box inside a dark surround, which is itself a light
+    background that does not fill the crop -- the one case any ring reading of
+    the whole cell answers for the wrong rectangle, and the one case that
+    needs no further measurement once it has been found.
     """
     if polarity not in POLARITIES:
         raise ValueError(f"unknown polarity {polarity!r} (use one of {POLARITIES})")
 
-    binary = _crop_to_content(binary)
+    cropped = _crop_to_content(binary)
+    if cropped.shape != binary.shape:
+        # _crop_to_content only fires on a bright box inside a dark surround,
+        # which *is* a light background that does not fill the crop -- the one
+        # case a ring reading of the whole cell answers for the wrong
+        # rectangle. Having found it, there is nothing left to measure.
+        light = True
+    elif light_background is not None:
+        light = light_background
+    else:
+        light = _background_is_white(cropped, ring_fraction)
+    binary = cropped
 
-    flip = not _background_is_white(binary, ring_fraction)
+    flip = not light
     if polarity == "opposite":
         flip = not flip
     if flip:
@@ -367,10 +383,21 @@ def preprocess_cell(
     sharpen_amount: float = 1.2,
     sharpen_radius: float = 1.4,
     polarity: str = "auto",
+    color_config: "ColorConfig | None" = None,
 ) -> np.ndarray:
-    """Return a binarised, OCR-ready cell: black text on a white background."""
+    """Return a binarised, OCR-ready cell: black text on a white background.
+
+    ``color_config`` is what lets the polarity be measured on the raw cell
+    rather than on the thresholded one; without it this falls back to the
+    binarised ring. See :func:`finish_cell`.
+    """
     binary = threshold_cell(cell, upscale, method, sharpen_amount, sharpen_radius)
-    return finish_cell(binary, polarity, border)
+    light = None
+    if color_config is not None:
+        from .color import background_is_light
+
+        light = background_is_light(cell, color_config)
+    return finish_cell(binary, polarity, border, light_background=light)
 
 
 def ring_bright_fraction(binary: np.ndarray, ring_fraction: float = RING_FRACTION) -> float:
