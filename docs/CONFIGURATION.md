@@ -306,9 +306,9 @@ Only a fallback for a sim too old to say which versions it supports. Leave it at
 
 ### `field_width`
 
-*Label field width* — a whole number. Default: `64`.
+*Label field width* — a whole number. Default: `16`.
 
-Bytes per label dataref. Must match FIELD_WIDTH in the X-Plane plugin and the ':sNN' on every Stream Deck button -- changing it means re-editing every button, so leave it at the default.
+Bytes per label dataref. Must match FIELD_WIDTH in the X-Plane plugin and the ':sNN' on every Stream Deck button -- changing it means re-editing every button, so leave it at the default. 16 holds every label in labels.txt with room to spare; wider fields made PilotsDeck slower.
 
 ### `timeout`
 

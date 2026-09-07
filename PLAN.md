@@ -28,7 +28,7 @@ X-Plane pop-out PFD/MFD windows (backgrounded)
         │  X-Plane Web API (REST, base64) PATCH
         ▼
    byte-array datarefs created by a tiny XPPython3 plugin
-        │  PilotsDeck reads `glasslinkxp/softkey/pfd/1:s64`
+        │  PilotsDeck reads `glasslinkxp/softkey/pfd/1:s16`
         ▼
    Stream Deck button face
 ```
@@ -73,7 +73,7 @@ tests/                               offline pipeline tests on synthetic strips
 ```
 
 Dataref names: `glasslinkxp/softkey/pfd/1..12`, `glasslinkxp/softkey/mfd/1..12` (16-byte each).
-PilotsDeck address: `glasslinkxp/softkey/pfd/1:s64`.
+PilotsDeck address: `glasslinkxp/softkey/pfd/1:s16`.
 
 ## Calibration is the real risk
 

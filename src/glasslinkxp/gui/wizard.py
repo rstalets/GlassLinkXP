@@ -153,7 +153,7 @@ STEPS: tuple[Step, ...] = (
         "publish",
         "Send the labels to X-Plane",
         "Set Publish to 'websocket' and press Start. Your Stream Deck buttons can "
-        "now read glasslinkxp/softkey/pfd/1:s64. Press Finish when they do.",
+        "now read glasslinkxp/softkey/pfd/1:s16. Press Finish when they do.",
         "RunTab",
     ),
 )

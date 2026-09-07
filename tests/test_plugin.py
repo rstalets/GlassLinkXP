@@ -88,15 +88,33 @@ def test_creates_a_label_and_a_colour_dataref_per_cell(plugin):
     assert fake_xp.messages, "custom datarefs should be announced to DataRefEditor"
 
 
-def test_the_field_holds_the_longest_label_with_room_to_spare(plugin):
-    instance, _ = plugin
+def test_every_label_in_the_vocabulary_survives_the_field(plugin):
+    """The whole vocabulary, not one label chosen as the longest.
+
+    The field is 16 bytes, so the headroom over "FLIGHT PLAN" is four
+    characters rather than fifty -- and ``labels.txt`` is meant to be edited by
+    users, who add a label whenever somebody finds a softkey nobody had
+    listed. Naming the longest label in an assertion pins today's answer; this
+    walks the file, so a label that outgrows the field fails here instead of
+    reaching a Stream Deck truncated. The width comes from the buffer the
+    plugin allocated, not a literal, because that is the thing a label has to
+    fit through.
+    """
+    from glasslinkxp.config import OcrConfig
+    from glasslinkxp.ocr import parse_labels
     from glasslinkxp.publish import encode_field
 
-    assert all(len(buffer) == 64 for buffer in instance.buffers.values())
+    instance, _ = plugin
     name = "glasslinkxp/softkey/pfd/1"
-    longest = "FLIGHT PLAN"
-    instance.write_data(name, encode_field(longest, 64), 0, 64)
-    assert bytes(instance.buffers[name]).rstrip(b"\x00").decode() == longest
+    width = len(instance.buffers[name])
+
+    labels = parse_labels(Path(OcrConfig().labels_file).read_text(encoding="utf-8"))
+    assert labels, "the vocabulary should not be empty"
+    for label in labels:
+        instance.write_data(name, encode_field(label, width), 0, width)
+        assert bytes(instance.buffers[name]).rstrip(b"\x00").decode() == label, (
+            f"{label!r} does not survive a {width}-byte field"
+        )
 
 
 def test_int_datarefs_round_trip_and_ignore_junk(plugin):
@@ -116,10 +134,10 @@ def test_int_datarefs_round_trip_and_ignore_junk(plugin):
 def test_read_and_write_round_trip(plugin):
     instance, _ = plugin
     name = "glasslinkxp/softkey/pfd/1"
-    instance.write_data(name, b"INSET" + b"\x00" * 59, 0, 64)
-    assert instance.read_data(name, None, 0, 64) == 64
-    out = bytearray(64)
-    assert instance.read_data(name, out, 0, 64) == 64
+    instance.write_data(name, b"INSET" + b"\x00" * 11, 0, 16)
+    assert instance.read_data(name, None, 0, 16) == 16
+    out = bytearray(16)
+    assert instance.read_data(name, out, 0, 16) == 16
     assert bytes(out).rstrip(b"\x00") == b"INSET"
 
 
@@ -127,9 +145,9 @@ def test_write_is_bounded(plugin):
     instance, _ = plugin
     name = "glasslinkxp/softkey/mfd/3"
     instance.write_data(name, b"X" * 256, 0, 256)
-    assert len(instance.buffers[name]) == 64
+    assert len(instance.buffers[name]) == 16
     instance.write_data(name, b"Y", 999, 1)  # past the end: ignored
-    assert len(instance.buffers[name]) == 64
+    assert len(instance.buffers[name]) == 16
     instance.write_data("glasslinkxp/softkey/none", b"Z", 0, 1)  # unknown: ignored
 
 

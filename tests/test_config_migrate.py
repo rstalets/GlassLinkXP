@@ -130,7 +130,7 @@ def test_an_older_config_migrates_and_still_loads(tmp_path, capsys):
     assert config.loop_hz == 12.0, "the user's own value survives"
     assert config.display("pfd").window_title == "MY OWN PFD"
     assert config.display("pfd").geometry.x == 0.031
-    assert config.publish.field_width == 64, "a section it never had is filled in"
+    assert config.publish.field_width == 16, "a section it never had is filled in"
     assert "retired_setting" not in tomllib.loads(path.read_text(encoding="utf-8"))["app"]
     assert (tmp_path / "config.toml.bak").is_file(), "the previous file is kept"
 

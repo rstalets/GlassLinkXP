@@ -439,7 +439,13 @@ have **never been executed**:
   `writeInt` per the XPPython3 documentation and the round trip is tested
   against the stubbed SDK, but no X-Plane has created one.
 * **End-to-end latency to a Stream Deck face** and the effect on sim frame
-  rate.
+  rate. This includes **what the label field width costs on the deck**. The
+  field went 16 -> 64 -> 16; both the reasoning for widening it (a wider field
+  costs nothing but plugin memory) and the report that reversed it (at `:s64`
+  the buttons updated visibly more slowly and an empty field rendered as `0`)
+  are about PilotsDeck's own read path, which nothing here can run. What *is*
+  checked offline is that 16 is wide enough: `tests/test_plugin.py` walks every
+  label in `labels.txt` through `encode_field` at the plugin's `FIELD_WIDTH`.
 * **The GUI on Windows.** It is plain Tk and was exercised under Xvfb on
   Linux, but nothing here has opened it on Windows. `pythonw.exe` launching
   it without a console, `CREATE_NEW_PROCESS_GROUP` + `CTRL_BREAK_EVENT` as

@@ -77,10 +77,17 @@ For PFD softkey 1:
 | Field | Value |
 | --- | --- |
 | Command (press) | `sim/GPS/g1000n1_softkey1` |
-| Display value | `glasslinkxp/softkey/pfd/1:s64` |
+| Display value | `glasslinkxp/softkey/pfd/1:s16` |
 
-`:s64` is PilotsDeck's string-dataref address syntax: read 64 bytes as a
+`:s16` is PilotsDeck's string-dataref address syntax: read 16 bytes as a
 NUL-terminated string.
+
+> **Upgrading from a release that used `:s64`?** The label fields are 16 bytes
+> again. Re-address every button from `:s64` to `:s16`, and -- because the
+> installer keeps your `config.toml` rather than replacing it -- check that
+> `field_width` under `[publish]` says `16` (Settings tab, *Label field width*).
+> The plugin, the daemon and the button address all have to agree, and X-Plane
+> has to be restarted for the new plugin width to take effect.
 
 > **Upgrading from the old `g1000-softkey` release?** The datarefs were renamed
 > along with the project: `g1000/softkey/...` is now `glasslinkxp/softkey/...`.

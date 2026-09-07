@@ -5,8 +5,8 @@ colour of the cell each label sits on.
     glasslinkxp/softkey/mfd/1 .. 12        MFD         (sim/GPS/g1000n3_softkeyN)
     glasslinkxp/softkey/<display>/N/bg     int: 0 black, 1 white, 2 yellow, 3 red
 
-Each label is a fixed 64-byte, NUL-padded UTF-8 field, so PilotsDeck reads it
-as ``glasslinkxp/softkey/pfd/1:s64``. The ``/bg`` datarefs are Int, not byte arrays:
+Each label is a fixed 16-byte, NUL-padded UTF-8 field, so PilotsDeck reads it
+as ``glasslinkxp/softkey/pfd/1:s16``. The ``/bg`` datarefs are Int, not byte arrays:
 X-Plane types a dataref at registration, and a Stream Deck plugin choosing an
 image by value wants a number, not the string "2".
 
@@ -14,10 +14,16 @@ FIELD_WIDTH is one of three places the label width is fixed -- the others are
 ``publish.field_width`` in the daemon's config and the ``:sNN`` suffix on
 every PilotsDeck button. All three have to agree, and changing this one needs
 an X-Plane restart, because the buffer is allocated when the accessor is
-registered. Hence 64 rather than a snug fit: the longest label in labels.txt
-is "FLIGHT PLAN" at 11 characters, which left the original 16-byte field four
-characters of headroom for a vocabulary that grows whenever somebody finds a
-softkey nobody had listed. 64 bytes across all 24 fields is about 1.5 KB.
+registered.
+
+16, not 64. The field was widened to 64 on the theory that a wider field cost
+nothing but plugin memory, so it may as well be set generously once rather
+than tuned. That theory was never measured, and a live deck disagreed with it:
+at ``:s64`` the buttons updated visibly more slowly and an empty field
+sometimes rendered as "0". 15 usable bytes is enough with room to spare -- the
+longest label in labels.txt is "FLIGHT PLAN" at 11 characters -- and
+``tests/test_plugin.py`` checks the whole vocabulary against this constant, so
+a label too long to fit fails a test rather than reaching a button truncated.
 
 The plugin deliberately does no OCR and no capture -- X-Plane calls its
 flight loop inline with the sim, so anything expensive here costs frame rate.
@@ -31,7 +37,7 @@ Install: copy this file to  <X-Plane>/Resources/plugins/PythonPlugins/
 
 Note: XPPython3 also ships a higher-level ``datarefs.create_dataref(name,
 'string')`` helper. The low-level accessor is used here because it pins the
-field to exactly FIELD_WIDTH bytes, which is what the ':s64' address depends
+field to exactly FIELD_WIDTH bytes, which is what the ':s16' address depends
 on.
 
 Standard library and the XPPython3 API only: this runs inside XPPython3's own
@@ -42,7 +48,7 @@ from XPPython3 import xp
 
 DISPLAYS = ("pfd", "mfd")
 CELLS = 12
-FIELD_WIDTH = 64
+FIELD_WIDTH = 16
 
 
 class PythonInterface:
