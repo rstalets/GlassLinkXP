@@ -64,10 +64,8 @@ size = [1280, 960]
 # RealSimGear G1000 unit for instance, where its size and position are part of
 # a physical setup and are not this daemon's to change.
 #
-# This is the only place a pop-out's size is set. [display.<name>] used to
-# carry manage_window_size and window_size as well, and two settings fixing one
-# window's size is one more than can be true at once; they are gone, and a file
-# still carrying either is warned about by name on load.
+# This is the only place a pop-out's size is set, and the only thing in the
+# daemon that moves a window at all.
 
 # --- displays --------------------------------------------------------------
 # One section per captured window. `key` is the table name and also the

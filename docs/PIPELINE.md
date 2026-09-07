@@ -124,14 +124,11 @@ flying, since the main view is normally full-screen and a pop-out is not.
 for. A display configured under any other name is left entirely alone, and
 captured however the user has arranged it.
 
-**And nothing else sizes a window at all.** `[display.<name>]` used to carry
-`manage_window_size` and `window_size`, which meant a rule about which setting
-won -- and the rule was that the per-display pair was not consulted for a
-display this handles. A setting that is quietly not consulted is worse than a
-setting that is gone: the Settings form still drew a tickbox for it, and
-ticking it did nothing at all. So the pair went rather than the rule, and with
-it the parameter `capture.sources_for` took to keep the two apart. Opening a
-capture now neither sizes nor moves anything, for any display.
+**And nothing else sizes or moves a window at all.** Opening a capture finds
+its window and leaves it exactly as it is, for every display. Do not add a
+per-display size beside this one: two settings fixing one window's size needs a
+rule about which of them wins, and whichever loses is then a setting that is
+quietly ignored rather than one that does what it says.
 
 **A closed window is a signal, not something to poll for.** Windows Graphics
 Capture calls `on_closed` when the window it was capturing goes away, so the

@@ -74,11 +74,10 @@ def test_windows_only_entry_points_fail_cleanly():
 
 # -- who is allowed to size a window ----------------------------------------
 #
-# Exactly one thing: window management. Opening a capture used to size the
-# window too, from a per-display setting, so `sources_for` took the set of
-# displays window management had already handled in order to leave those
-# alone -- a parameter whose only job was to keep two settings from sizing one
-# window. Both it and the settings are gone, and this is what says so.
+# Exactly one thing: window management, through `place_window`. Opening a
+# capture finds its window and changes nothing about it, for every display --
+# which is what makes "only one thing sizes a window" true rather than a rule
+# about which of two settings wins.
 
 
 class _Recorder:
@@ -113,18 +112,6 @@ def test_opening_a_capture_says_nothing_about_size(recorded):
     )
 
     assert recorded == [("G1000 PFD", {}), ("G1000 MFD", {})]
-
-
-def test_nothing_in_the_capture_layer_can_resize_a_window():
-    """`resize_window` went with the setting that was its only caller.
-
-    Placing a pop-out is window management's, through `place_window`, and one
-    way to do a thing is easier to keep right than two.
-    """
-    from g1000_softkey import capture
-
-    assert not hasattr(capture, "resize_window")
-    assert hasattr(capture, "place_window")
 
 
 # -- the frame slot, and the window that goes away --------------------------

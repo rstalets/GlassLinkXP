@@ -210,17 +210,6 @@ class ColorConfig:
             raise ConfigError("color.yellow_hue_min must not exceed color.yellow_hue_max")
 
 
-#: Per-display settings that used to size a pop-out, and no longer exist.
-#:
-#: ``[window_management]`` does that now, for both displays at once, and while
-#: both existed there had to be a rule about which of them won -- with the
-#: answer, for a window management handled, being "the per-display one is not
-#: consulted". A setting that is quietly not consulted is worse than a setting
-#: that is gone: the form still showed a tickbox, and ticking it did nothing.
-#: A config file still carrying either is warned about by name.
-RETIRED_DISPLAY_KEYS = ("manage_window_size", "window_size")
-
-
 #: What a G1000 pop-out is sized to when the configured size cannot be used.
 #: 4:3, and large enough that the 1024x768 display texture is not downsampled
 #: before capture sees it.
@@ -243,10 +232,10 @@ class WindowManagementConfig:
     without also sizing and placing it just moves the manual step. Turn the
     whole thing off to manage the windows yourself.
 
-    This is the only thing in the daemon that sizes a pop-out. There was a
-    per-display pair of settings that did it too, and having both meant a rule
-    about which one won -- so the pair went rather than the rule; see
-    :data:`RETIRED_DISPLAY_KEYS`.
+    This is the only thing in the daemon that sizes or moves a window. Do not
+    add a per-display size beside it: two settings fixing one window's size
+    needs a rule about which of them wins, and the loser is then a setting that
+    is quietly ignored rather than one that does what it says.
     """
 
     enabled: bool = True
@@ -423,18 +412,6 @@ def from_mapping(raw: Mapping[str, Any], base_dir: Path | None = None) -> AppCon
         entry.pop("geometry", None)
         entry["key"] = key
         entry["geometry"] = geometry
-        for name in [k for k in RETIRED_DISPLAY_KEYS if k in entry]:
-            # Named rather than swept up by _build's "ignoring unknown keys":
-            # somebody who set these meant the daemon to size their pop-out,
-            # and being told the key is unknown does not tell them that it
-            # still will, from somewhere else.
-            LOG.warning(
-                "[display.%s] %s is no longer a setting -- sizing the pop-outs moved to "
-                "[window_management], which is on by default and sizes pfd and mfd "
-                "together. Delete the line; the size is window_management.size.",
-                key, name,
-            )
-            entry.pop(name)
         displays.append(_build(DisplayConfig, entry))
 
     config = AppConfig(

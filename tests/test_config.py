@@ -4,7 +4,6 @@ from g1000_softkey.config import (
     AppConfig,
     ConfigError,
     ConfigNotFound,
-    DisplayConfig,
     PublishConfig,
     StripGeometry,
     default_config,
@@ -92,50 +91,6 @@ def test_from_mapping_overrides_and_disabled_displays():
 def test_bad_loop_rate():
     with pytest.raises(ConfigError):
         from_mapping({"app": {"loop_hz": 0}})
-
-
-# ---------------------------------------------------------------------------
-# The per-display sizing settings, now retired
-# ---------------------------------------------------------------------------
-#
-# [display.<name>] used to carry manage_window_size and window_size, and while
-# they and [window_management] both existed there had to be a rule about which
-# of them sized a pop-out. The rule was "the per-display one is not consulted
-# for a display window management handles", which is a setting that is quietly
-# ignored -- the form drew a tickbox that did nothing. The pair went instead.
-
-
-@pytest.mark.parametrize("line", [
-    "manage_window_size = true",
-    "window_size = [1400, 1000]",
-])
-def test_a_retired_display_setting_is_named_rather_than_lumped_in_with_typos(
-    tmp_path, caplog, line
-):
-    """Somebody who set these meant the daemon to size their pop-out.
-
-    "ignoring unknown keys" would be true and useless: it does not say that
-    the daemon still sizes the window, from somewhere else. So the warning
-    names the key and where its job went.
-    """
-    path = tmp_path / "config.toml"
-    path.write_text(f'[display.pfd]\nwindow_title = "G1000 PFD"\n{line}\n',
-                    encoding="utf-8")
-
-    with caplog.at_level("WARNING"):
-        config = load_config(path)
-
-    assert "window_management" in caplog.text
-    assert line.split(" =")[0] in caplog.text
-    # And it still loads: an old config file is not a broken one.
-    assert config.display("pfd").window_title == "G1000 PFD"
-
-
-@pytest.mark.parametrize("name", ["manage_window_size", "window_size"])
-def test_the_retired_settings_are_gone_from_the_display(name):
-    from dataclasses import fields
-
-    assert name not in {f.name for f in fields(DisplayConfig)}
 
 
 def test_the_field_width_agrees_with_the_plugin():
