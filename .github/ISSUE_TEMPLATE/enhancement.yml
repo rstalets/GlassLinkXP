@@ -2,6 +2,16 @@ name: Enhancement
 description: Suggest something GlassLinkXP should do, or do differently.
 labels: ["enhancement"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        This form is for a concrete change you want made. If you are still
+        working out what you want -- an idea to sound out, a question about
+        whether something is already possible, or a "would this even make
+        sense?" -- start it in
+        [Discussions](https://github.com/rstalets/GlassLinkXP/discussions/new/choose)
+        instead, and open an enhancement once it has a shape.
+
   - type: textarea
     id: problem
     attributes:

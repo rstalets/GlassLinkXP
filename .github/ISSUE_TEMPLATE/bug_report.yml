@@ -5,6 +5,17 @@ body:
   - type: markdown
     attributes:
       value: |
+        **Not sure it is a bug?** If this is a question -- "is it meant to do
+        this", "has anyone got it working with X", "what would it take to..." --
+        or something you would rather talk through than file, use
+        [Discussions](https://github.com/rstalets/GlassLinkXP/discussions/new/choose)
+        instead. Nothing is lost by starting there: a discussion that turns out
+        to be a real bug can be turned into an issue afterwards, with the answers
+        already in it.
+
+  - type: markdown
+    attributes:
+      value: |
         Thanks for taking the time. One thing worth knowing before you fill this in:
 
         **the screen is the only source of truth here**, and it is a small,
