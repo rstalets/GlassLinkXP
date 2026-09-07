@@ -6,9 +6,7 @@ from g1000_softkey.config import OcrConfig, StripGeometry
 from g1000_softkey.ocr import (
     CellResult,
     LabelVocabulary,
-    OcrUnavailable,
     SoftkeyReader,
-    create_engine,
     normalise,
     resolve_tessdata,
 )
@@ -52,11 +50,6 @@ def test_normalise_applies_whitelist():
 def test_vocabulary_missing_file():
     with pytest.raises(FileNotFoundError):
         LabelVocabulary.from_file("/nonexistent/labels.txt")
-
-
-def test_unknown_engine_is_a_clean_error():
-    with pytest.raises(OcrUnavailable):
-        create_engine(OcrConfig(engine="nonsense"))
 
 
 def test_resolve_tessdata_prefers_the_configured_path(tmp_path):

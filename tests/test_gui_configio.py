@@ -43,7 +43,7 @@ def test_a_thoroughly_non_default_config_round_trips(tmp_path):
             ),
         ),
         ocr=OcrConfig(
-            engine="pytesseract", lang="deu", tessdata_path="/opt/tess data",
+            lang="deu", tessdata_path="/opt/tess data",
             psm=10, whitelist="ABC/-\\", upscale=6.5,
             sharpen_ladder=((0.0, 0.0), (0.9, 1.7)), threshold="adaptive",
             accept_confidence=55.0, screen_confidence=44.0,

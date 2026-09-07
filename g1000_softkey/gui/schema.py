@@ -156,10 +156,6 @@ OCR = Group(
     "tall, so most of this is about giving Tesseract a fair chance at them -- and about "
     "not trusting it too far when it fails.",
     (
-        Setting("engine", "choice", "Engine",
-                "auto prefers tesserocr, which keeps one Tesseract instance alive. "
-                "pytesseract shells out per cell and is roughly ten times slower.",
-                choices=("auto", "tesserocr", "pytesseract")),
         Setting("lang", "text", "Language", "Tesseract language data to use."),
         Setting("tessdata_path", "path", "Tessdata folder",
                 "The folder holding eng.traineddata. Leave empty to let Tesseract find "

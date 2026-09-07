@@ -84,7 +84,6 @@ cell_pad_y = 0.12
 
 # --- OCR -------------------------------------------------------------------
 [ocr]
-engine = "auto"          # auto | tesserocr | pytesseract  (auto prefers tesserocr)
 lang = "eng"
 psm = 7                  # single text line
 whitelist = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -/"

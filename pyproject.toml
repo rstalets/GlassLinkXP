@@ -1,0 +1,95 @@
+[project]
+name = "g1000-softkey"
+version = "0.1.0"
+description = "Read the G1000 softkey labels off the screen and publish them as X-Plane datarefs"
+requires-python = "==3.12.*"
+
+dependencies = [
+    "numpy>=1.24,<3",
+    "Pillow>=10,<13",
+    "requests>=2.31,<3",
+    # One WebSocket message per cycle instead of one HTTP PATCH per changed
+    # cell. Pure-Python wheel, no build step.
+    "websocket-client>=1.7,<2",
+    # The GUI writes config.toml; tomllib reads TOML and does not write it.
+    "tomli-w>=1.0,<2",
+
+    # The production OCR path: a direct C++ binding, so the Tesseract API
+    # object is created once and reused. There is still no tesserocr wheel on
+    # PyPI for Windows -- see [tool.uv.sources] for where the Windows one
+    # comes from.
+    "tesserocr>=2.6,<3",
+
+    # OpenCV, split by platform on purpose. `windows-capture` declares a hard
+    # dependency on `opencv-python` (the full build) in every version, 1.x and
+    # 2.x alike. Asking for the headless build on Windows too would install
+    # *both*, and they share the `cv2` namespace -- whichever wins import
+    # order decides behaviour. So Windows takes the full build that
+    # windows-capture forces anyway, and everywhere else takes headless, which
+    # is what avoids needing libGL in a container.
+    "opencv-python>=4.8,<6 ; sys_platform == 'win32'",
+    "opencv-python-headless>=4.8,<6 ; sys_platform != 'win32'",
+
+    # Windows Graphics Capture: captures occluded/background windows, which
+    # BitBlt and PrintWindow cannot do for X-Plane's GPU-composited windows.
+    # Upper bound is real, not defensive: capture.py was written against the
+    # 1.x API and has never been executed. The `WindowsCapture` constructor
+    # signature it calls is unchanged in 2.0.x, but `frame.frame_buffer` and
+    # `capture.start_free_threaded()` are not in the current 2.x examples, so
+    # 2.x is unverified rather than known-bad. Raise this once someone has run
+    # capture against a live X-Plane.
+    "windows-capture>=1.3,<2 ; sys_platform == 'win32'",
+]
+
+# A PEP 735 group, not an optional extra: `uv sync` installs it by default,
+# so the installer's smoke-test step finds pytest without a second flag.
+# `uv sync --no-dev` gets a runtime-only environment.
+[dependency-groups]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+g1000 = "g1000_softkey.main:main"
+
+# ---------------------------------------------------------------------------
+# uv
+# ---------------------------------------------------------------------------
+
+[tool.uv]
+# Windows is the only supported target; Linux is here because the whole
+# pipeline is developed and tested offline against PNG frames, and the test
+# suite is this project's strongest asset. Listing both keeps one lockfile
+# valid on the target machine and on a dev container, and keeps the lock far
+# smaller than a universal resolution.
+environments = [
+    "sys_platform == 'win32'",
+    "sys_platform == 'linux'",
+]
+# Never silently fall back to a system interpreter: the point of pinning
+# .python-version is that the interpreter is as pinned as the dependencies.
+python-preference = "only-managed"
+
+[tool.uv.sources]
+# There is no tesserocr wheel on PyPI for Windows and there never has been --
+# confirmed against the 2.11.0 file list, which carries manylinux, musllinux
+# and macOS only. This wheel is the prebuilt one, and it bundles Tesseract
+# 5.5.2 and Leptonica 1.87.0, so no separate Tesseract installation is needed.
+#
+# `uv lock` downloads it, hashes it, and records the digest in uv.lock; `uv
+# sync` verifies every download against that digest and fails closed. Nothing
+# is vendored -- the repository holds a pinned URL and a hash, not a binary.
+#
+# Recording the digest on first lock is trust-on-first-use: it defends against
+# later substitution, not against a bad artefact on day one. The day-one check
+# was done once by hand and its result is in the commit that added this file.
+# Repeat that inspection when this pin moves; do not bump it blind.
+tesserocr = { url = "https://github.com/simonflueckiger/tesserocr-windows_build/releases/download/tesserocr-v2.10.0-tesseract-5.5.2/tesserocr-2.10.0-cp312-cp312-win_amd64.whl", marker = "sys_platform == 'win32'" }
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["g1000_softkey", "g1000_softkey.gui"]
+
+[tool.setuptools.package-data]
+g1000_softkey = ["labels.txt", "screens.toml"]
