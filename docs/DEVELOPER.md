@@ -149,6 +149,27 @@ if that hash has been pruned).
   `docs/CONFIGURATION.md` for the full reference, generated from the same
   text the GUI's Settings tab shows beside each field.
 
+### What `tune` prefers, and why it may not hand you a ladder
+
+Candidates are ranked on, in order: how many previously-wrong cells they fix;
+how many of `psm`, `threshold` and `upscale` they leave **unchanged**; then how
+short the ladder is; then confidence. A candidate that breaks a cell which
+already read correctly is refused outright, whatever it fixes.
+
+The middle two used to be the other way round, on the reasoning that a longer
+ladder costs an extra OCR call on every cell of every frame. It does not:
+`read_best` stops at the first variant that lands on a known label
+confidently, so a rung is only ever paid for by a cell that already failed --
+across the offline corpus, the two extra rungs cost no OCR calls at all.
+Changing `psm` is not like that. It changes what Tesseract is asked for every
+cell of every frame, including every cell that is not in the truth file and
+whose reading therefore moved without being measured.
+
+So if `tune` reports `psm = 10` and a bare `sharpen_ladder = [[0.0, 0.0]]`, it
+now also says whether a ladder alone would have done the job, and by how much.
+"No ladder was suggested" and "no ladder helped" are different answers and the
+report distinguishes them.
+
 ### If a label reads as garbage after a good-looking calibration
 
 Check `run -v` for `POLARITY read the wrong way up`, and check that the

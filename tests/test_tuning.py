@@ -274,3 +274,119 @@ def test_a_cell_only_the_opposite_polarity_can_read_is_not_reported_as_hopeless(
     assert result.baseline.outcomes[0].ok, "the fallback is part of the baseline, not a candidate"
     report = format_report(result)
     assert "nothing to fix" in report
+
+
+def test_adding_a_rung_beats_changing_psm_when_both_fix_the_same_cell():
+    """The least invasive fix has to be able to win, not merely be reachable.
+
+    ``run_tuning`` calls "just add a rung, change nothing else" the least
+    invasive fix and searches the base's own settings so it is reachable. It
+    could not win: the ranking put ladder length above keeping the base
+    settings, so a one-rung candidate at a different psm outranked the base
+    psm with a rung added, every time they fixed the same number of cells.
+
+    Which is backwards. A rung is paid for only by a cell that already failed
+    -- ``read_best`` stops at the first confident exact hit -- while a changed
+    psm is paid for by every cell of every frame, including all the ones
+    nobody put in the truth file.
+    """
+    script = {}
+
+    def factory(_base):
+        def evaluate(cell, psm, method, upscale, amount, radius, polarity="auto"):
+            if polarity != "auto":
+                return CellResult(index=0, text="", raw="", confidence=0.0)
+            # The cell reads at the base psm with a rung, and also at psm 10
+            # with no rung at all. Both fix exactly one cell, neither regresses.
+            hit = (psm == 7 and (amount, radius) == (0.5, 1.0)) or (psm == 10 and amount == 0.0)
+            if hit:
+                return CellResult(index=0, text="0", raw="0", confidence=95.0, match_score=1.0)
+            return CellResult(index=0, text="", raw="", confidence=0.0)
+        return evaluate, (lambda: None)
+
+    result = run_tuning(
+        [TuningCase(label="page", dir=Path("."), display="pfd", expect={1: "0"})],
+        OcrConfig(psm=7),
+        evaluator_factory=factory,
+        psms=(7, 10), methods=("otsu",), upscales=(4.0,),
+        rungs=((0.5, 1.0),), max_extra_rungs=1,
+    )
+
+    assert result.best.fixed == 1
+    assert result.best.candidate.psm == 7, "the base's own psm should have been kept"
+    assert (0.5, 1.0) in result.best.candidate.ladder
+    assert result.best_ladder_only is None, "the winner already changes nothing else"
+
+
+def test_the_report_says_why_it_changed_a_global_setting_instead_of_adding_a_rung():
+    """A user who expected a ladder and got `psm = 10` should not have to guess
+    whether a ladder existed and lost, or never existed at all."""
+    def factory(_base):
+        def evaluate(cell, psm, method, upscale, amount, radius, polarity="auto"):
+            # Only psm 10 reads it. No ladder at the base psm can help.
+            if polarity == "auto" and psm == 10:
+                return CellResult(index=0, text="0", raw="0", confidence=95.0, match_score=1.0)
+            return CellResult(index=0, text="", raw="", confidence=0.0)
+        return evaluate, (lambda: None)
+
+    result = run_tuning(
+        [TuningCase(label="page", dir=Path("."), display="pfd", expect={1: "0"})],
+        OcrConfig(psm=7),
+        evaluator_factory=factory,
+        psms=(7, 10), methods=("otsu",), upscales=(4.0,),
+        rungs=((0.5, 1.0),), max_extra_rungs=1,
+    )
+
+    assert result.best.candidate.psm == 10
+    report = format_report(result)
+    assert "applies to every cell of every frame" in report
+    assert "there was no rung" in report
+
+
+def test_a_cell_whose_crop_is_cutting_the_glyph_is_named_as_such():
+    """"The crop is wrong" and "the glyph is too small" had one verdict between
+    them, and it was the second one, unconditionally.
+
+    Ink in the outermost pixels of a crop is the one thing this search cannot
+    do anything about -- no psm, threshold, upscale or rung puts back a stroke
+    the crop cut off. Measured from the raw image, which the search has
+    already loaded, and reported against the cells that stayed wrong so the
+    next thing somebody tries is the calibration rather than another rung.
+    """
+    import numpy as np
+
+    from glasslinkxp import tuning
+
+    # A cell with ink hard against both side edges, and one with ink nowhere
+    # near them. Neither reads, under anything.
+    cut = np.zeros((20, 40), dtype=np.uint8)
+    cut[8:12, :] = 255
+    clean = np.zeros((20, 40), dtype=np.uint8)
+    clean[8:12, 18:22] = 255
+    images = {1: cut, 2: clean}
+
+    def factory(_base):
+        def evaluate(*_args, **_kwargs):
+            return CellResult(index=0, text="", raw="", confidence=0.0)
+        return evaluate, (lambda: None)
+
+    original = tuning.cell_image
+    tuning.cell_image = lambda case, cell: images[cell]
+    try:
+        result = run_tuning(
+            [TuningCase(label="page", dir=Path("."), display="pfd",
+                        expect={1: "CHKLIST", 2: "0"})],
+            OcrConfig(),
+            evaluator_factory=factory,
+            psms=(7,), methods=("otsu",), upscales=(4.0,), rungs=(), max_extra_rungs=0,
+        )
+    finally:
+        tuning.cell_image = original
+
+    assert result.clipped[(0, 1)] == ("left", "right")
+    assert result.clipped[(0, 2)] == ()
+
+    report = format_report(result)
+    assert "INK TOUCHES left,right" in report
+    assert "before tuning anything else" in report
+    assert "*_prep.png" in report, "the cell that is not clipped gets the other advice"

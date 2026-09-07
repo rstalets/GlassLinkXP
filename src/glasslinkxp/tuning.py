@@ -26,7 +26,7 @@ re-running Tesseract for each one.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Sequence
 
@@ -34,7 +34,7 @@ import numpy as np
 
 from .config import OcrConfig
 from .ocr import CellResult, OcrUnavailable, SoftkeyReader, TesserocrEngine
-from .strip import preprocess_cell
+from .strip import measure_ink, preprocess_cell
 
 LOG = logging.getLogger(__name__)
 
@@ -280,6 +280,26 @@ class TuningResult:
     baseline: CandidateScore
     best: CandidateScore
     candidates_tried: int
+    #: The best candidate that changed *nothing but the ladder*, when that is
+    #: not the winner. Reported so the answer to "why is it telling me to
+    #: change psm instead of giving me a ladder?" is in the output rather than
+    #: in somebody's head: either there was no ladder that did the job, or
+    #: there was one and it fixed fewer cells, and those are different
+    #: answers.
+    best_ladder_only: CandidateScore | None = None
+    #: (case, cell) -> which edges of that raw crop the ink touches.
+    #:
+    #: A property of the picture, not of any candidate, and the one thing this
+    #: search cannot fix: no psm, threshold, upscale or rung removes a mark
+    #: the crop should never have contained. Measured once and reported
+    #: against the cells that stayed wrong, because the advice those lines
+    #: used to carry -- "the glyph may be too small, use a larger pop-out" --
+    #: is the wrong advice for a cell whose real problem is that its crop is
+    #: catching the divider next to it. A lone digit is where that shows
+    #: first: a word absorbs a stray mark at its edge into its own bounding
+    #: box, while a digit sits in the middle of a wide cell and leaves the
+    #: mark as a separate blob, which is how a "0" comes back as "/ 8".
+    clipped: dict[tuple[int, int], tuple[str, ...]] = field(default_factory=dict)
 
 
 def _variants(
@@ -329,13 +349,42 @@ def _score(
     return CandidateScore(candidate=candidate, outcomes=outcomes, fixed=fixed, regressed=regressed)
 
 
-def _rank_key(score: CandidateScore, base: OcrConfig) -> tuple:
-    c = score.candidate
-    unchanged = (
-        int(c.psm == base.psm) + int(c.method == base.threshold) + int(c.upscale == base.upscale)
+def _unchanged(candidate: Candidate, base: OcrConfig) -> int:
+    """How many of the base's psm / threshold / upscale this candidate keeps."""
+    return (
+        int(candidate.psm == base.psm)
+        + int(candidate.method == base.threshold)
+        + int(candidate.upscale == base.upscale)
     )
+
+
+def _rank_key(score: CandidateScore, base: OcrConfig) -> tuple:
+    """Fixes first, then the least invasive way of getting them.
+
+    ``unchanged`` outranks ladder length, and the order of those two is the
+    whole of what this function decides. It used to be the other way round,
+    on the reasoning that "a longer ladder costs an extra OCR call, on every
+    cell, on every frame". That reasoning is wrong, and measurably so:
+    ``read_best`` stops at the first variant that lands on a known label
+    confidently, so a rung is only ever paid for by a cell that already
+    failed. Across the offline corpus, adding two rungs to the mandatory one
+    costs *no* extra OCR calls at all -- every cell that reads stops at the
+    first.
+
+    Changing ``psm``, ``threshold`` or ``upscale`` is not like that. It
+    changes what Tesseract is asked, for every cell of every frame, including
+    every cell nobody put in a truth file and whose reading therefore moved
+    without being measured. Twenty-nine labelled cells is a good truth set and
+    it is still not the whole G1000.
+
+    So preferring a shorter ladder over the base's own settings had the tuner
+    recommending a global change where "add a rung, change nothing else" would
+    have done -- which ``run_tuning`` already calls "the least invasive fix",
+    and which could never win the ranking that was supposed to deliver it.
+    """
     confidence = sum(o.confidence for o in score.outcomes if o.ok)
-    return (score.fixed, -len(c.ladder), unchanged, confidence)
+    return (score.fixed, _unchanged(score.candidate, base), -len(score.candidate.ladder),
+            confidence)
 
 
 def run_tuning(
@@ -375,6 +424,10 @@ def run_tuning(
     search_polarities = ("auto", "opposite")
 
     images = {(cid.case, cid.cell): cell_image(cases[cid.case], cid.cell) for cid in cell_ids}
+    clipped = {
+        key: measure_ink(image, base.blank_contrast).clipped_edges()
+        for key, image in images.items()
+    }
 
     cache: dict[tuple, CellResult] = {}
     total_settings = len(search_psms) * len(search_methods) * len(search_upscales)
@@ -409,6 +462,11 @@ def run_tuning(
                                     fixed=0, regressed=0)
 
     best = baseline_score
+    # Tracked alongside, restricted to candidates that change nothing but the
+    # ladder. When the winner *is* one of these it is the same object and the
+    # report says nothing; when it is not, the difference is the answer to
+    # "why am I being told to change psm instead of given a ladder?".
+    best_ladder_only = baseline_score
     tried = 0
     for psm in search_psms:
         for method in search_methods:
@@ -424,11 +482,18 @@ def run_tuning(
                         continue
                     if _rank_key(score, base) > _rank_key(best, base):
                         best = score
+                    if (_unchanged(candidate, base) == 3
+                            and _rank_key(score, base) > _rank_key(best_ladder_only, base)):
+                        best_ladder_only = score
     if progress:
         progress(f"compared {tried} candidate ladders")
 
-    return TuningResult(cases=list(cases), base=base, baseline=baseline_score, best=best,
-                        candidates_tried=tried)
+    return TuningResult(
+        cases=list(cases), base=base, baseline=baseline_score, best=best,
+        candidates_tried=tried,
+        best_ladder_only=None if best_ladder_only is best else best_ladder_only,
+        clipped=clipped,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -490,22 +555,70 @@ def format_report(result: TuningResult) -> str:
         )
         still_wrong = [o for o in best.outcomes if not o.ok]
         for outcome in still_wrong:
+            edges = result.clipped.get((outcome.cell_id.case, outcome.cell_id.cell), ())
+            touching = f"  INK TOUCHES {','.join(edges)}" if edges else ""
             lines.append(
                 f"    STILL WRONG  {outcome.case_label} cell {outcome.cell_id.cell:2d}: "
                 f"expected {outcome.cell_id.expected!r}, got {outcome.text!r} "
-                f"(raw {outcome.raw!r}, conf {outcome.confidence:.0f})"
+                f"(raw {outcome.raw!r}, conf {outcome.confidence:.0f}){touching}"
             )
         if still_wrong:
-            lines.append(
-                "\n  These did not come right under any setting tried. The glyph may be too "
-                "small to recover by filtering -- a larger pop-out window helps more than "
-                "another rung."
-            )
+            clipped_wrong = [
+                o for o in still_wrong
+                if result.clipped.get((o.cell_id.case, o.cell_id.cell))
+            ]
+            if clipped_wrong:
+                lines.append(
+                    "\n  The cells marked INK TOUCHES have ink in the outermost pixels of "
+                    "their crop, and nothing in this search can change that: no psm, "
+                    "threshold, upscale or rung removes a mark the crop should not have "
+                    "contained, or puts back a stroke it cut off. Look at their *_raw.png "
+                    "before tuning anything else."
+                )
+            if len(clipped_wrong) < len(still_wrong):
+                lines.append(
+                    "\n  The rest did not come right under any setting tried. Look at their "
+                    "*_prep.png -- that is what Tesseract was actually given, and it is the "
+                    "only thing that says whether the glyph arrived intact. A counter that "
+                    "closes up or a stroke that breaks during thresholding is a different "
+                    "problem from a glyph too small to carry its shape, and they do not have "
+                    "the same fix. Page lookup (screens.toml) exists for the second: the "
+                    "transponder keypad is a fixed layout, so a digit that cannot be "
+                    "recognised can be looked up instead."
+                )
         if best.fixed == 0:
             lines.append(
                 "\n  No candidate improved on the baseline without regressing something else "
                 "that already read correctly -- the settings below are the baseline's own."
             )
+
+        alternative = result.best_ladder_only
+        if alternative is not None and best.fixed:
+            changed = [
+                name for name, mine, theirs in (
+                    ("psm", best.candidate.psm, result.base.psm),
+                    ("threshold", best.candidate.method, result.base.threshold),
+                    ("upscale", best.candidate.upscale, result.base.upscale),
+                )
+                if mine != theirs
+            ]
+            lines.append(
+                f"\n  Note that this changes {' and '.join(changed)}, which applies to every "
+                "cell of every frame -- including the ones not in your truth file, whose "
+                "readings have moved without being measured."
+            )
+            if alternative.fixed:
+                lines.append(
+                    f"    Changing nothing but the ladder, the best is "
+                    f"{_ladder_toml(alternative.candidate.ladder)}, which fixes "
+                    f"{alternative.fixed} of {len(base_wrong)}. Prefer it if that is enough: "
+                    "a rung is only ever paid for by a cell that already failed."
+                )
+            else:
+                lines.append(
+                    "    No ladder on its own fixed anything here, so this is not a case of "
+                    "the search preferring a global change to a rung -- there was no rung."
+                )
 
     lines += ["", "  Settings found (also what the GUI's Save button reads):", ""]
     lines.append(result_block(result.best.candidate))
