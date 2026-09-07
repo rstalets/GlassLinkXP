@@ -440,11 +440,16 @@ def run_tuning(
                     for amount, radius in rung_settings:
                         for polarity in search_polarities:
                             for cid in cell_ids:
+                                result = evaluate(images[(cid.case, cid.cell)], psm, method,
+                                                  upscale, amount, radius, polarity)
+                                # Set here rather than copied per candidate: the
+                                # cache key already includes the polarity, so
+                                # each entry belongs to exactly one arm of the
+                                # ladder and pick_best can rank it as the
+                                # pipeline would.
+                                result.fallback = polarity != "auto"
                                 cache[(cid.case, cid.cell, psm, method, upscale,
-                                       amount, radius, polarity)] = (
-                                    evaluate(images[(cid.case, cid.cell)], psm, method, upscale,
-                                             amount, radius, polarity)
-                                )
+                                       amount, radius, polarity)] = result
                     done_settings += 1
                     if progress:
                         progress(f"evaluated {done_settings}/{total_settings} base settings "

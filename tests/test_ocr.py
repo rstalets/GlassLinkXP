@@ -189,3 +189,57 @@ def test_accept_confidence_of_zero_always_tries_every_rung():
     result = reader.read_best(0, [object(), object()])
     assert result.text == "0"
     assert engine.calls == 2
+
+
+# ---------------------------------------------------------------------------
+# ranking: what an opposite-polarity retry has to show before it wins
+# ---------------------------------------------------------------------------
+
+
+def _result(text, conf, match, fallback=False, variant=0):
+    return CellResult(index=0, text=text, raw=text, confidence=conf,
+                      match_score=match, fallback=fallback, variant=variant)
+
+
+def test_a_retry_that_landed_on_nothing_cannot_outrank_the_chosen_polarity():
+    """A cell that does not read must not have its answer decided by whichever
+    variant produced the most confident garbage.
+
+    Tesseract reads *something* out of an image that is the wrong way up, and
+    reports a confidence for it that means nothing. With six variants instead
+    of three there is more garbage to pick from, and picking it publishes a
+    wrong label *and* makes the debug line blame the polarity for a cell whose
+    polarity was never the problem.
+    """
+    results = [
+        _result("", 0.0, 0.0, variant=0),
+        _result("", 0.0, 0.0, variant=1),
+        _result("", 0.0, 0.0, variant=2),
+        _result("/ 8", 22.0, 0.0, fallback=True, variant=3),
+    ]
+    best = SoftkeyReader.pick_best(iter(results), 80.0)
+    assert best.text == ""
+    assert not best.fallback
+
+
+def test_a_retry_that_landed_on_a_known_label_does_win():
+    """Which is the whole point of the rung: landing on a known label is the
+    only evidence there is that flipping was the right thing to do."""
+    results = [
+        _result("", 0.0, 0.0, variant=0),
+        _result("TERRAI", 31.0, 0.0, variant=1),
+        _result("", 0.0, 0.0, variant=2),
+        _result("TERRAIN", 92.0, 1.0, fallback=True, variant=3),
+    ]
+    best = SoftkeyReader.pick_best(iter(results), 80.0)
+    assert best.text == "TERRAIN"
+    assert best.fallback and best.variant == 3
+
+
+def test_the_chosen_polarity_keeps_a_cell_when_both_arms_only_guess():
+    """Ambiguous means the common case, at this stage as at the ring."""
+    results = [
+        _result("B", 40.0, 0.0, variant=0),
+        _result("R", 71.0, 0.0, fallback=True, variant=1),
+    ]
+    assert SoftkeyReader.pick_best(iter(results), 80.0).text == "B"

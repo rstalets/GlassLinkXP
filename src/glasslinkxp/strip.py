@@ -387,6 +387,48 @@ def ring_bright_fraction(binary: np.ndarray, ring_fraction: float = RING_FRACTIO
     return float(np.mean(ring > 0))
 
 
+#: How bright a cell's ring has to be before it counts as a light background.
+#:
+#: Not the midpoint, and that asymmetry is the point. Light-on-dark is the
+#: rule and a light background is the exception -- a selected key, a caution,
+#: a warning -- so the exception is what has to prove itself, and an ambiguous
+#: ring means black rather than a coin toss. ``color.py`` already works this
+#: way for the same pixels: its ``value_max`` is tested first "so brightness
+#: can only ever push a cell into black".
+#:
+#: Where the number sits, and the limit past which no number works.
+#:
+#: On a roomy crop the two populations are nowhere near each other: over the
+#: 58 non-blank cells of the offline corpus, light-on-dark rings run 0.00-0.08
+#: and light-background rings 0.91-1.00, so anything from about 0.1 to 0.9
+#: separates them equally well and the value is chosen for which way it fails.
+#:
+#: On a tight one they close. A ring band is only clean while the glyph stays
+#: out of it, and nothing keeps it out: a tall glyph reaches the top and
+#: bottom bands, a full-width word reaches the left and right ones, and the
+#: contamination is one-directional -- it lifts a dark cell's fraction and
+#: lowers a light cell's. Rendered words at one geometry, varying only how
+#: much of the cell height the glyph fills:
+#:
+#:     glyph fills 55% of the cell    dark <= 0.09    light >= 0.91
+#:     glyph fills 80%                dark <= 0.77    light >= 0.84
+#:     glyph fills 90%                dark <= 0.67    light >= 0.71
+#:
+#: At 90% they overlap once the light side's own contamination is counted, and
+#: judging each edge band separately and taking the worst does not rescue it
+#: (dark <= 0.59 against light >= 0.56 -- worse, because the light side loses
+#: more). There is no threshold there, on any band or combination of them.
+#:
+#: So this bar is not a fix for a crop that tight, and must not be tuned as
+#: though it were. What it does is decide which way the answer falls while it
+#: is still ambiguous, and it falls to black because black is the rule and a
+#: light background -- a selected key, a caution, a warning -- is the
+#: exception. Past the limit the ring stops being the answer and becomes only
+#: the polarity tried *first*; what settles it there is the vocabulary, via
+#: the opposite-polarity rung and ``SoftkeyReader._rank``.
+LIGHT_BACKGROUND_RING = 0.75
+
+
 def _background_is_white(binary: np.ndarray, ring_fraction: float = RING_FRACTION) -> bool:
     """Is the bright class the background rather than the glyphs?
 
@@ -413,7 +455,7 @@ def _background_is_white(binary: np.ndarray, ring_fraction: float = RING_FRACTIO
     The ring is still only a first choice, not a proof: ``POLARITIES`` gives
     the ladder the other one to fall back to. Do not put the centre test back.
     """
-    return ring_bright_fraction(binary, ring_fraction) > 0.5
+    return ring_bright_fraction(binary, ring_fraction) > LIGHT_BACKGROUND_RING
 
 
 def _crop_to_content(binary: np.ndarray, margin: int = 2) -> np.ndarray:

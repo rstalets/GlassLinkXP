@@ -344,10 +344,42 @@ four or more rows and columns that are more than half bright, which is a box
 and never a row of glyphs), so running it earlier changes nothing for a cell
 that has no frame.
 
-A wide margin is still not a proof, and nothing downstream can undo a wrong
-answer: sharpening, upscaling and the threshold method all leave polarity
-alone, which is why `tune` reports that no candidate helped and hands back the
-defaults -- truthfully, because polarity was not in the space it searched.
+The bar is **0.75, not the midpoint**, and that asymmetry is deliberate:
+light-on-dark is the rule and a light background -- a selected key, a caution,
+a warning -- is the exception, so the exception is what has to prove itself
+and an ambiguous ring means black. `color.py` already works this way on the
+same pixels; its `value_max` is tested first "so brightness can only ever push
+a cell into black".
+
+### Where the ring stops working
+
+A band is only clean while the glyph stays out of it, and nothing keeps it
+out. A tall glyph reaches the top and bottom bands; a full-width word reaches
+the left and right ones. The contamination is one-directional -- it lifts a
+dark cell's fraction and lowers a light cell's -- so the two populations close
+as the crop tightens. Rendered words at one geometry, varying only how much of
+the cell height the glyph fills:
+
+| glyph fills | light-on-dark | light background |
+| --- | --- | --- |
+| 55% of the cell | ≤ 0.09 | ≥ 0.91 |
+| 80% | ≤ 0.77 | ≥ 0.84 |
+| 90% | ≤ 0.67 | ≥ 0.71 |
+
+At 90% they overlap, and judging each edge separately and taking the worst
+makes it worse rather than better (≤ 0.59 against ≥ 0.56 — the light side
+loses more). **There is no threshold there, on any band or combination of
+them.** A 27 px cell whose label nearly fills it is in that regime, and no
+amount of moving `ring_fraction` or the bar will get it out.
+
+Past that limit the ring is not the answer. It only decides which polarity is
+tried **first**, and what settles the cell is the vocabulary -- the
+opposite-polarity rung, and the rule in `SoftkeyReader._rank` that a retry
+wins only by landing on a known label. Nothing downstream can undo a wrong
+answer either: sharpening, upscaling and the threshold method all leave
+polarity alone, which is why `tune` reports that no candidate helped and hands
+back the defaults -- truthfully, because polarity was not in the space it
+searched.
 
 So the other polarity is also a rung, the same answer the sharpening ladder
 gave to a value that could not be guessed:
@@ -360,6 +392,17 @@ opposite, rung 1   <- reached only when nothing above scored a confident hit
 opposite, rung 2
 opposite, rung 3
 ```
+
+A retry wins only by landing on a known label. Tesseract reads *something*
+out of a cell that is the wrong way up and reports a confidence for it that
+means nothing, so without that rule a cell which simply does not read hands
+its answer to whichever variant produced the most confident garbage -- and
+with six variants rather than three, that is often a retry. The published
+label is then wrong *and* the debug line blames the polarity for a cell whose
+polarity was never the problem. Landing on a known label is the only evidence
+there is that flipping was right; without it, the polarity the ring chose
+keeps the cell. Same rule as the bar one stage earlier: ambiguous means the
+common case.
 
 Polarity is the *outer* loop on purpose. A cell that reads today stops at the
 first variant that lands on a known label confidently, so it never sees a

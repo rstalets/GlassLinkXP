@@ -175,12 +175,26 @@ makes"). The ring measurement was simply never wired through. It is now, and
 both stages share one `ring_fraction`. Over the corpus the ring separates the
 two cases by 0.83 where the middle band separated them by 0.41.
 
-The opposite polarity is still a rung (`retry_opposite_polarity`), because one
-measurement of one frame is not a proof, and nothing downstream can undo a
-wrong answer: sharpening, upscale and threshold method all leave polarity
-alone. That is why `tune` reported no candidate helped and handed back the
-defaults -- truthfully, because polarity was not in the space it searched. Do
-not put the centre test back.
+**The ring has a floor, and past it no threshold exists.** A band is clean
+only while the glyph stays out of it, and nothing keeps it out: a tall glyph
+reaches the top and bottom bands, a full-width word the left and right ones,
+and the contamination lifts a dark cell's fraction while lowering a light
+cell's. Measured on rendered words, varying only how much of the cell height
+the glyph fills: at 55% the populations are 0.09 / 0.91 apart, at 80% they are
+0.77 / 0.84, at 90% they overlap -- and taking the worst single edge instead
+of the whole ring is worse still (0.59 / 0.56). A 27 px cell whose label
+nearly fills it is in that regime. Do not answer a report from there by moving
+`ring_fraction` or `LIGHT_BACKGROUND_RING`; there is nothing to move it to.
+
+Past that limit the ring only chooses which polarity is tried *first*, and the
+vocabulary decides. `retry_opposite_polarity` is that decision, and
+`SoftkeyReader._rank` is what keeps it honest: a retry wins only by landing on
+a known label. Tesseract reads *something* out of a cell that is the wrong way
+up, with a confidence that means nothing, so without that rule a cell that
+does not read hands its answer to the most confident garbage -- publishing a
+wrong label and blaming the polarity in the debug line for a cell whose
+polarity was fine. Both stages default the same way: ambiguous means the
+common case, which is black. Do not put the centre test back.
 
 **A label missing from `labels.txt` costs more than a wrong reading.** It is
 reported raw, which is usually right, so it looks harmless -- but it can never
