@@ -3,8 +3,10 @@
 This is the material a contributor needs that a user installing GlassLinkXP
 does not: how the repository is laid out, how to work on it without Windows
 or X-Plane, what has actually been run and what has not, and where the
-performance numbers came from. See `README.md` for install/use/troubleshoot,
-and `CLAUDE.md` for the fuller set of conventions this codebase follows.
+performance numbers came from. The root `README.md` is the user-facing doc --
+install, first run, wiring a button, troubleshooting -- and it is what a
+visitor to the repository reads; `CLAUDE.md` has the fuller set of conventions
+this codebase follows.
 
 ## Layout
 
@@ -18,8 +20,9 @@ src/            EVERYTHING THAT SHIPS. Zip this directory and it is what a
   pyproject.toml, uv.lock, .python-version
                 the manifest -- read by `uv sync` on the user's machine at
                 install time, which is why it is inside the zip
-  README.md, LICENSE   the user-facing doc (the repository root's README is
-                a landing page for GitHub, not this)
+  README.md, LICENSE   a short note in the zip: run install.cmd, and where
+                the real documentation is. The user-facing doc is the
+                repository's root README, which is what they land on
   glasslinkxp/
     main.py       CLI: run | gui | list-windows | manage-windows | calibrate
                        | dump-cells | dump-colors | bench | screen-template

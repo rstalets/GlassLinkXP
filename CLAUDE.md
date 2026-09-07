@@ -21,7 +21,7 @@ truth, and it is a low-resolution, anti-aliased, GPU-composited image.**
 | `docs/GUI.md` | How the window is put together, why it spawns the CLI rather than calling it, and the couplings that let it -- each pinned by a test. |
 | `docs/CONFIGURATION.md` | Every setting, generated from `gui/schema.py`. `config.toml` carries no comments because the GUI rewrites it. |
 | `docs/DEVELOPER.md` | Layout, offline dev workflow, latency numbers, known limitations, and -- importantly -- *Verified offline* and *Not verified here*. |
-| `README.md` | The end-user install/use/troubleshoot doc that ships in the distribution zip. Keep it short; deeper material belongs in `docs/DEVELOPER.md`. |
+| `README.md` | The end-user install/use/troubleshoot doc, and the repository's front page -- users land here and download the zip from Releases. Keep it short; deeper material belongs in `docs/DEVELOPER.md`. `src/README.md` is a different thing: a few lines inside the zip pointing back here, deliberately with no content to drift. |
 | `PLAN.md` | The original design rationale, including approaches that were considered and rejected. |
 | `src/config.example.toml` | A starting point to copy, commented because people read it. The generated reference above is the authority. |
 
