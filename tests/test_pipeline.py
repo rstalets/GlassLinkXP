@@ -2,12 +2,12 @@
 
 import pytest
 
-from g1000_softkey import synth
-from g1000_softkey.color import BLACK, RED, WHITE, YELLOW
-from g1000_softkey.config import AppConfig, ColorConfig, DisplayConfig, StripGeometry
-from g1000_softkey.ocr import CellResult
-from g1000_softkey.pipeline import DisplayPipeline
-from g1000_softkey.strip import auto_detect_strip, split_cells
+from glasslinkxp import synth
+from glasslinkxp.color import BLACK, RED, WHITE, YELLOW
+from glasslinkxp.config import AppConfig, ColorConfig, DisplayConfig, StripGeometry
+from glasslinkxp.ocr import CellResult
+from glasslinkxp.pipeline import DisplayPipeline
+from glasslinkxp.strip import auto_detect_strip, split_cells
 
 MENUS = sorted(synth.MENUS)
 
@@ -37,7 +37,7 @@ def test_only_the_rungs_that_are_read_are_preprocessed(menu, reader, config, mon
     passes -- three rungs for all 58 cells that reach OCR -- where the reader
     only ever looked at 63 of them.
     """
-    from g1000_softkey import pipeline as pipeline_module
+    from glasslinkxp import pipeline as pipeline_module
 
     real = pipeline_module.preprocess_cell
     calls = []
@@ -69,7 +69,7 @@ def test_the_ladder_charges_its_time_to_preprocessing_not_to_ocr(reader, config)
 
 def test_the_ladder_stops_building_when_the_reader_stops_reading(reader, config):
     """The ladder object itself, without a pipeline around it."""
-    from g1000_softkey.pipeline import SharpenLadder
+    from glasslinkxp.pipeline import SharpenLadder
 
     cell = split_cells(synth.render_menu("xpdr"), StripGeometry())[0]
     ladder = SharpenLadder(cell, config.ocr)
@@ -152,7 +152,7 @@ def test_auto_detected_geometry_is_usable(reader, config):
 
 
 def test_frames_from_disk_round_trip(tmp_path, reader, config):
-    from g1000_softkey.capture import ImageCapture
+    from glasslinkxp.capture import ImageCapture
 
     paths = synth.write_menus(tmp_path)
     source = ImageCapture(tmp_path)
@@ -166,9 +166,9 @@ def test_frames_from_disk_round_trip(tmp_path, reader, config):
 
 def _pipeline(screens=None):
     """A DisplayPipeline with only the fields _apply_screen touches."""
-    from g1000_softkey.config import AppConfig, DisplayConfig, OcrConfig
-    from g1000_softkey.pipeline import DisplayPipeline
-    from g1000_softkey.screens import ScreenLibrary
+    from glasslinkxp.config import AppConfig, DisplayConfig, OcrConfig
+    from glasslinkxp.pipeline import DisplayPipeline
+    from glasslinkxp.screens import ScreenLibrary
 
     class _Reader:
         def __init__(self):
@@ -185,7 +185,7 @@ def _pipeline(screens=None):
 
 
 def test_apply_screen_reports_a_match_and_what_it_replaced():
-    from g1000_softkey.screens import Screen, ScreenLibrary
+    from glasslinkxp.screens import Screen, ScreenLibrary
 
     screen = Screen(
         name="xpdr-code", display="pfd",
@@ -206,7 +206,7 @@ def test_apply_screen_reports_a_match_and_what_it_replaced():
 
 
 def test_apply_screen_says_why_no_page_matched():
-    from g1000_softkey.screens import Screen, ScreenLibrary
+    from glasslinkxp.screens import Screen, ScreenLibrary
 
     screen = Screen(name="x", display="pfd", match={9: "IDENT"}, labels={1: "0"})
     results = [CellResult(index=0, text="2", raw="2", confidence=54.0, match_score=1.0)]
@@ -220,7 +220,7 @@ def test_apply_screen_says_why_no_page_matched():
 def test_apply_screen_says_when_it_is_switched_off():
     from dataclasses import replace as _replace
 
-    from g1000_softkey.screens import Screen, ScreenLibrary
+    from glasslinkxp.screens import Screen, ScreenLibrary
 
     screen = Screen(name="x", display="pfd", match={9: "IDENT"}, labels={1: "0"})
     pipeline = _pipeline(screens=ScreenLibrary([screen]))
@@ -230,7 +230,7 @@ def test_apply_screen_says_when_it_is_switched_off():
 
 def test_apply_screen_leaves_a_confident_cell_alone():
     """Page lookup fills gaps; it does not overrule a clear reading."""
-    from g1000_softkey.screens import Screen, ScreenLibrary
+    from glasslinkxp.screens import Screen, ScreenLibrary
 
     screen = Screen(name="x", display="pfd", match={9: "IDENT"}, labels={1: "0"})
     results = [
@@ -248,7 +248,7 @@ def test_the_page_is_identified_once_per_strip_not_once_per_cell():
     Doing it per cell would be wasted work, and worse, would let different
     cells on one strip be filled from different pages.
     """
-    from g1000_softkey.screens import Screen, ScreenLibrary
+    from glasslinkxp.screens import Screen, ScreenLibrary
 
     screen = Screen(
         name="xpdr-code", display="pfd",
@@ -289,7 +289,7 @@ def test_a_low_confidence_cell_the_page_agrees_with_is_recorded_as_confirmed():
     nothing checked. Without recording it, the log cannot tell "the page looked
     and agreed" apart from "the page never considered this cell".
     """
-    from g1000_softkey.screens import Screen, ScreenLibrary
+    from glasslinkxp.screens import Screen, ScreenLibrary
 
     screen = Screen(name="x", display="pfd", match={9: "IDENT"}, labels={1: "0"})
     results = [
@@ -306,7 +306,7 @@ def test_a_low_confidence_cell_the_page_agrees_with_is_recorded_as_confirmed():
 
 def test_a_confident_cell_is_neither_replaced_nor_confirmed():
     """Above the threshold the page is not consulted, so it corroborates nothing."""
-    from g1000_softkey.screens import Screen, ScreenLibrary
+    from glasslinkxp.screens import Screen, ScreenLibrary
 
     screen = Screen(name="x", display="pfd", match={9: "IDENT"}, labels={1: "0"})
     results = [
@@ -325,7 +325,7 @@ def test_no_page_is_looked_for_when_every_cell_read_confidently():
     Scanning the page library when nothing needs help is wasted work, and
     implying otherwise made the documented flow read backwards.
     """
-    from g1000_softkey.screens import Screen, ScreenLibrary
+    from glasslinkxp.screens import Screen, ScreenLibrary
 
     class Counting(ScreenLibrary):
         def __init__(self, screens):
@@ -349,7 +349,7 @@ def test_no_page_is_looked_for_when_every_cell_read_confidently():
 
 
 def test_a_page_is_looked_for_as_soon_as_one_cell_is_shaky():
-    from g1000_softkey.screens import Screen, ScreenLibrary
+    from glasslinkxp.screens import Screen, ScreenLibrary
 
     screen = Screen(name="x", display="pfd", match={9: "IDENT"}, labels={1: "0"})
     results = [
@@ -371,9 +371,9 @@ def test_an_unchanged_frame_does_no_work_at_all():
     """
     import cv2
 
-    from g1000_softkey.config import OcrConfig
-    from g1000_softkey.ocr import SoftkeyReader
-    from g1000_softkey.pipeline import DisplayPipeline
+    from glasslinkxp.config import OcrConfig
+    from glasslinkxp.ocr import SoftkeyReader
+    from glasslinkxp.pipeline import DisplayPipeline
 
     frame = synth.render_menu("xpdr")
     reader = SoftkeyReader(OcrConfig())
@@ -395,9 +395,9 @@ def test_an_unchanged_frame_does_no_work_at_all():
 def test_a_changed_cell_brings_page_lookup_back():
     import numpy as np
 
-    from g1000_softkey.config import OcrConfig
-    from g1000_softkey.ocr import SoftkeyReader
-    from g1000_softkey.pipeline import DisplayPipeline
+    from glasslinkxp.config import OcrConfig
+    from glasslinkxp.ocr import SoftkeyReader
+    from glasslinkxp.pipeline import DisplayPipeline
 
     reader = SoftkeyReader(OcrConfig())
     try:
@@ -477,7 +477,7 @@ def test_colour_can_be_switched_off(reader, config):
 def test_the_debug_line_carries_the_background(reader, config, caplog):
     import logging
 
-    caplog.set_level(logging.DEBUG, logger="g1000_softkey.pipeline")
+    caplog.set_level(logging.DEBUG, logger="glasslinkxp.pipeline")
     pipeline = make_pipeline(reader, config)
     pipeline.process(synth.render_menu("alerts"))
     lines = {}
@@ -507,7 +507,7 @@ def test_a_colour_only_change_is_logged_even_though_no_cell_was_ocrd(reader, con
 
     labels = list(synth.MENUS["pfd_top"])
     pipeline.process(synth.render_frame(labels))
-    caplog.set_level(logging.DEBUG, logger="g1000_softkey.pipeline")
+    caplog.set_level(logging.DEBUG, logger="glasslinkxp.pipeline")
     result = pipeline.process(synth.render_frame(labels, backgrounds={2: "white"}))
 
     assert result.ocr_calls == 0, "the gate must have swallowed the pixel change"
@@ -524,6 +524,6 @@ def test_a_quiet_frame_still_logs_nothing(reader, config, caplog):
     frame = synth.render_menu("pfd_top")
     pipeline = make_pipeline(reader, config, gating=True)
     pipeline.process(frame)
-    caplog.set_level(logging.DEBUG, logger="g1000_softkey.pipeline")
+    caplog.set_level(logging.DEBUG, logger="glasslinkxp.pipeline")
     pipeline.process(frame)
     assert [r.getMessage() for r in caplog.records] == []

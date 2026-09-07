@@ -1,6 +1,8 @@
+from pathlib import Path
+
 import pytest
 
-from g1000_softkey.config import (
+from glasslinkxp.config import (
     AppConfig,
     ConfigError,
     ConfigNotFound,
@@ -11,16 +13,16 @@ from g1000_softkey.config import (
     load_config,
 )
 
-EXAMPLE = "config.example.toml"
+EXAMPLE = Path(__file__).resolve().parents[1] / "src" / "config.example.toml"
 
 
 def test_example_config_loads():
     config = load_config(EXAMPLE)
     assert {d.key for d in config.displays} == {"pfd", "mfd"}
-    assert config.display("pfd").dataref_prefix == "g1000/softkey/pfd"
-    assert config.display("pfd").dataref_names()[0] == "g1000/softkey/pfd/1"
+    assert config.display("pfd").dataref_prefix == "glasslinkxp/softkey/pfd"
+    assert config.display("pfd").dataref_names()[0] == "glasslinkxp/softkey/pfd/1"
     assert len(config.display("mfd").dataref_names()) == 12
-    assert config.loop_hz == 12.0
+    assert config.loop_hz == 28.0
     assert config.publish.field_width == 64
     assert config.color.enabled is True
 
@@ -105,13 +107,13 @@ def test_the_field_width_agrees_with_the_plugin():
     import types
     from pathlib import Path
 
-    plugin_path = Path(__file__).resolve().parents[1] / "xppython3" / "PI_G1000SoftkeyLabels.py"
+    plugin_path = Path(__file__).resolve().parents[1] / "src" / "xppython3" / "PI_GlassLinkXP.py"
     module = types.ModuleType("XPPython3")
     module.xp = types.SimpleNamespace(Type_Data=8, Type_Int=1, NO_PLUGIN_ID=-1)
     saved = sys.modules.get("XPPython3")
     sys.modules["XPPython3"] = module
     try:
-        spec = importlib.util.spec_from_file_location("PI_G1000SoftkeyLabels_widthcheck", plugin_path)
+        spec = importlib.util.spec_from_file_location("PI_GlassLinkXP_widthcheck", plugin_path)
         plugin = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(plugin)
     finally:

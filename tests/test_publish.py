@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from g1000_softkey import publish
-from g1000_softkey.config import PublishConfig
-from g1000_softkey.publish import (
+from glasslinkxp import publish
+from glasslinkxp.config import PublishConfig
+from glasslinkxp.publish import (
     ConsolePublisher,
     WebApiPublisher,
     create_publisher,
@@ -17,7 +17,7 @@ from g1000_softkey.publish import (
     encode_value,
 )
 
-NAMES = [f"g1000/softkey/pfd/{i}" for i in range(1, 13)]
+NAMES = [f"glasslinkxp/softkey/pfd/{i}" for i in range(1, 13)]
 
 
 def test_encode_field_pads_and_truncates():
@@ -226,7 +226,7 @@ class _FakeWs:
 @pytest.fixture
 def ws_env(monkeypatch):
     """A stubbed websocket module plus a REST session that resolves ids."""
-    names = [f"g1000/softkey/pfd/{i}" for i in range(1, 13)]
+    names = [f"glasslinkxp/softkey/pfd/{i}" for i in range(1, 13)]
     return _ws_env(monkeypatch, names)
 
 
@@ -235,8 +235,8 @@ def ws_env_with_colors(monkeypatch):
     """The same, with the /bg int datarefs interleaved as the daemon sends them."""
     names = []
     for i in range(1, 13):
-        names.append(f"g1000/softkey/pfd/{i}")
-        names.append(f"g1000/softkey/pfd/{i}/bg")
+        names.append(f"glasslinkxp/softkey/pfd/{i}")
+        names.append(f"glasslinkxp/softkey/pfd/{i}/bg")
     return _ws_env(monkeypatch, names)
 
 
@@ -329,7 +329,7 @@ def test_create_publisher_accepts_websocket_target(ws_env):
 
 def test_websocket_falls_back_to_rest_when_it_cannot_connect(monkeypatch):
     """A dead socket must never mean dropped labels, nor a stall per cycle."""
-    names = [f"g1000/softkey/pfd/{i}" for i in range(1, 13)]
+    names = [f"glasslinkxp/softkey/pfd/{i}" for i in range(1, 13)]
     patched = []
     session = SimpleNamespace(
         get=lambda url, timeout=None: SimpleNamespace(
@@ -362,7 +362,7 @@ def test_websocket_falls_back_to_rest_when_it_cannot_connect(monkeypatch):
 
 
 def test_websocket_resumes_batching_once_the_socket_comes_back(monkeypatch):
-    names = [f"g1000/softkey/pfd/{i}" for i in range(1, 13)]
+    names = [f"glasslinkxp/softkey/pfd/{i}" for i in range(1, 13)]
     session = SimpleNamespace(
         get=lambda url, timeout=None: SimpleNamespace(
             status_code=200,
@@ -397,7 +397,7 @@ def test_websocket_resumes_batching_once_the_socket_comes_back(monkeypatch):
 
 
 def test_websocket_negotiates_the_highest_advertised_api_version(monkeypatch):
-    names = ["g1000/softkey/pfd/1"]
+    names = ["glasslinkxp/softkey/pfd/1"]
 
     def _get(url, timeout=None):
         if url.endswith("/api/capabilities"):
@@ -425,7 +425,7 @@ def test_websocket_negotiates_the_highest_advertised_api_version(monkeypatch):
 
 def test_websocket_uses_the_ipv4_literal_instead_of_localhost(monkeypatch):
     """X-Plane binds 127.0.0.1 only; ::1 (which Windows prefers) just hangs."""
-    names = ["g1000/softkey/pfd/1"]
+    names = ["glasslinkxp/softkey/pfd/1"]
 
     def _get(url, timeout=None):
         if url.endswith("/api/capabilities"):
@@ -527,7 +527,7 @@ def test_websocket_sends_a_colour_change_with_an_unchanged_label(ws_env_with_col
     pub.publish(values)
     ws.sent.clear()
 
-    values["g1000/softkey/pfd/3/bg"] = 1  # softkey 3 became selected
+    values["glasslinkxp/softkey/pfd/3/bg"] = 1  # softkey 3 became selected
     pub.publish(values)
 
     datarefs = json.loads(ws.sent[0])["params"]["datarefs"]

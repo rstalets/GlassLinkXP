@@ -1,0 +1,228 @@
+# G1000 softkey OCR daemon -- copy to config.toml and edit.
+# Run with:  python -m glasslinkxp.main -c config.toml run
+#
+# This file is a starting point to copy, kept commented because it is read by
+# people. docs/CONFIGURATION.md is the full reference, generated from the same
+# text the GUI's Settings tab shows beside each field.
+#
+# NOTE: saving from that form rewrites config.toml and does not keep comments
+# -- TOML writers do not write them. It saves the previous version as
+# config.toml.bak, and its Raw file tab writes your own text through unchanged
+# if you keep notes in there.
+
+[app]
+# Capture/OCR rate. Softkeys only change when you press one, and with change
+# gating on, unchanged cells cost nothing -- so a high rate is nearly free.
+# 28 Hz keeps the worst-case detection delay under ~36 ms.
+loop_hz = 28.0
+# Skip OCR for cells whose pixels did not change since the previous frame.
+change_gating = true
+# Per-pixel intensity difference that counts as a change (0..255).
+change_tolerance = 6
+
+# --- the pop-out windows ---------------------------------------------------
+# Whether the daemon opens, sizes and places the PFD and MFD pop-outs itself.
+# On unless you turn it off, because the alternative is a pre-flight routine
+# that fails quietly: a window that was never popped out, or one with the
+# taskbar across the bottom of it, reads as no labels rather than as an error.
+#
+# When it is on, before capture starts -- and again the moment a pop-out is
+# closed, which the capture reports on its own -- it:
+#   * fires sim/GPS/g1000n1_popout / g1000n3_popout for any display whose
+#     window is not open -- note _popout, not _popup: the popup opens the panel
+#     inside the X-Plane window, where it cannot be captured;
+#   * sizes the client area to `size` below;
+#   * puts it in the top-left corner of the monitor X-Plane is running on,
+#     which is the corner the taskbar is least likely to sit over.
+#
+# Only the displays named `pfd` and `mfd` are managed -- those are the ones
+# X-Plane has pop-out commands for. Anything else is left alone.
+#
+# It needs X-Plane's web API reachable to fire the commands, i.e. the same
+# [publish] base_url below, and X-Plane's Settings -> Network -> Web API on.
+
+[window_management]
+enabled = true
+# The client size the pop-outs are set to, as [width, height].
+#
+# MUST BE 4:3. The G1000 draws a 4:3 panel and the geometry below is stored as
+# fractions of the window, so a window of any other shape moves the softkey
+# strip out from under your calibration -- which shows up as labels that will
+# not read, a long way from this line. Anything that is not 4:3 is refused,
+# with a warning, and 1280x960 used instead.
+#
+# 1280x960 by default: the G1000 renders to a 1024x768 texture, so this is
+# comfortably above the point where detail is thrown away before capture sees
+# it, and going much larger only interpolates.
+size = [1280, 960]
+
+# Turning this off leaves the windows entirely to you -- the daemon then only
+# captures whatever it finds, at whatever size and wherever you put it. That is
+# the setting to use if a pop-out is feeding external avionics hardware, a
+# RealSimGear G1000 unit for instance, where its size and position are part of
+# a physical setup and are not this daemon's to change.
+#
+# This is the only place a pop-out's size is set, and the only thing in the
+# daemon that moves a window at all.
+
+# --- displays --------------------------------------------------------------
+# One section per captured window. `key` is the table name and also the
+# dataref prefix: glasslinkxp/softkey/<key>/1..12
+#
+# window_title is a case-insensitive SUBSTRING of the pop-out window title.
+# Run `python -m glasslinkxp.main list-windows` on the X-Plane machine to
+# see the real titles, then paste a distinctive part of them here.
+#
+# geometry is expressed as FRACTIONS of the window's client area so it
+# survives a resize. Get a starting point from:
+#   python -m glasslinkxp.main -c config.toml calibrate
+# then check calibration/<key>_overlay.png and nudge the numbers.
+
+[display.pfd]
+window_title = "G1000 PFD"
+enabled = true
+# dataref_prefix = "glasslinkxp/softkey/pfd"   # defaults to glasslinkxp/softkey/<key>
+
+[display.pfd.geometry]
+x = 0.050      # left edge of the softkey strip
+y = 0.915      # top edge
+w = 0.900      # width
+h = 0.055      # height
+cells = 12
+cell_pad_x = 0.10   # fraction of a cell trimmed off each side
+cell_pad_y = 0.12   # fraction of the strip height trimmed top and bottom
+
+[display.mfd]
+window_title = "G1000 MFD"
+enabled = true
+
+[display.mfd.geometry]
+x = 0.050
+y = 0.915
+w = 0.900
+h = 0.055
+cells = 12
+cell_pad_x = 0.10
+cell_pad_y = 0.12
+
+# --- OCR -------------------------------------------------------------------
+[ocr]
+lang = "eng"
+psm = 7                  # single text line
+whitelist = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -/"
+# The glyphs are only ~10 px tall in the capture and arrive slightly soft.
+# Thresholding at that size can close the counters of 0, 6, 8 and 9, and a
+# filled counter is not a character -- Tesseract returns an empty string rather
+# than a wrong digit. Sharpening reopens them, but too much rings and grows
+# strokes instead, turning a 0 into a B. The right amount depends on the font
+# and the capture scale, so rather than fix one value we try each (amount,
+# radius) pair in order and keep whichever answer lands on a known label.
+#
+# The first rung is no sharpening, and an exact vocabulary hit stops the ladder
+# there, so this can never overwrite an answer the gentle path got right. The
+# extra OCR calls are spent only on cells that failed, and only when they
+# change.
+upscale = 4.0
+sharpen_ladder = [[0.0, 0.0], [0.5, 1.0], [1.0, 1.4]]
+# Landing on a known label is not proof of being right when the vocabulary
+# holds near-identical members: every digit 0-7 is a valid softkey, so a 0
+# misread as 2 is still an exact match. Only a hit at least this confident ends
+# the ladder early; below it the remaining rungs are tried and the most
+# confident answer wins. 0 disables early stopping entirely.
+accept_confidence = 80.0
+# Below this confidence a cell is a candidate for being filled in from a known
+# softkey page. Recognising a 10-pixel "0" is hard; noticing that IDENT/BKSP/
+# BACK sit in cells 9-11 is easy, and that only happens on the transponder
+# keypad -- whose layout is fixed, so the hard cells can be looked up instead of
+# recognised. Pages live in screens_file; add one with:
+#     glasslinkxp screen-template --display pfd --name my-page
+screen_confidence = 80.0
+# A page is only identified when its match cells all read at least this
+# confidently -- higher on purpose, because an identification made from a guess
+# would propagate that guess into every cell it fills.
+screen_match_confidence = 85.0
+threshold = "otsu"       # otsu | adaptive -- per cell, never global
+fuzzy_cutoff = 0.62      # difflib cutoff for snapping to labels.txt
+blank_ink_ratio = 0.004  # below this fraction of "ink" a cell is reported as ""
+# How far a pixel must sit from the cell's dominant tone to count as ink. The
+# G1000 dims unavailable softkeys rather than hiding them, so too high a value
+# turns a dim-but-present label into an empty cell. Short labels break first --
+# a lone digit carries much less evidence than a word, so a missing "0" on the
+# XPDR code screen while longer labels still read is the signature. Lower it to
+# ~20 if dim labels are being dropped.
+blank_contrast = 40
+# labels_file = "glasslinkxp/labels.txt"   # relative paths resolve next to this file
+# tessdata_path = "C:/Program Files/Tesseract-OCR/tessdata"
+
+# --- softkey background colour ---------------------------------------------
+# Each cell's background is classified into one of four colours and published
+# as an int alongside the label:
+#
+#   glasslinkxp/softkey/pfd/1        the label string
+#   glasslinkxp/softkey/pfd/1/bg     0 black, 1 white, 2 yellow, 3 red
+#
+# The label itself is published exactly as the sim draws it -- the daemon
+# never prepends a colour hint or any other markup. What colour to draw the
+# text is the Stream Deck's decision, made from /bg.
+#
+# The background is measured from the outermost ring of the cell -- labels are
+# centred, so that ring is essentially never glyph, and unlike a whole-cell
+# statistic it needs no assumption about the glyphs being the minority class,
+# so it reads an inverted (selected) cell the same way. The ring is summarised
+# with a per-channel median, so a few pixels of the green softkey outline
+# clipping the edge cannot drag it.
+#
+# WARNING: the thresholds below were set from *plausible* G1000 swatches, not
+# from a capture -- nobody who wrote them has seen an X-Plane frame. Check them
+# against your own display before trusting them:
+#
+#     glasslinkxp -c config.toml dump-colors
+#
+# with one softkey selected. It prints each cell's ring BGR and HSV and how it
+# classified, which is the measurement these numbers should come from.
+[color]
+enabled = true
+# Outermost fraction of each cell, per side, used as the sample ring.
+ring_fraction = 0.15
+# Classification order is V, then S, then hue, and the order is the point:
+# hue and saturation barely move when the display is dimmed (scaling the red
+# and yellow swatches to 35% moves H and S by about a unit while V tracks the
+# scaling), so brightness can only ever push a cell into black and can never
+# turn a yellow into a red.
+#
+#   1. V <= value_max                                 -> black
+#   2. S <= saturation_max                            -> white
+#   3. H <= red_hue_max or H >= red_hue_wrap_min      -> red
+#   4. yellow_hue_min <= H <= yellow_hue_max          -> yellow
+#
+# Hue is OpenCV's 0..179, not 0..359, and red wraps around 0.
+value_max = 60          # a red at 35% brightness sits near V=79; stay under it
+saturation_max = 60     # white measures S=0, the coloured states above S=200
+red_hue_max = 8
+red_hue_wrap_min = 172
+yellow_hue_min = 18
+yellow_hue_max = 40
+
+# --- publishing ------------------------------------------------------------
+[publish]
+target = "websocket"        # websocket | webapi | console
+base_url = "http://localhost:8086"
+# A floor, not a choice: both publishers read the unversioned
+# /api/capabilities endpoint and use the highest version X-Plane advertises
+# (v1, v2 and v3 have all shipped). This value is only used when that endpoint
+# cannot be reached, which means a sim too old to have been asked -- so leave
+# it at the oldest version, v1.
+api_version = "v1"
+# Bytes per label dataref -> the PilotsDeck address suffix (':s64').
+#
+# The width is fixed in three places that must agree: FIELD_WIDTH in the
+# XPPython3 plugin (changing it needs an X-Plane restart, because the buffer
+# is allocated when the accessor is registered), this setting, and the ':sNN'
+# on every PilotsDeck button. Changing it later means re-editing every button,
+# so it is set generously once rather than tuned: the longest label in
+# labels.txt is "FLIGHT PLAN" at 11 characters, which left the previous
+# 16-byte field four characters of headroom for a vocabulary that grows
+# whenever someone finds a softkey nobody had listed.
+field_width = 64
+timeout = 1.0
+retry_interval = 5.0     # seconds between reconnect attempts

@@ -1,328 +1,74 @@
-# g1000-softkey
+# GlassLinkXP
 
-Put the **live** G1000 softkey labels on your Stream Deck.
+Puts the **live** G1000 softkey labels on a Stream Deck.
 
-X-Plane 12 computes the G1000 softkey labels inside the engine and rasterizes
-them straight to the GPU, so there is no dataref to read: a Stream Deck can
-send `sim/GPS/g1000n1_softkey1..12` but can only show a static "BTN 1..12"
-face. This proof of concept reads the labels back out of the pixels:
+X-Plane 12 draws the G1000's softkey labels straight to the screen and offers
+no dataref for them, so a Stream Deck can send `sim/GPS/g1000n1_softkey1..12`
+but can only show a static "BTN 1..12" face. GlassLinkXP reads the labels back
+out of the picture and republishes them as X-Plane datarefs, so a Stream Deck
+button (via PilotsDeck) can show what the key actually does.
 
-```
-X-Plane pop-out PFD/MFD windows (may be occluded)
-    -> Windows Graphics Capture              capture.py
-    -> crop the softkey strip, split into 12 cells, threshold each cell   strip.py
-    -> Tesseract (persistent API, PSM 7) + fuzzy snap to labels.txt       ocr.py
-    -> classify each cell's background colour from a border ring          color.py
-    -> X-Plane Web API PATCH into plugin-created datarefs                 publish.py
-    -> PilotsDeck reads g1000/softkey/pfd/1:s64 and .../1/bg
-```
+> **This is experimental.** It has been run against a live X-Plane and
+> publishes real datarefs, but large parts of the Windows/sim integration are
+> lightly exercised so far. Expect rough edges, and see
+> [`docs/DEVELOPER.md`](docs/DEVELOPER.md#verified-offline) for exactly
+> what has and has not been checked.
 
-There is a window over all of it -- `.\g1000-gui`, or `g1000 gui` -- which is
-where to start if you would rather not type any of the commands below. It runs
-the same commands and shows you what they said; see [The window](#the-window).
+## Install
 
-See `PLAN.md` for the design rationale. **This is a POC**: it is verified
-offline against synthetic frames (see *Not verified here* at the bottom).
-The daemon **has** been run against a live X-Plane and publishes to the
-plugin's datarefs over both transports; large parts of the Windows and sim
-surface remain unexercised, and that section says which.
+Requires Windows and X-Plane 12.1.1+ (for its web API).
 
-## Layout
+1. Download the latest `glasslinkxp-<version>.zip` from the
+   [Releases page](../../releases), and extract it anywhere.
+2. Double-click **`install.cmd`** in the extracted folder.
 
-```
-g1000_softkey/
-  main.py       CLI: run | gui | list-windows | manage-windows | calibrate
-                     | dump-cells | dump-colors | bench | screen-template
-                     | tune | synth
-  gui/          the window: one tab per command, over the same CLI (see docs/GUI.md)
-  capture.py    WGC backend (Windows) + PNG backend (offline dev/test)
-  windowmgr.py  opens, sizes and places the PFD/MFD pop-outs
-  command.py    fires X-Plane commands over the web API (the pop-out commands)
-  strip.py      strip crop, 12-cell split, per-cell preprocessing, auto-detect
-  ocr.py        persistent Tesseract API, char whitelist, vocabulary snapping
-  color.py      cell background -> black / white / yellow / red, + text colour
-  pipeline.py   frame -> cells -> change gating -> labels + colours
-  publish.py    X-Plane WebSocket and REST clients, console output
-  synth.py      synthetic G1000 softkey frames for offline work
-  config.example.toml
-  labels.txt    the softkey vocabulary (edit this)
-xppython3/PI_G1000SoftkeyLabels.py   creates the 48 datarefs (24 labels + 24 colours)
-scripts/
-  install-windows.ps1        daemon: uv sync --locked + pinned tesserocr wheel + tessdata
-  install-xplane-plugin.ps1  sim: XPPython3 + the dataref plugin, and -VerifyOnly
-g1000.cmd       run any command without activating the venv
-g1000-gui.cmd   open the window (double-click it, or make a shortcut)
-docs/
-  PIPELINE.md   flowcharts of the daemon loop and the per-frame path
-  GUI.md        how the window is put together, and what it is coupled to
-  CONFIGURATION.md  every setting and why its default is what it is
-                    (generated from gui/schema.py)
-tessdata/       eng.traineddata, fetched by the installer (git-ignored)
-tests/          offline tests over the whole pipeline
-```
+   It copies GlassLinkXP into `%appdata%\GlassLinkXP`, downloads its Python
+   environment and OCR language data, adds a **GlassLinkXP** shortcut to your
+   desktop, and offers to install the small X-Plane plugin GlassLinkXP
+   publishes into (say yes -- without it there is nowhere for the labels to
+   go).
 
-## Windows setup
+### Updating
 
-### The short version
+Run `install.cmd` again. It asks before replacing the installed app, and
+keeps the two files that are yours:
 
-```
-powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
-```
+* **`config.toml`** — calibration, tuning, window titles. Settings this
+  version adds are filled in at their documented value, settings it no longer
+  has are dropped, and anything you had set is left as you set it.
+* **`labels.txt`** — the vocabulary, which you can edit in the Vocabulary tab.
+  Labels this version adds are appended, labels it retires are removed, and
+  labels *you* added are never touched (`labels.shipped.txt` beside it is how
+  it tells the difference — leave it alone).
 
-That is the whole thing. It needs no compiler, no Visual Studio, no vcpkg, no
-git, and **no separate Tesseract installation** -- the UB Mannheim installer is
-not part of this setup. It takes a couple of minutes. Read on only if you want
-to know what it is doing, or would rather do it by hand.
+The previous version of each is kept as `.bak`, and the installer prints
+exactly what it changed.
 
-### What the installer actually does
+One consequence worth knowing: because a value you already have is never
+overwritten, a *changed* default does not reach you on update. If a release
+retunes something, the notes will say so and you can set it yourself.
 
-**Everything comes down as a pinned, hash-checked artefact, and nothing is
-stored in this repository.**
+## First run
 
-1. **uv provisions its own CPython** at the version in `.python-version`, from
-   Astral's `python-build-standalone` builds. `python-preference =
-   "only-managed"` in `pyproject.toml` means it never falls back to a system
-   Python, so the interpreter is as pinned as the dependencies. That build
-   includes Tk, so the window works.
-2. **`uv sync --locked`** installs everything from `uv.lock`, verifying every
-   download against the SHA-256 recorded there and failing closed on a
-   mismatch.
-3. **`eng.traineddata`** is fetched from a tagged upstream commit and checked
-   against a digest in the script. It is language data, not a Python
-   distribution, so `uv.lock` cannot cover it -- this is the one download the
-   installer verifies itself. It lands in `tessdata\` and the script writes an
-   absolute `ocr.tessdata_path` into `config.toml`.
+Start X-Plane with your aircraft **on the ground**, then open GlassLinkXP
+from the desktop shortcut. With nothing configured yet it starts setup: a bar
+across the top of the window that takes you through six steps, one at a time,
+opening the right tab for each and staying put while you work in it.
 
-### Where the Windows tesserocr comes from
+1. Start X-Plane, aircraft on the ground (this creates your config file).
+2. Find the PFD and MFD pop-out windows.
+3. Draw a box around the softkey strip — the step that decides whether
+   anything reads correctly.
+4. Check what is actually being read, and tune it if a label comes out wrong.
+5. Watch the labels locally, without touching X-Plane.
+6. Publish them to X-Plane.
 
-**tesserocr has never published a Windows wheel** -- every release on PyPI,
-2.11.0 included, is macOS/manylinux/musllinux only. pip therefore falls back to
-the sdist and compiles, and that compile needs Tesseract's *development* files,
-which the runtime installers do not ship. That is why this project used to
-build Tesseract and Leptonica from source with vcpkg and MSVC, taking the
-better part of an hour and several GB.
+Press **Next** to move on; it warns you if a step looks unfinished, but never
+stops you. **Close setup** puts the bar away and remembers where you were —
+the Start here tab offers to resume from that step.
 
-It no longer does.
-[simonflueckiger/tesserocr-windows_build](https://github.com/simonflueckiger/tesserocr-windows_build)
-publishes prebuilt Windows wheels, and they bundle their own Tesseract and
-Leptonica -- which is what removes the separate Tesseract install as well as
-the compiler. `pyproject.toml` names the wheel by exact URL under
-`[tool.uv.sources]`, gated on `sys_platform == 'win32'`; every other platform
-takes the PyPI wheel.
-
-**Nothing is vendored.** The repository holds a URL and a hash, not a binary,
-and `tessdata/` is git-ignored so the downloaded language data cannot be
-committed by accident either.
-
-Recording a digest on first lock is trust-on-first-use: it defends against
-later substitution, not against a bad artefact on day one. The day-one check
-was done once by hand and its result -- the DLL manifest, the versions, the
-absence of any install hooks -- is written into the commit that introduced
-`pyproject.toml`. **Repeat that inspection when the pin moves; do not bump it
-blind.** Bumping means editing the URL in `pyproject.toml`, running `uv lock`,
-and committing the new lockfile; `--locked` then holds everyone else to it.
-
-### By hand
-
-```
-uv sync --locked
-```
-
-Then put an `eng.traineddata` somewhere and point `ocr.tessdata_path` at its
-directory. `tessdata_fast` at tag `4.1.0` is what the installer fetches and
-what every measurement in this project was taken against -- a different variant
-is a different OCR engine as far as your labels are concerned, so re-measure
-with `tune` before switching.
-
-### If the wheel is ever unavailable
-
-The source-build installer -- vcpkg, MSVC, `delvewheel`, and the notes on
-`LIBPATH`, the `tesseract55.lib` version-digit trap and PEP 517 build isolation
--- is preserved in git history rather than maintained here:
-
-```
-git show e916727:scripts/install-windows.ps1
-```
-
-conda-forge is **not** a usable second source: its `win-64` tesserocr builds
-stop at 2.5.2, last uploaded November 2022, with no Python 3.12 build at all.
-
-### The X-Plane side
-
-XPPython3 plus the dataref plugin:
-
-```
-powershell -ExecutionPolicy Bypass -File scripts\install-xplane-plugin.ps1
-```
-
-`scripts\install-windows.ps1` runs this for you unless you pass `-SkipXPlane`.
-What it does, and why each part is needed:
-
-* **XPPython3** goes in `<X-Plane 12>/Resources/plugins/XPPython3`. Version 4
-  bundles its own **Python 3.12**, so no system Python is required -- and note
-  the plugin therefore runs in *that* interpreter, not this project's venv.
-  That is why `PI_G1000SoftkeyLabels.py` imports nothing beyond the standard
-  library and the XPPython3 API.
-* **`Resources/plugins/PythonPlugins/`** is created by XPPython3 on the *first
-  X-Plane run*, so on a fresh install it does not exist yet. The script creates
-  it early, which is harmless and saves a launch cycle.
-* **`PI_G1000SoftkeyLabels.py`** is copied into that folder (XPPython3 loads
-  plugins by the `PI_` prefix). It creates 24 writable 16-byte datarefs and does
-  nothing else: `g1000/softkey/pfd/1..12` and `g1000/softkey/mfd/1..12`.
-
-The Web API can *write* datarefs but cannot *create* them, which is the only
-reason a plugin exists at all. Everything expensive stays in the standalone
-daemon so it never touches X-Plane's flight-loop thread.
-
-Restart X-Plane, then confirm the datarefs actually registered:
-
-```
-powershell -ExecutionPolicy Bypass -File scripts\install-xplane-plugin.ps1 -VerifyOnly
-```
-
-That queries a running X-Plane over the web API and reports how many of the 24
-exist and their `value_type` (expect `data`). If the plugin failed to load, look
-in `<X-Plane>/Log.txt` and `<X-Plane>/XPPython3.log`.
-
-### The X-Plane web server
-
-X-Plane 12.1.1+ serves the REST API on `http://localhost:8086`. Check
-`http://localhost:8086/api/v1/datarefs` in a browser; if it does not answer,
-enable the web server in Settings -> Network.
-
-## The window
-
-```
-.\g1000-gui
-```
-
-or `g1000 gui`, or `python -m g1000_softkey.gui`. Double-clicking
-`g1000-gui.cmd` works too, and it is a reasonable thing to make a desktop
-shortcut to.
-
-Everything in this README is in there: a walkthrough of the six setup steps, a
-window picker, a calibration editor where you draw the softkey strip onto the
-captured frame with the mouse and judge it magnified, every cell as Tesseract
-receives it, the colour measurements, a form for every setting with the
-reasoning beside it, and Start/Stop with a live board of the twelve softkeys
-per display.
-
-It runs no part of the pipeline itself: every button spawns the same CLI and
-shows what it said, with the exact command printed above the output so you can
-paste it into a shell or into a bug report. `docs/GUI.md` has the details and
-the reasons.
-
-If you have no X-Plane to hand, press **Make test frames and use them** on the
-first tab. Every tab then works from saved pictures, and you can see the whole
-thing run before installing anything into the simulator.
-
-The window is plain Tk, which is part of Python's standard library -- there is
-no extra dependency to install. A Python built without Tk support cannot open
-it; `install-windows.ps1` checks for that and says so, and the CLI does
-everything the window does regardless.
-
-## Calibration workflow
-
-> **Do this in the GUI if you can.** The Calibrate tab draws the softkey strip
-> onto the captured frame with the mouse and then walks you through three
-> steps -- place the top-left corner, bring in the other two edges, trim the
-> cells -- with the corner being worked on magnified beside it, so "just
-> inside the edge" is something you can see rather than something you have to
-> arrive at by editing a fraction and re-running a command. This section is
-> the command-line equivalent, which is a slower loop: change a number, re-run
-> `calibrate`, open the PNG, look, repeat.
-
-> **Use `g1000.cmd`.** It calls the venv interpreter directly, so there is
-> nothing to activate and PowerShell's execution policy never enters into it
-> (a `.cmd` file is not a PowerShell script):
->
-> ```powershell
-> .\g1000 list-windows
-> .\g1000 calibrate --display pfd
-> .\g1000 run
-> ```
->
-> Activating still works if you prefer it (`.venv\Scripts\Activate.ps1` in
-> PowerShell, `activate.bat` in cmd), and so does calling
-> `.venv\Scripts\python.exe -m g1000_softkey.main` directly. What does *not*
-> work is a bare `python`/`py` with no venv active: that picks up a system
-> interpreter and fails with `ModuleNotFoundError: No module named 'numpy'`.
-> (`py` does honour an *active* venv -- it just falls back silently when there
-> is none.)
-
-
-The strip geometry depends on the pop-out window size and bezel, so it is
-expressed as *fractions* of the client area and has to be set once per setup.
-
-1. Start X-Plane. You do **not** need to pop the displays out by hand:
-   `[window_management]` is on by default, so the daemon fires
-   `sim/GPS/g1000n1_popout` and `sim/GPS/g1000n3_popout` for any display whose
-   window is not already open, sizes each to 1280x960 and puts it in the
-   top-left corner of the monitor X-Plane is on. Do it on demand with:
-   ```
-   .\g1000 -c config.toml manage-windows
-   ```
-   That needs X-Plane's web server on (Settings → Network → Web API), the same
-   one publishing uses. Turn the whole thing off with `enabled = false` under
-   `[window_management]` if you would rather place the windows yourself --
-   which is the right call if a pop-out is feeding avionics hardware whose
-   size and position are part of a physical setup.
-2. Find the window titles:
-   ```
-   .\g1000 list-windows
-   ```
-   This lists only windows of class `X-System`, which is what X-Plane's own
-   windows carry; add `--all` to see everything on the desktop. Copy a
-   distinctive substring of each title into `window_title` under
-   `[display.pfd]` / `[display.mfd]` in your `config.toml` (copy
-   `config.example.toml` to start).
-3. Dump the calibration images and a suggested geometry:
-   ```
-   .\g1000 -c config.toml calibrate --out calibration
-   ```
-   This writes `<display>_raw.png` (what was captured), `<display>_strip.png`
-   (the current crop), `<display>_overlay.png` (crop + numbered cell
-   boundaries) and, when the coarse auto-detect finds the dark band at the
-   bottom of the frame, `<display>_overlay_auto.png` plus a TOML snippet on
-   stdout.
-   The GUI does this once for both displays. The pop-outs are normally the
-   same size, so the MFD copies the PFD's strip position unless you untick
-   **Use the PFD strip position for MFD** -- at which point it gets its own
-   editor and its own numbers. From the command line, calibrate each
-   `[display.<key>.geometry]` separately.
-
-4. Paste the suggested numbers into the config, re-run `calibrate`, and look
-   at `<display>_overlay.png`: each green box must sit around exactly one
-   label, with no bleed into the neighbouring cell and none of the bezel or
-   the moving map inside the box. Nudge `x/y/w/h` and `cell_pad_x/y` until it
-   does. **Do not skip this step** -- the auto-detect is only a seed; it gets
-   the vertical band right but the horizontal extent only approximately.
-   The GUI warns here too: when you save, any cell whose ink reaches the very
-   edge of its box is named, and those boxes are drawn amber while you work.
-   It is a hint rather than a verdict -- a label can fill its cell honestly --
-   but it catches the trim being one notch too tight, which is the mistake
-   that costs a whole label.
-
-5. Check what Tesseract actually sees:
-   ```
-   .\g1000 -c config.toml dump-cells --out cells
-   ```
-   `<display>_NN_prep.png` should be black text on a white background, with
-   the glyphs roughly 30 px tall, including for the highlighted (selected)
-   softkey. If a cell is inverted or the text is clipped, fix the geometry
-   before blaming the OCR.
-6. Watch the labels live before wiring anything to X-Plane:
-   ```
-   .\g1000 -c config.toml run --publisher console
-   ```
-7. Then run for real (`target = "webapi"` in `[publish]`, or `--publisher webapi`):
-   ```
-   .\g1000 -c config.toml run
-   ```
-
-Both X-Plane targets write the same datarefs, and both have been confirmed
-doing so against a running X-Plane: `websocket` sends one message per cycle
-and is the normal path, `webapi` sends an HTTP request per changed cell.
+If you have no X-Plane to hand yet, the Start here tab can generate sample
+pictures so you can see the whole thing work first.
 
 ## Wiring a PilotsDeck button
 
@@ -331,385 +77,79 @@ For PFD softkey 1:
 | Field | Value |
 | --- | --- |
 | Command (press) | `sim/GPS/g1000n1_softkey1` |
-| Display value | `g1000/softkey/pfd/1:s64` |
+| Display value | `glasslinkxp/softkey/pfd/1:s64` |
 
 `:s64` is PilotsDeck's string-dataref address syntax: read 64 bytes as a
-NUL-terminated string. The daemon writes exactly 64 bytes, NUL padded.
+NUL-terminated string.
 
-**The width is fixed in three places and they must agree**: `FIELD_WIDTH` in
-`PI_G1000SoftkeyLabels.py` (changing it needs an X-Plane restart -- the buffer
-is allocated when the accessor is registered), `publish.field_width` in the
-config, and the `:sNN` on every button. That is why it is 64 and not a snug
-fit: changing it later means re-editing every button you had made, and the
-longest label in `labels.txt` -- `FLIGHT PLAN`, 11 characters -- left the
-previous 16-byte field only four characters of headroom for a vocabulary that
-grows whenever someone finds a softkey nobody had listed.
+> **Upgrading from the old `g1000-softkey` release?** The datarefs were renamed
+> along with the project: `g1000/softkey/...` is now `glasslinkxp/softkey/...`.
+> Any buttons you already made need re-addressing. The installer removes the
+> old X-Plane plugin, so the old names stop existing rather than going stale.
 
-### Softkey colours
-
-Alongside each label the daemon publishes an int dataref naming the colour of
-the cell the label sits on:
+Alongside each label, GlassLinkXP also publishes the colour of the cell the
+label sits on, as an int dataref:
 
 | dataref | value |
 | --- | --- |
-| `g1000/softkey/pfd/1/bg` | `0` black, `1` white (selected/inverted), `2` yellow, `3` red |
+| `glasslinkxp/softkey/pfd/1/bg` | `0` black, `1` white (selected/inverted), `2` yellow, `3` red |
 
-Use it to pick the button image or background -- a PilotsDeck display value of
-`g1000/softkey/pfd/1/bg` switches on a number, no string parsing needed.
-
-The label dataref is the label and nothing else: the daemon never prepends a
-colour hint or any other markup to it, so a client that knows nothing about
-`/bg` still shows a clean label. Setting the text colour so it stays readable
-against a coloured face is the Stream Deck's job -- in PilotsDeck, per button.
-The daemon does not measure the G1000's own font colour either; the glyphs are
-~10 px of anti-aliased, sometimes cyan text, and it is not what a Stream Deck
-needs.
-
-Check the classification against your own display before relying on it:
-
-```
-g1000 -c config.toml dump-colors
-```
-
-It prints each cell's border-ring BGR and HSV and how those classified, plus
-the thresholds that produced the answer. Move the thresholds in `[color]` to
-fit what you see -- the shipped defaults came from plausible swatches, not
-from a capture.
+Use it to pick the button image or background. Check the classification
+against your own display with the Colours tab (or `glasslinkxp dump-colors`)
+before relying on it -- the shipped thresholds came from plausible swatches,
+not a real capture.
 
 Softkey N maps to `sim/GPS/g1000n1_softkeyN` (pilot PFD) and
-`sim/GPS/g1000n3_softkeyN` (MFD); `g1000n2` is the copilot PFD and is out of
-scope for this POC.
+`sim/GPS/g1000n3_softkeyN` (MFD); `g1000n2` is the copilot PFD and is not
+supported.
 
-## Offline development (no X-Plane, no Windows)
+## Configuration
 
-Everything downstream of capture is platform independent, and there is a
-synthetic frame generator, so the whole pipeline runs anywhere:
+`docs/CONFIGURATION.md` documents every setting; the Settings tab in the
+window shows the same text beside each field. `config.example.toml` in your install folder is a
+commented starting point if you would rather edit `config.toml` by hand.
 
-```
-python -m g1000_softkey.main synth --out frames
-python -m g1000_softkey.main run --image frames/pfd_top.png --publisher console --once
-python -m g1000_softkey.main dump-colors --image frames/alerts.png
-python -m g1000_softkey.main bench --image frames/pfd_menu.png -n 50
-python -m pytest -q
-```
-
-`--image` accepts a PNG or a directory of PNGs (a directory is cycled, one
-frame per loop iteration; a file named `<display>.png` in it is used for that
-display).
-
-## Tuning
-
-* `app.loop_hz` (default 4) -- how often to capture. Softkeys only change when
-  you press one, so this mostly sets worst-case latency (1/4 s + OCR).
-* `app.change_gating` (default true) -- compare each cell against the previous
-  frame and skip OCR for unchanged cells. In steady state that means zero OCR
-  calls per frame.
-* `ocr.upscale` (default 3.0) -- Tesseract wants roughly a 30 px cap height.
-  Raise it for a small pop-out window, lower it for a 4K one.
-* `ocr.fuzzy_cutoff` (default 0.62) -- how close a raw OCR string has to be to
-  a `labels.txt` entry before it is snapped. Lower = more aggressive
-  correction and more risk of snapping to the wrong label.
-* `ocr.blank_ink_ratio` (default 0.004) -- below this fraction of "ink" a cell
-  is reported as an empty string instead of being OCR'd.
-* `color.value_max` / `color.saturation_max` / the hue windows -- where the
-  four background colours are cut apart. Set them from `dump-colors` output
-  rather than from the shipped defaults; the order they are applied in (V,
-  then S, then hue) means a wrong `value_max` shows up as coloured cells
-  reading black, and a wrong `saturation_max` as white cells reading
-  coloured.
-`docs/CONFIGURATION.md` is the full reference: every setting, what it does and
-why its default is what it is. It is generated from the same text the GUI's
-Settings tab shows beside each field.
-
-* `labels.txt` -- the vocabulary. It is version and aircraft dependent; add
-  anything your setup shows that is missing. Unknown strings are passed
-  through raw (and logged at debug level) rather than being forced onto a
-  wrong label.
+`labels.txt` (Vocabulary tab) is the list of labels a reading is corrected
+to. It is aircraft and G1000 version dependent -- add anything your setup
+shows that is missing; your additions survive updates.
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 | --- | --- |
-| `no visible window title contains ...` | The display is not popped out, or the title differs. Run `list-windows`. |
-| `list-windows` errors on Linux/macOS | Expected; the capture path is Windows-only. Use `--image`. |
-| `list-windows` shows fewer windows than you expect | Only X-Plane's own windows (class `X-System`) are listed. Add `--all`, or tick *Show every window*. |
-| `X-Plane has no command called 'sim/GPS/g1000n1_popout'` | The message lists the `g1000n1` commands the sim does have; if the name has changed, turn `[window_management]` off and pop the displays out by hand. |
-| `... was accepted but no window titled like 'G1000 PFD' appeared` | The pop-out opened under a title `window_title` does not match. Run `list-windows --all` and copy the real one. |
-| Window management does nothing, and says X-Plane is not running | It looks for a window of class `X-System`. If the sim is up and this still says otherwise, `list-windows --all` will show what class its windows actually carry. |
-| A pop-out ends up smaller than `size` | X-Plane enforces a minimum on pop-out windows; the log says what it settled at. Re-check the strip geometry against that size. |
-| Labels froze and stopped following the sim | The pop-out was closed. With `[window_management]` on it is reopened within a cycle and the log says so; with it off, `no frames from ... after 3s` is the warning to look for. |
-| A pop-out you closed on purpose keeps coming back | That is window management doing its job. Set `enabled = false` under `[display.mfd]` to leave that display out of it, or turn `[window_management]` off entirely. |
-| `could not initialise Tesseract` / `tesseract executable was not found` | `TESSDATA_PREFIX` is unset or wrong. Point `ocr.tessdata_path` at the directory holding `eng.traineddata`. |
-| `X-Plane Web API unreachable` | X-Plane is not running, is older than 12.1.1, or the web server is off. The daemon keeps retrying; it never crashes the loop. |
-| `ModuleNotFoundError: No module named 'numpy'` | The venv is not active, so a system Python is running. `.venv\Scripts\Activate.ps1` (PowerShell), or call `.venv\Scripts\python.exe` directly. |
-| `N of 48 datarefs are not registered in X-Plane` | The XPPython3 plugin is not installed or failed to load. Check `<X-Plane>/Log.txt` and `XPPython3.log`. |
-| Labels are garbage or empty | Geometry. Run `dump-cells` and look at the `_prep.png` images, or open the Calibrate tab, which draws the boxes on the frame and flags any whose ink is being cut. |
-| One cell is always wrong | Missing entry in `labels.txt`, or a two-line label (see limitations). |
-| Blank cells produce short nonsense strings | The crop includes something bright above or below the strip; tighten `y`/`h`, or raise `ocr.blank_ink_ratio`. |
-| `g1000-gui.cmd` says this Python has no Tk support | Tk is part of the standard library but a separate build-time component. Reinstall with a Python that includes it -- the python.org installer does. |
-| The GUI opens but a tab reports `exit code 2` | The command it ran failed, and its output is in the pane below the buttons with the exact command above it. Everything the window does can be run by hand from there. |
-| The softkey board on the Run tab stays empty | The daemon only logs a row when something changes, so the board fills in on the first frame and then only on a change. If it never fills in, the log will say `no frames from ...`. |
+| `no visible window title contains ...` | The display is not popped out, or the title differs. Use Find windows. |
+| Find windows lists nothing | Only X-Plane's own windows are listed by default. Tick *Show every window*. |
+| A pop-out ends up smaller than expected | X-Plane enforces a minimum size; the log says what it settled at. Recalibrate against that size. |
+| Labels froze and stopped following the sim | The pop-out was closed. It is reopened automatically within a cycle unless window management is off. |
+| `could not initialise Tesseract` | The OCR language data was not found. Re-run `install.cmd`, or point `ocr.tessdata_path` at the folder holding `eng.traineddata`. |
+| `X-Plane Web API unreachable` | X-Plane is not running, is older than 12.1.1, or its web server is off (Settings -> Network). |
+| `N of 48 datarefs are not registered in X-Plane` | The X-Plane plugin is not installed, or failed to load. Check `Log.txt` and `XPPython3.log` in the X-Plane folder, or re-run `scripts\install-xplane-plugin.ps1` from your install folder. |
+| Labels are garbage or empty | Almost always geometry. Open the Calibrate tab and check the boxes, or the Cells tab to see exactly what is being read. |
+| One cell is always wrong | A missing entry in `labels.txt`, or a label the sim draws on two lines (not supported -- see known limitations). |
+| The window says "this Python has no Tk support" | Re-run the installer; the command line still works without it. |
 
 Run any command with `-v` for debug logging (per-cell raw OCR strings,
 confidences and match scores).
 
-## How it works
+## More
 
-`docs/PIPELINE.md` has flowcharts of the daemon loop and of what happens to a
-single frame, plus a key for reading the `-v` output. `docs/GUI.md` covers the
-window: what it spawns, and the three places it reads something the daemon
-wrote.
+[`docs/PIPELINE.md`](docs/PIPELINE.md) has flowcharts of the daemon loop and of
+what happens to a single frame. [`docs/GUI.md`](docs/GUI.md) covers the window.
+[`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) is the full settings reference.
 
-## Latency
+## Working on it
 
-Where the delay between a softkey press and the Stream Deck face actually comes
-from, worst case:
+[`docs/DEVELOPER.md`](docs/DEVELOPER.md) has the project layout, how to run
+the whole pipeline with no Windows and no X-Plane, latency numbers, known
+limitations, and exactly what has and has not been verified.
+[`CLAUDE.md`](CLAUDE.md) has the conventions this codebase is written to.
 
-| stage | cost | notes |
-| --- | --- | --- |
-| polling interval | up to `1/loop_hz` | 250 ms at the old 4 Hz default; ~83 ms at 12 Hz |
-| capture | a few ms | WGC hands over the latest composed frame |
-| OCR | ~45 ms per display | only for cells whose pixels changed; unchanged cycles are ~0.3 ms |
-| publish | **1 message** | was one blocking HTTP PATCH *per changed cell* |
-
-The two things that dominated were the polling interval and the publish path,
-not the OCR. A softkey press typically changes most of a 12-cell strip, and the
-REST publisher issued a separate blocking `PATCH` for each one -- a dozen
-sequential round-trips into X-Plane's embedded web server per press, against
-tens of milliseconds for recognising the whole strip.
-
-`target = "websocket"` sends the entire strip in a single `dataref_set_values`
-message and does not wait for a reply. `dataref_set_values` accepts many
-datarefs at once and needs no prior subscription; name-to-id resolution still
-uses REST. `target = "webapi"` keeps the old per-dataref REST behaviour if you
-need it.
-
-Run with `--timing` to see the breakdown on your own machine; it prints a line
-whenever the labels change:
+`src/` is the release: zipped as-is, it is what the Releases page serves and
+what `install.cmd` installs from, so anything needed at install time lives in
+there. Everything else in the repository is development-only.
 
 ```
-cycle 118 ms (work) + 0 ms (sleep budget)  publish=0.8  ocr_ms=86.9  preprocess_ms=7.8  split_ms=0.4
+uv sync --project src --locked             # the venv lands in src/.venv
+xvfb-run -a src/.venv/bin/python -m pytest -q
+src/.venv/bin/python tools/make_zip.py     # -> dist/glasslinkxp-<version>.zip
 ```
-
-If `publish` is large, X-Plane is the bottleneck; if `ocr_ms` is large, look at
-the crop (`dump-cells`) -- an over-wide strip means more non-blank cells than
-there really are.
-
-## Known limitations
-
-* PSM 7 reads a **single line**. Softkey labels that X-Plane draws on two
-  lines will not read correctly; they would need a per-cell line split first.
-* The coarse auto-detect finds the vertical band reliably but only
-  approximates the horizontal extent; in the offline corpus, auto-detected
-  geometry read 59/60 cells correctly against 60/60 for calibrated geometry.
-* The selected/highlighted state is detected only implicitly (the per-cell
-  threshold handles it); it is not published as a separate dataref.
-* One `tesserocr` API instance is shared by both displays and used serially.
-  That is fine at 4 Hz; it is not thread safe.
-
-## Verified offline
-
-On Linux/CPython 3.11, Tesseract 5.3.4 (system) with `tesserocr` 2.11:
-
-* The tests pass (`python -m pytest -q`), including the full frame -> labels
-  pipeline over 5 synthetic softkey menus (60 cells: 49 labels + 11 blanks),
-  all read exactly, blanks included, with the highlighted cell read correctly.
-* `bench --image frames/pfd_menu.png -n 50` on this container (1280x800
-  frames, 10 non-blank cells):
-
-  | stage | gating off | gating on (steady state) |
-  | --- | --- | --- |
-  | split | 0.20 ms | 0.21 ms |
-  | change gate | 0.00 ms | 0.14 ms |
-  | preprocess | 4.58 ms | 0.00 ms |
-  | OCR | 46.2 ms (10 calls, ~4.6 ms/cell) | 0.00 ms |
-  | **pipeline total** | **51.0 ms** | **0.39 ms** |
-
-  So a full re-read of one display costs ~51 ms of CPU, and an unchanged
-  frame costs ~0.4 ms. At 4 Hz that is well under the "5% of one core"
-  target once the labels are stable. (`capture_ms` in the bench output is PNG
-  decode for the offline source, not Windows Graphics Capture.)
-* Window management's decisions, driven through injected Windows operations
-  (`tests/test_windowmgr.py`, 30 cases): a switched-off feature does not so
-  much as enumerate the desktop; a desktop with no X-Plane on it is left alone
-  rather than having commands fired into it; windows already the right size in
-  the right corner are not touched, and a second pass over the first pass's
-  work changes nothing; each display gets its own command; a window opened for
-  one display is seen by the next rather than popped out again; the target
-  corner comes from X-Plane's monitor and not the pop-out's own; the main
-  window is picked out from among same-class windows by elimination and size;
-  and a command that fails, or that opens nothing, is reported rather than
-  raised. The command client refuses to activate anything whose name it did
-  not match exactly, which is what stops an X-Plane too old for `filter[name]`
-  -- it answers with the *whole* command list -- from having an arbitrary
-  command fired in somebody's cockpit.
-* The frame slot the capture thread writes into (`tests/test_capture.py`): the
-  newest frame wins, what comes out is a copy, and a slot whose window has
-  closed has no frame to give even though one was captured -- permanently,
-  because a WGC session does not outlive its window. Shutting down is kept
-  distinct from losing the window: both stop frames, only one invalidates the
-  last one. Plus the reopen decision itself (`tests/test_main.py`): a lost
-  capture is replaced whether management reopened the window or found it
-  already back, nothing is rebuilt when the window could not be brought back,
-  and neither `--image` nor window management switched off reopens anything.
-* Vocabulary snapping fixed 1 of 49 labels in the offline corpus
-  (`TMRIREF` -> `TMR/REF`), and is unit-tested against the usual confusions
-  (`lNSET`, `DCLTP`, `0BS`, `STDBARO`).
-* The sharpening tuner's no-regression guarantee -- a rung strong enough to
-  fix one cell must not read a different, already-correct cell wrongly -- is
-  tested against a scripted OCR engine reproducing the exact failure this
-  tool exists for (a rung that opens up a `0` and also flips a `6` into a
-  `5`), and the search finds the rung that fixes the first without the
-  second. `tune --truth <file>` was also run for real, over the synthetic
-  corpus with real Tesseract: the search of ~7,200 candidate ladders across
-  32 psm/threshold/upscale combinations took a few seconds.
-
-### The GUI, offline
-
-On the same container, with Tk 8.6 under Xvfb and the synthetic frames as the
-frame source, the window was driven end to end and every step did what it
-says:
-
-* Every tab builds, and the whole window was clicked through.
-* **Start here** wrote the synthetic frames and pointed the frame source at
-  them; **Run** started the daemon with the console publisher and the softkey
-  board filled in, with the selected cell drawn white; **Stop** ended it
-  cleanly (exit code 0, through the daemon's own SIGINT handler, not a kill).
-* **Calibrate** produced the picture; a simulated mouse drag from frame pixel
-  (60, 725) to (1219, 781) produced exactly that rectangle in the config, the
-  six numbers followed the drag, nudging the left edge moved it by one frame
-  pixel while holding the right edge still, and the twelve green boxes drawn
-  on the canvas matched `strip.cell_rects` -- the function `split_cells`
-  actually slices with -- for every geometry tried. Saving wrote the numbers
-  into `config.toml` and they loaded back. Over-trimming the cells turned the
-  offending boxes amber and made Save ask before writing; at a correct
-  geometry it asked nothing, on every frame in the offline corpus.
-* **Cells** showed all 24 cell pictures, at their true pixel size rather than
-  shrunk to fit; typing an expected label into two of them, queuing the page
-  and pressing **Run tuning** shelled out to a real `tune --truth ...` (real
-  Tesseract, the full psm/threshold/upscale/ladder search over the synthetic
-  corpus, in a few seconds), reported "everything already reads correctly at
-  baseline", and Save suggested settings wrote the settings it found into
-  `config.toml` and read back the same values. Queuing three different pages
-  captured one after another into the same `dump-cells` output folder --
-  which overwrites it every time, by design -- left each queued page checked
-  against its own snapshot rather than whichever page was captured last (all
-  9 labelled cells across the three pages read correctly). At the documented
-  `minsize(940, 640)`, with real `dump-cells` output loaded, the tab's own
-  content -- more than twice the window's height once the grid, the tuner and
-  the output pane are all accounted for -- scrolls instead of squeezing the
-  output pane and the status bar to nothing, which is what it did before. A
-  box fixed at this project's own default geometry's ~320x152 still clipped a
-  taller, differently-calibrated strip's cells instead of blurring them; the
-  box now takes its size from the picture it is given rather than the other
-  way around, checked against a strip geometry more than twice as tall.
-  **Colours** parsed 24 measurements and drew each row in the colour it was
-  classified as; **Pages** captured a `[[screen]]` block; **Tools** ran the
-  benchmark.
-* **Find windows** failed as it must on Linux, and the tab showed the command
-  that failed and the daemon's own explanation of why.
-* The tests cover this without a display too: 369 of them, of which the 111 that
-  need Tk skip themselves when there is no display (`618 passed` with one,
-  `507 passed, 111 skipped` without). Several are there to stop the GUI
-  drifting from the daemon -- every argv the GUI can build is parsed by
-  `main.build_parser()`, every parser in `gui/logparse.py` is fed the output of
-  the command it reads (the softkey board from `main._format_row()`, the window
-  list from a real `WindowInfo`, the calibrate, dump-colors and
-  screen-template parsers from those commands run over synthetic frames, and
-  the tuning-result parser from a real `tune` search), the settings form is
-  checked against the
-  config dataclasses field by field, and the calibration editor's boxes are
-  compared with the rectangles `strip.py` crops.
-
-## Not verified here
-
-This POC was developed in a Linux container with no Windows and no X-Plane.
-The following code paths are written from the documented APIs but have
-**never been executed**:
-
-* **Windows Graphics Capture** (`WgcCapture`). The `windows-capture` callback
-  wiring, the BGRA frame layout, `draw_border=False` behaviour on Windows 10
-  vs 11, and capture of an occluded X-Plane pop-out are all unexercised.
-* **`list_windows()` / `find_window()`** (ctypes `user32` enumeration). The
-  non-Windows error path is tested; the Windows path is not.
-* **Window management, everywhere it touches Windows or the sim.** The
-  decisions are covered offline -- `tests/test_windowmgr.py` drives the whole
-  policy through injected operations, so which window counts as missing, which
-  command that means firing, whose monitor the result belongs on and what a
-  failure reports are all exercised on Linux. None of the following is:
-  * **That the pop-out commands are named what this thinks.**
-    `sim/GPS/g1000n1_popout` and `sim/GPS/g1000n3_popout` come from published
-    command references, not from a sim anyone here has queried. The nearby
-    `_popup` commands open the panel *inside* X-Plane's window, where it
-    cannot be captured, so the difference matters. A name that does not
-    resolve is reported along with the `g1000n1`/`g1000n3` commands the sim
-    does list, so the failure says what the right name is rather than only
-    that this one was wrong.
-  * **That the commands are momentary rather than toggles.** They are fired
-    only for a window that is not open, so a toggle would still behave; but
-    nothing here has established which they are.
-  * **That every X-Plane window carries the class `X-System`.** That is the
-    user's observation on a running sim, not something Laminar documents. It
-    only ever filters a listing and picks the anchor window -- `--all` shows
-    everything, and no part of the pipeline depends on it -- but if it is
-    wrong on some build, `list-windows` will look empty until `--all` is used.
-  * **`SetWindowPos`, `MonitorFromWindow` and `GetMonitorInfoW`.** Including
-    whether a pop-out's client area really lands at the requested size, what
-    X-Plane's minimum pop-out size actually is, and how any of it behaves
-    under per-monitor DPI scaling, where the coordinates a process sees are
-    not necessarily physical pixels.
-  * **That placing a window at the monitor's origin keeps the taskbar off
-    it.** The premise -- that an occluding taskbar breaks the capture -- is
-    the user's observation, and the fix follows from it rather than from
-    anything measured here.
-  * **The reopen path end to end.** That a closed pop-out is noticed is no
-    longer in doubt: `windows-capture` was seen calling `on_closed` on a real
-    run, which is the signal the whole recovery hangs off. What has not been
-    seen is the rest of it -- the pop-out command going out, the window coming
-    back, and a new capture attaching to it. The decision to rebuild, and every
-    way it can decline to, are covered in `tests/test_main.py`.
-* **The details of the X-Plane API clients.** Whether X-Plane accepts a write
-  to a plugin-created Data dataref was PLAN.md's open question, and it is
-  answered: both the WebSocket and the REST publisher have been seen updating
-  the plugin's datarefs against a running X-Plane. What is still only tested
-  against a stub session is the behaviour around that -- id resolution,
-  re-resolving on a 404, and the X-Plane-not-running paths.
-* **The XPPython3 plugin inside X-Plane.** Its buffer handling is tested
-  against a stubbed `XPPython3` module, so the logic is exercised, but
-  `registerDataAccessor` argument names and the `Type_Data` read/write
-  callback contract have not been validated against a real XPPython3 runtime.
-* **Real G1000 geometry, fonts and colours.** All accuracy numbers above come
-  from synthetic frames rendered with Liberation Sans, not from X-Plane
-  screenshots. Real-world OCR accuracy, the true default strip fractions in
-  `config.example.toml`, and whether X-Plane wraps any label onto two lines
-  are all unknown.
-* **The Windows installer itself.** `scripts\install-windows.ps1` was rewritten
-  to install a pinned, hash-checked prebuilt wheel instead of compiling
-  Tesseract. Everything it orchestrates is verified -- the wheel's contents
-  were inspected by hand, `uv lock` records its digest, and `uv sync --locked`
-  provisions an interpreter and passes the whole suite on Linux -- but **the
-  PowerShell has never been run, or even syntax-checked**: there is no
-  PowerShell in the development container. If it fails, the previous
-  source-build installer is at `git show e916727:scripts/install-windows.ps1`.
-* **The `Type_Int` datarefs.** The plugin registers them with `readInt` /
-  `writeInt` per the XPPython3 documentation and the round trip is tested
-  against the stubbed SDK, but no X-Plane has created one, and no Web API has
-  written a bare number to one.
-* **End-to-end latency to a Stream Deck face** and the effect on sim frame
-  rate (success criteria 2 and 4 in PLAN.md).
-* **The GUI on Windows.** It is plain Tk and was exercised under Xvfb on
-  Linux, but nothing here has opened it on Windows. Three things in it are
-  Windows-specific and have never run: `pythonw.exe` launching it without a
-  console (`g1000-gui.cmd`), `CREATE_NEW_PROCESS_GROUP` plus
-  `CTRL_BREAK_EVENT` as the way Stop reaches the daemon -- and with it the
-  `SIGBREAK` handler added to `cmd_run` -- and `os.startfile` behind the
-  "Open folder" buttons. If Stop turns out not to be graceful there, the
-  escalation behind it (terminate, then kill) still stops the daemon.
-* **That Tk is present in the venv the installer builds.** `uv` downloads a
-  python-build-standalone CPython, whose Windows builds do ship the tcl/tk
-  files; the reports of tkinter being missing from uv-managed Pythons are
-  macOS and Linux ones. It has not been confirmed on Windows here, so
-  `install-windows.ps1` checks for Tk and warns rather than assuming, and
-  `g1000-gui.cmd` checks again before launching `pythonw.exe` -- a `pythonw`
-  that cannot import tkinter would otherwise fail with no window and no
-  message at all.

@@ -9,9 +9,9 @@ itself.
 
 import pytest
 
-from g1000_softkey.config import ConfigError, StripGeometry
-from g1000_softkey.gui import geometry as geo
-from g1000_softkey.strip import cell_rects, strip_rect
+from glasslinkxp.config import ConfigError, StripGeometry
+from glasslinkxp.gui import geometry as geo
+from glasslinkxp.strip import cell_rects, strip_rect
 
 FRAME = (1280, 800)
 

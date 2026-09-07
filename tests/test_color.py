@@ -9,8 +9,8 @@ that is what the ``dump-colors`` subcommand is for.
 import numpy as np
 import pytest
 
-from g1000_softkey import synth
-from g1000_softkey.color import (
+from glasslinkxp import synth
+from glasslinkxp.color import (
     BLACK,
     RED,
     WHITE,
@@ -23,8 +23,8 @@ from g1000_softkey.color import (
     classify_hsv,
     measure_cell,
 )
-from g1000_softkey.config import ColorConfig, ConfigError, StripGeometry, from_mapping
-from g1000_softkey.strip import split_cells
+from glasslinkxp.config import ColorConfig, ConfigError, StripGeometry, from_mapping
+from glasslinkxp.strip import split_cells
 
 COLOR = ColorConfig()
 

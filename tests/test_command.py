@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from g1000_softkey.command import CommandClient, CommandError
-from g1000_softkey.config import PublishConfig
+from glasslinkxp.command import CommandClient, CommandError
+from glasslinkxp.config import PublishConfig
 
 PFD = "sim/GPS/g1000n1_popout"
 MFD = "sim/GPS/g1000n3_popout"

@@ -217,14 +217,13 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# g1000-softkey local output
+# glasslinkxp local output
 config.toml
 calibration/
 cells/
 frames/
 tuning/
 
-# Language data fetched by scripts/install-windows.ps1. Pinned by URL and
-# SHA-256 in the installer, never committed: nothing binary is vendored into
-# this repository.
+# Language data fetched by install.ps1. Pinned by URL and SHA-256 in the
+# installer, never committed: nothing binary is vendored into this repository.
 tessdata/

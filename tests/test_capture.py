@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from g1000_softkey import synth
-from g1000_softkey.capture import (
+from glasslinkxp import synth
+from glasslinkxp.capture import (
     CaptureError,
     ImageCapture,
     WgcCapture,
@@ -11,7 +11,7 @@ from g1000_softkey.capture import (
     list_windows,
     sources_for,
 )
-from g1000_softkey.config import DisplayConfig
+from glasslinkxp.config import DisplayConfig
 
 
 @pytest.fixture
@@ -96,7 +96,7 @@ class _Recorder:
 
 @pytest.fixture
 def recorded(monkeypatch):
-    from g1000_softkey import capture
+    from glasslinkxp import capture
 
     _Recorder.calls = []
     monkeypatch.setattr(capture, "WgcCapture", _Recorder)
@@ -126,7 +126,7 @@ def test_opening_a_capture_says_nothing_about_size(recorded):
 
 
 def _slot():
-    from g1000_softkey.capture import _LatestFrame
+    from glasslinkxp.capture import _LatestFrame
 
     return _LatestFrame()
 
@@ -184,6 +184,6 @@ def test_stopping_is_not_losing_the_window():
 
 
 def test_a_source_with_no_window_to_lose_never_reports_one_lost(frames_dir):
-    from g1000_softkey import capture
+    from glasslinkxp import capture
 
     assert capture.window_lost(ImageCapture(frames_dir)) is False

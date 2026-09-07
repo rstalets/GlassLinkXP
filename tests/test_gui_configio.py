@@ -7,7 +7,7 @@ given, so that is what most of this checks -- through the daemon's own
 
 import pytest
 
-from g1000_softkey.config import (
+from glasslinkxp.config import (
     AppConfig,
     ColorConfig,
     ConfigError,
@@ -19,7 +19,7 @@ from g1000_softkey.config import (
     default_config,
     load_config,
 )
-from g1000_softkey.gui import configio, schema
+from glasslinkxp.gui import configio, schema
 
 
 def test_the_defaults_round_trip_through_the_writer(tmp_path):
@@ -181,7 +181,7 @@ def test_these_round_trip_exactly(name, text):
 def test_a_display_whose_name_needs_quoting_survives(tmp_path):
     """It produced `[display.G1000 PFD]`, which does not parse -- so the file
     the GUI had just saved could not be opened again."""
-    from g1000_softkey.config import load_config
+    from glasslinkxp.config import load_config
 
     text = '[app]\nloop_hz = 1.0\n["display"."G1000 PFD"]\nwindow_title = "left"\n'
     path = tmp_path / "config.toml"
@@ -382,7 +382,7 @@ def test_displays_calibrated_apart_are_seen_to_differ():
 
 
 def test_writing_a_geometry_writes_every_field(tmp_path):
-    from g1000_softkey.config import load_config
+    from glasslinkxp.config import load_config
 
     document = configio.default_document()
     source = StripGeometry(x=0.0273, y=0.915, w=0.9461, h=0.0675,
@@ -474,7 +474,7 @@ def test_no_default_in_the_document_reads_as_off_when_it_is_not(section):
 
 
 def test_window_management_round_trips_off_its_defaults(tmp_path):
-    from g1000_softkey.config import WindowManagementConfig
+    from glasslinkxp.config import WindowManagementConfig
 
     config = AppConfig(
         displays=default_config().displays,

@@ -2,7 +2,7 @@
 
 import pytest
 
-from g1000_softkey.screens import Screen, ScreenError, ScreenLibrary, load_screens
+from glasslinkxp.screens import Screen, ScreenError, ScreenLibrary, load_screens
 
 XPDR = Screen(
     name="xpdr-code",
@@ -125,7 +125,7 @@ def test_missing_file_is_not_an_error(tmp_path):
 
 
 def test_the_shipped_definitions_load():
-    from g1000_softkey.config import OcrConfig
+    from glasslinkxp.config import OcrConfig
 
     library = ScreenLibrary.load(OcrConfig().screens_file)
     assert len(library) >= 1

@@ -1,6 +1,6 @@
 # The window
 
-`g1000 gui` opens a window over the same commands the CLI has. It exists
+`glasslinkxp gui` opens a window over the same commands the CLI has. It exists
 because the people this project is for are pilots rather than programmers, and
 the setup it needs -- find a window title, discover where a strip of pixels
 sits inside it, and write both into a TOML file -- is a lot to ask of somebody
@@ -11,11 +11,11 @@ For what the daemon does once it is running, see [PIPELINE.md](PIPELINE.md).
 ## What it is, and what it is not
 
 The GUI runs no part of the pipeline itself. Every button spawns
-`python -m g1000_softkey.main <subcommand>` and shows what it said.
+`python -m glasslinkxp.main <subcommand>` and shows what it said.
 
 ```mermaid
 flowchart LR
-    subgraph GUI["g1000 gui  (Tk, one process)"]
+    subgraph GUI["glasslinkxp gui  (Tk, one process)"]
         TABS["Tabs<br/>collect arguments"]
         DOC["config.toml<br/>read and written here"]
         OUT["Output panes,<br/>pictures, softkey board"]
@@ -64,20 +64,78 @@ see. So the loop survives a handler that raises, and says so in the status
 bar with a count and the traceback kept on the app (`poll_failures`,
 `last_poll_error`) -- kept alive is not the same as kept quiet.
 
+## The setup wizard is a bar, not a tab
+
+Setup is six steps done in five different tabs, and the first version of it
+was a list of them on the **Start here** tab with a "go there" button each.
+That is not a walkthrough. It can send somebody off to do a step and then has
+nothing further to say: they finish, and finding out what came next meant
+navigating back to a tab they had left and remembering which of six things
+they had already done.
+
+So the walkthrough is a band across the top of the window instead, above the
+notebook, and it stays there while the user works in whichever tab the step
+needs. Pressing **Next** opens the next step's tab for them.
+
+```mermaid
+flowchart LR
+    LAUNCH["gui opens"] --> Q{"config.toml<br/>found?"}
+    Q -->|no| W["wizard bar up,<br/>step 1"]
+    Q -->|"yes, but setup was<br/>closed part way"| R["wizard bar up,<br/>at the stored step"]
+    Q -->|yes| T["the remembered tab"]
+    W --> STEP
+    R --> STEP
+    STEP["show step:<br/>select its tab"] -->|Next| CHECK{"does it<br/>look done?"}
+    CHECK -->|yes| STEP
+    CHECK -->|no| ASK["ask, do not refuse"]
+    ASK -->|"go on anyway"| STEP
+    ASK -->|cancel| STEP
+    STEP -->|"Finish / Close setup"| HIDE["bar down,<br/>step remembered"]
+```
+
+Three things make it a wizard rather than a nag:
+
+* **It creates `config.toml`.** Pressing Next on step one writes one, seeded
+  from `config.example.toml`. Every tab that saves a setting degrades to
+  "this is only set for now" with no file open, so a walkthrough that did not
+  make one would spend five steps quietly discarding the user's work.
+* **It survives being closed.** The step is kept in the preferences, so
+  closing the window half way through setup is not the same as abandoning it;
+  the bar comes back where it was, and the Start here tab's button says which
+  step it would resume at.
+* **The checks ask, they never block.** Two of the six steps are somebody
+  looking at a picture and deciding it is right, which nothing here can see,
+  and the two checks that do exist (a window chosen per display; a strip
+  position moved off the built-in default) can be fooled by a hand-edited
+  config. A check that cannot tell a finished step from an unusual one, but
+  refuses anyway, only teaches people to click past it -- the same reasoning
+  as the calibration editor's clipping warning.
+
+The steps live in `gui/wizard.py` with no Tk in it, so the list, its order and
+the checks are testable without a display (`tests/test_gui_wizard.py`); the
+band itself is `widgets.WizardBar`, which is told what to draw and knows
+nothing else; `app.py` owns the one instance and drives it. Each step names
+its tab by class name through `tabs.tab_index`, so reordering the tab strip
+cannot leave a step pointing somewhere else.
+
 ## The tabs
 
 | Tab | Runs | For |
 | --- | --- | --- |
-| Start here | `synth` | The six steps of setting this up, each with a button to the tab that does it. And a way to try the whole thing with no X-Plane. |
+| Start here | `synth` | What this is, a button that starts or resumes setup, and a way to try the whole thing with no X-Plane. |
 | Run | `run` | Start/stop, the publisher, the rate, debug output, and a live board of the twelve softkeys per display. |
 | Find windows | `list-windows`, `manage-windows` | Pick the pop-out windows off a list; applying one writes `window_title` into the config. Only X-Plane's own windows are listed unless *Show every window* is ticked. *Set up pop-outs* opens, sizes and places the PFD and MFD, then lists again -- what you are here to do is pick a window, and the ones worth picking are the ones that now exist. Windows only. |
 | Calibrate | `calibrate` | Draw the strip on the captured frame with the mouse, judge it in a magnified close-up, and work through three steps. The MFD copies the PFD unless told otherwise. See below. |
 | Cells | `dump-cells`, `tune` | Every cell as Tesseract receives it, next to the raw crop. Type what a cell should read, queue the page, repeat on other pages, then Run tuning searches sharpening/upscale/threshold settings that fix a queued cell without breaking another. See below. |
 | Colours | `dump-colors` | Each cell's ring BGR/HSV and how it classified, with the rows drawn in the colour they were called. |
-| Pages | `screen-template` | Record a softkey page into `screens.toml`. |
 | Vocabulary | -- | `labels.txt` in an editor. |
 | Settings | -- | Every setting in the config file, as a form, plus a raw TOML editor. |
 | Tools | `bench`, `synth` | Timings, and synthetic frames. |
+
+`PagesTab` (`screen-template`, records a softkey page into `screens.toml`) is
+still defined and tested but deliberately left out of `TAB_CLASSES` in
+`tabs.py` -- the page-lookup feature it authors for stays on, it just is not
+exposed to users yet.
 
 ## The Cells tab: true resolution over density
 
@@ -314,9 +372,9 @@ disagreeing with the daemon. What the board shows is what the daemon said.
 ## Files
 
 ```
-g1000_softkey/gui/
+glasslinkxp/gui/
   __init__.py   launch(); the message when Tk is missing
-  __main__.py   python -m g1000_softkey.gui
+  __main__.py   python -m glasslinkxp.gui
   app.py        the window: shared state, the two child processes, the tab strip
   tabs.py       one class per tab
   widgets.py    output pane, image view, the softkey board, form helpers
@@ -356,7 +414,7 @@ document and the form cannot say different things, and a test fails if the
 checked-in file falls behind:
 
 ```
-python -m g1000_softkey.gui.schema > docs/CONFIGURATION.md
+python -m glasslinkxp.gui.schema > docs/CONFIGURATION.md
 ```
 
 The writer was the worse half. It quietly assumed everything it met would be

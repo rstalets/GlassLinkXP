@@ -9,12 +9,12 @@ time somebody pressed a button. This file is where the reasoning lives
 instead. `config.example.toml` is a starting point to copy; a missing config
 file is not an error, and every setting below has a working default.
 
-> Generated from `g1000_softkey/gui/schema.py`, which is also what the
+> Generated from `src/glasslinkxp/gui/schema.py`, which is also what the
 > Settings form is built from -- so the form and this document cannot say
 > different things. Regenerate with:
 >
 > ```
-> python -m g1000_softkey.gui.schema > docs/CONFIGURATION.md
+> python -m glasslinkxp.gui.schema > docs/CONFIGURATION.md
 > ```
 
 
@@ -24,9 +24,9 @@ How often the softkey strip is read. Softkeys only change when you press one, so
 
 ### `loop_hz`
 
-*Rate (Hz)* — a number. Default: `12.0`.
+*Rate (Hz)* — a number. Default: `28.0`.
 
-Captures per second. 12 Hz keeps the worst case under about 85 ms. With change gating on, an unchanged cycle costs a fraction of a millisecond, so a high rate is nearly free.
+Captures per second. 28 Hz keeps the worst case under about 36 ms. With change gating on, an unchanged cycle costs a fraction of a millisecond, so a high rate is nearly free.
 
 ### `change_gating`
 
@@ -43,19 +43,19 @@ How much a pixel has to move (0-255) to count as changed. Too low and anti-alias
 
 ## Pop-out windows — `[window_management]`
 
-Whether the daemon opens, sizes and positions the PFD and MFD pop-outs itself. On, this replaces a pre-flight routine that fails quietly when you get it wrong: a window that was never popped out, or one with the taskbar over the bottom of it, reads as no labels rather than as an error.
+Whether GlassLinkXP opens, sizes and positions the PFD and MFD pop-outs itself, instead of you doing it by hand before every flight.
 
 ### `enabled`
 
 *Manage the pop-out windows* — true or false. Default: `true`.
 
-Pops out the PFD and MFD if they are not already open, sizes them, and puts them in the top-left corner of the monitor X-Plane is on. Only the displays named 'pfd' and 'mfd' are managed, because those are the ones X-Plane has pop-out commands for. It also puts a pop-out back if you close one while the daemon is running. Turn it off to place the windows yourself -- which is the right call if a pop-out is feeding avionics hardware, where its size and position are part of a physical setup. Nothing else in the daemon sizes or moves a window.
+Pops out the PFD and MFD if they are not already open, sizes them, and puts them in the top-left corner of the monitor X-Plane is on. Also reopens a pop-out you close while running. Turn off to place the windows yourself -- the right call if a pop-out feeds avionics hardware whose size and position must not change.
 
 ### `size`
 
 *Pop-out size* — a TOML value. Default: `[1280, 960]`.
 
-The client size the pop-outs are set to, as [width, height]. MUST BE 4:3: the G1000 draws a 4:3 panel, and the strip position is stored as fractions of the window, so a window of any other shape moves the softkey strip out from under your calibration. Anything else falls back to 1280x960, which is comfortably above the 1024x768 the G1000 is drawn at, so the labels are not downsampled before they are read.
+The client size the pop-outs are set to, as [width, height]. Must be 4:3, since the strip position is stored as fractions of the window. Anything else falls back to 1280x960.
 
 
 ## Window — `[display.<name>]`
@@ -76,9 +76,9 @@ A distinctive part of the pop-out window's title, matched case insensitively. Us
 
 ### `dataref_prefix`
 
-*Dataref prefix* — text (a path or a name). Default: `'g1000/softkey/<name>'`. Leave it out to leave it unset.
+*Dataref prefix* — text (a path or a name). Default: `'glasslinkxp/softkey/<name>'`. Leave it out to leave it unset.
 
-Where the labels are published. Leave empty for g1000/softkey/<name>. Changing it means re-editing every Stream Deck button.
+Where the labels are published. Leave empty for glasslinkxp/softkey/<name>. Changing it means re-editing every Stream Deck button.
 
 
 ## Softkey strip position — `[display.<name>.geometry]`
@@ -130,7 +130,7 @@ Fraction of the strip height trimmed off the top and bottom.
 
 ## Reading the labels — `[ocr]`
 
-How the cropped cells are turned into text. The glyphs are only about 10 pixels tall, so most of this is about giving Tesseract a fair chance at them -- and about not trusting it too far when it fails.
+How the cropped cells are turned into text.
 
 ### `lang`
 
@@ -166,7 +166,7 @@ How much each cell is enlarged before reading. Tesseract wants roughly a 30 pixe
 
 *Sharpening ladder* — a TOML value. Default: `[[0.0, 0.0], [0.5, 1.0], [1.0, 1.4]]`.
 
-Unsharp mask settings tried in order, as [amount, radius] pairs. Thresholding a 10 pixel glyph can close the counters of 0, 6, 8 and 9, and a filled counter is not a character; sharpening reopens them, but too much rings and turns a 0 into a B. So rather than fix one value, each rung is tried and the answer the vocabulary agrees with is kept. The first rung is no sharpening at all, so this can never do worse than not trying.
+Unsharp mask settings tried in order, as [amount, radius] pairs, until one reads a known label. The first rung is no sharpening, so this can never do worse than not trying. Use the Cells tab's tuner rather than editing this by hand.
 
 ### `threshold`
 
@@ -178,29 +178,29 @@ How each cell is turned black and white. Applied per cell, never globally.
 
 *Accept confidence* — a number. Default: `80.0`.
 
-A vocabulary hit at least this confident stops the sharpening ladder early. Landing on a known label is not proof of being right when every digit 0-7 is a valid softkey, so below this the remaining rungs are still tried. 0 always tries every rung.
+A vocabulary hit at least this confident stops the sharpening ladder early. 0 always tries every rung.
 
 ### `screen_confidence`
 
 *Page lookup below* — a number. Default: `80.0`.
 
-Below this confidence, a cell may be filled in from a known softkey page. Recognising a 10 pixel digit is hard; recognising which page is showing, from the labels that did read cleanly, is easy -- and the page says what the hard cell must be. 0 turns page lookup off.
+Below this confidence, a cell may be filled in from a known softkey page instead of guessed at. 0 turns page lookup off.
 
 ### `screen_match_confidence`
 
 *Identify a page above* — a number. Default: `85.0`.
 
-A page is only recognised when its identifying cells all read at least this confidently. Higher than the setting above on purpose: an identification made from a guess would spread that guess into every cell it fills.
+A page is only recognised when its identifying cells all read at least this confidently.
 
 ### `screens_file`
 
-*Pages file* — text (a path or a name). Default: `'/home/user/g1000-softkey/g1000_softkey/screens.toml'`. Leave it out to use the copy that comes with the package -- the default above is a path into this install, so writing it into your config file would tie the file to it.
+*Pages file* — text (a path or a name). Default: the `screens.toml` that ships inside the package. Leave it out to use that copy. Setting it writes an absolute path into your config file, which ties the file to one install.
 
-The known softkey pages. Add one with the Screen template tab. Set this only to point at a file of your own.
+The known softkey pages. Set this only to point at a file of your own.
 
 ### `labels_file`
 
-*Vocabulary file* — text (a path or a name). Default: `'/home/user/g1000-softkey/g1000_softkey/labels.txt'`. Leave it out to use the copy that comes with the package -- the default above is a path into this install, so writing it into your config file would tie the file to it.
+*Vocabulary file* — text (a path or a name). Default: the `labels.txt` that ships inside the package. Leave it out to use that copy. Setting it writes an absolute path into your config file, which ties the file to one install.
 
 The list of labels a reading is snapped to. Edit it in the Vocabulary tab; it is aircraft and version dependent.
 
@@ -220,12 +220,12 @@ What fraction of a cell has to be ink before the cell counts as having a label o
 
 *Ink contrast* — a whole number. Default: `40`.
 
-How far a pixel has to sit from the cell's dominant tone to count as ink. The G1000 dims unavailable softkeys rather than hiding them, so too high a value reads a dim but present label as an empty cell -- and short labels break first. Lower it to about 20 if dim labels are being dropped.
+How far a pixel has to sit from the cell's dominant tone to count as ink. Lower it to about 20 if dim (unavailable) labels are being dropped.
 
 
 ## Background colour — `[color]`
 
-Each cell's background is classified black / white / yellow / red and published next to the label, so a button can show that a softkey is selected or that the sim is warning about something. THESE DEFAULTS HAVE NEVER BEEN CHECKED AGAINST A REAL G1000 FRAME -- they came from plausible swatches. Run the Colours tab against your own display and move them to fit what it prints.
+Each cell's background is classified black / white / yellow / red and published next to the label, so a button can show that a softkey is selected or that the sim is warning about something. Check these against your own display with the Colours tab and move them to fit what it prints -- the shipped defaults have not been checked against a real G1000 frame.
 
 ### `enabled`
 
@@ -237,13 +237,13 @@ Turn off to publish labels only.
 
 *Sample ring* — a number. Default: `0.15`.
 
-The outermost fraction of each cell, per side, used to sample the background. Labels are centred, so this ring is essentially never glyph; too large and it starts eating into the text.
+The outermost fraction of each cell, per side, used to sample the background.
 
 ### `value_max`
 
 *Black above brightness* — a whole number. Default: `60`.
 
-Brightness (V) at or below this is black, whatever the hue. Tested first, so dimming the display can only ever push a cell towards black and can never turn a yellow into a red. Raise it if a black cell reads as coloured; lower it if a dim caution reads as black.
+Brightness (V) at or below this is black, whatever the hue. Raise it if a black cell reads as coloured; lower it if a dim caution reads as black.
 
 ### `saturation_max`
 
@@ -296,13 +296,13 @@ Where X-Plane serves its web API. Enable it in Settings -> Network if it does no
 
 *API version* — one of `v1`, `v2`, `v3`. Default: `'v1'`.
 
-Only a fallback. The daemon asks X-Plane which API versions it serves and uses the newest one; this is what it falls back to when that question goes unanswered, which means a sim too old to answer it. Leave it at v1.
+Only a fallback for a sim too old to say which versions it supports. Leave it at v1.
 
 ### `field_width`
 
 *Label field width* — a whole number. Default: `64`.
 
-Bytes per label dataref. THIS IS FIXED IN THREE PLACES THAT MUST AGREE: here, FIELD_WIDTH in the X-Plane plugin (which needs a sim restart), and the ':s64' on every Stream Deck button. Changing it means re-editing every button, so it is set generously once rather than tuned.
+Bytes per label dataref. Must match FIELD_WIDTH in the X-Plane plugin and the ':sNN' on every Stream Deck button -- changing it means re-editing every button, so leave it at the default.
 
 ### `timeout`
 
