@@ -8,11 +8,21 @@ but can only show a static "BTN 1..12" face. GlassLinkXP reads the labels back
 out of the picture and republishes them as X-Plane datarefs, so a Stream Deck
 button (via PilotsDeck) can show what the key actually does.
 
-> **This is experimental.** It has been run against a live X-Plane and
-> publishes real datarefs, but large parts of the Windows/sim integration are
-> lightly exercised so far. Expect rough edges, and see
-> [`docs/DEVELOPER.md`](docs/DEVELOPER.md#verified-offline) for exactly
-> what has and has not been checked.
+🚨 **This is experimental.** 🚨 \
+It has been run against a live X-Plane and publishes real datarefs, but large 
+parts of the Windows/sim integration are lightly exercised so far. Expect 
+rough edges.
+
+## Screenshots
+
+This project was designed with PilotsDeck/StreamDeck integration in mind, but 
+the datarefs are there and can be used any way you'd like. \
+
+![PFD and MFD with Stream Deck Buttons](docs/images/pfd-mfd.jpg) \
+\
+![PFD INSET screen](docs/images/pfd1.jpg) \
+\
+![PFD XPDR code screen](docs/images/pfd2.jpg)
 
 ## Install
 
@@ -79,6 +89,9 @@ pictures so you can see the whole thing work first.
 
 ## Wiring a PilotsDeck button
 
+A StreamDeck profile using PilotsDeck composite action buttons is available 
+[here](docs/PilotsDeck-profile/GlassLinkXP_Buttons.streamDeckProfile).
+
 For PFD softkey 1:
 
 | Field | Value |
@@ -89,11 +102,6 @@ For PFD softkey 1:
 `:s64` is PilotsDeck's string-dataref address syntax: read 64 bytes as a
 NUL-terminated string.
 
-> **Upgrading from the old `g1000-softkey` release?** The datarefs were renamed
-> along with the project: `g1000/softkey/...` is now `glasslinkxp/softkey/...`.
-> Any buttons you already made need re-addressing. The installer removes the
-> old X-Plane plugin, so the old names stop existing rather than going stale.
-
 Alongside each label, GlassLinkXP also publishes the colour of the cell the
 label sits on, as an int dataref:
 
@@ -103,8 +111,7 @@ label sits on, as an int dataref:
 
 Use it to pick the button image or background. Check the classification
 against your own display with the Colours tab (or `glasslinkxp dump-colors`)
-before relying on it -- the shipped thresholds came from plausible swatches,
-not a real capture.
+before relying on it.
 
 Softkey N maps to `sim/GPS/g1000n1_softkeyN` (pilot PFD) and
 `sim/GPS/g1000n3_softkeyN` (MFD); `g1000n2` is the copilot PFD and is not
@@ -149,10 +156,10 @@ because they are what actually settles a wrong label:
 .\glasslinkxp.cmd dump-cells             # what Tesseract was shown
 ```
 
-Attach the `dump-cells` images. Every hard reading bug in this project so far
-has been diagnosed from a picture of the preprocessed cell and none from a
-description of one -- the screen is the only source of truth here, and it is a
-small, anti-aliased picture.
+Attach the `dump-cells` images and debug logs (`-v`/`Debug Output` enabled). Every 
+hard reading bug in this project so far has been diagnosed from a picture of the preprocessed 
+cell and none from a description of one -- the screen is the only source of truth 
+here, and it is a small, anti-aliased picture.
 
 ## More
 
