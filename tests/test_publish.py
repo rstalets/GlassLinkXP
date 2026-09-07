@@ -474,7 +474,7 @@ def test_webapi_patches_a_number_not_base64():
     publisher = WebApiPublisher(PublishConfig(), [NAMES[0], BG_NAMES[0]], session=session)
     publisher.publish({NAMES[0]: "INSET", BG_NAMES[0]: 3})
     bodies = {url.rsplit("/", 2)[-2]: body for url, body in session.patches}
-    assert base64.b64decode(bodies["100"]["data"]) == encode_field("INSET", 64)
+    assert base64.b64decode(bodies["100"]["data"]) == encode_field("INSET", PublishConfig().field_width)
     assert bodies["200"] == {"data": 3}, "an Int dataref is written as a bare number"
 
 

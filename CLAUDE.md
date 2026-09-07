@@ -160,9 +160,14 @@ own bundled Python 3.12, not this project's venv. No numpy, no requests.
 **Field width is set in three places that must agree**: `FIELD_WIDTH` in the
 plugin (changing it needs an X-Plane restart -- the buffer is allocated at
 accessor registration), `publish.field_width` in config, and every PilotsDeck
-button address the user has written (`:s64`). Out of step means truncated or
-garbage labels. It went 16 -> 64 once already, which cost the user a re-edit of
-every button; it is deliberately generous now so it does not move again.
+button address the user has written (`:s16`). Out of step means truncated or
+garbage labels, and each move costs the user a re-edit of every button. The
+number is not really "16 bytes"; it is "as much as the vocabulary needs", so
+what keeps it honest is a test that walks every label in `labels.txt` through
+`encode_field` at the plugin's own `FIELD_WIDTH` (`test_plugin.py`), not the
+constant. Add a label longer than 15 bytes and that test fails, which is the
+moment to decide -- with the re-edit cost in view -- between shortening the
+label and moving all three places again.
 
 **Change gating caches post-processing results.** A cell whose pixels have not
 moved is served from cache, and that cache holds the result from *after* page

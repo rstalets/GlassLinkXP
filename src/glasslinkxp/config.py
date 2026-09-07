@@ -302,19 +302,18 @@ class PublishConfig:
     #: Raising the floor could only affect a sim too old to have been asked,
     #: which is exactly the sim that would not understand a newer version.
     api_version: str = "v1"
-    #: Bytes per label dataref -> the PilotsDeck address suffix (':s64').
+    #: Bytes per label dataref -> the PilotsDeck address suffix (':s16').
     #:
-    #: 64 rather than a snug fit. The width is fixed in three places that have
-    #: to agree -- FIELD_WIDTH in the plugin (an X-Plane restart, since the
-    #: buffer is allocated when the accessor is registered), this setting, and
-    #: every PilotsDeck button address -- so the cost of changing it later is
-    #: paid by the user re-editing every button. The longest label in
-    #: labels.txt is "FLIGHT PLAN" at 11 characters, which left the previous
-    #: 16-byte field four characters of headroom for a vocabulary that grows
-    #: whenever someone finds a softkey nobody had listed. 64 bytes is ~1.5 KB
-    #: of plugin memory across all 24 fields and noise on the wire, so it is
-    #: set generously once instead of tuned.
-    field_width: int = 64
+    #: The width is fixed in three places that have to agree -- FIELD_WIDTH in
+    #: the plugin (an X-Plane restart, since the buffer is allocated when the
+    #: accessor is registered), this setting, and every PilotsDeck button
+    #: address -- so the cost of changing it is paid by the user re-editing
+    #: every button.
+    #:
+    #: 15 usable bytes plus the NUL. A test walks every label in labels.txt
+    #: against this value, so a vocabulary that outgrows the field fails there
+    #: rather than on a button.
+    field_width: int = 16
     timeout: float = 1.0
     #: seconds between reconnect attempts when X-Plane is not answering
     retry_interval: float = 5.0

@@ -194,7 +194,7 @@ function Invoke-Verify {
 
 if ($VerifyOnly) {
     if (Invoke-Verify) {
-        Write-Host "`nAll 48 datarefs are live. PilotsDeck address: glasslinkxp/softkey/pfd/1:s64" -ForegroundColor Green
+        Write-Host "`nAll 48 datarefs are live. PilotsDeck address: glasslinkxp/softkey/pfd/1:s16" -ForegroundColor Green
         exit 0
     }
     exit 1
