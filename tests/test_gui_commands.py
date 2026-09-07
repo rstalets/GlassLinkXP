@@ -111,15 +111,19 @@ def test_options_are_unique_within_a_command():
         assert len(keys) == len(set(keys)), spec.name
 
 
-def test_the_gui_covers_every_subcommand_the_cli_has():
-    """A subcommand added to the CLI has to be given a home in the GUI.
+#: Subcommands the GUI deliberately does not offer, and why. Anything else
+#: added to the CLI has to be given a home in the window.
+NOT_IN_THE_GUI = {
+    "gui": "a button that opened another window would be a curiosity rather than a feature",
+    "migrate-config": "the installer runs it, once, before the window is ever opened -- "
+                      "by the time somebody could press a button for it, it has happened",
+}
 
-    'gui' itself is the exception: a button that opened another window would
-    be a curiosity rather than a feature.
-    """
+
+def test_the_gui_covers_every_subcommand_the_cli_has():
     parser = build_parser()
     actions = [a for a in parser._subparsers._group_actions if a.choices]  # noqa: SLF001
-    cli = set(actions[0].choices) - {"gui"}
+    cli = set(actions[0].choices) - set(NOT_IN_THE_GUI)
     assert cli == set(commands.BY_NAME)
 
 

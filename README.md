@@ -27,8 +27,19 @@ Requires Windows and X-Plane 12.1.1+ (for its web API).
    publishes into (say yes -- without it there is nowhere for the labels to
    go).
 
-   Running the installer again replaces an existing install after asking
-   first; there is no in-place update yet.
+### Updating
+
+Run `install.cmd` again. It asks before replacing the installed app, and
+keeps your `config.toml` — calibration, tuning, window titles — rather than
+making you set it all up again. The kept file is then brought up to date with
+this version: settings it adds are filled in at their documented value,
+settings it no longer has are dropped, and anything you had set is left as you
+set it. Your previous file is kept as `config.toml.bak`, and the installer
+prints exactly what it changed.
+
+One consequence worth knowing: because a value you already have is never
+overwritten, a *changed* default does not reach you on update. If a release
+retunes something, the notes will say so and you can set it yourself.
 
 ## First run
 

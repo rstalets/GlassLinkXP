@@ -52,7 +52,8 @@ also the only way to stop the daemon with a signal it handles: `cmd_run` calls
 ```
 src/glasslinkxp/
   main.py       CLI: run, gui, list-windows, manage-windows, calibrate,
-                     dump-cells, dump-colors, bench, screen-template, tune, synth
+                     dump-cells, dump-colors, bench, screen-template, tune,
+                     synth, migrate-config
   capture.py    Windows Graphics Capture, plus a PNG backend for offline work
   windowmgr.py  opens/sizes/places the PFD and MFD pop-outs; the Windows calls
                 are injectable, so the policy is tested without Windows
@@ -65,6 +66,8 @@ src/glasslinkxp/
   screens.py    softkey page definitions (screens.toml)
   config.py     frozen dataclasses + TOML loader (reading only; the GUI
                 writes with tomli-w)
+  configmigrate.py  reconciles a kept config.toml with the settings this
+                version has, on update (see migrate-config)
   gui/          the window (see docs/GUI.md), including the calibration editor
                 where the strip is drawn on the frame with the mouse, and the
                 setup wizard (wizard.py: the steps, no Tk in it). Only app.py,

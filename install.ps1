@@ -63,17 +63,34 @@ Write-Ok "installing from: $SourceRoot"
 # --------------------------------------------------------------------------
 # 1. Where it goes, and whether to replace what is already there
 # --------------------------------------------------------------------------
+#: Your files, not the app's: kept across a reinstall and put back afterwards.
+#: config.toml is the calibration and tuning that setup earned; gui.json is
+#: the window's own preferences, which land in this folder on Windows because
+#: %APPDATA%\glasslinkxp and %APPDATA%\GlassLinkXP are the same directory.
+$Keep = 'config.toml', 'config.toml.bak', 'gui.json'
+$kept = $null
+
 if (Test-Path $Target) {
     if (-not $Force) {
         Write-Host "`nGlassLinkXP is already installed at:" -ForegroundColor Yellow
         Write-Host "    $Target"
-        $answer = Read-Host 'Overwrite it? Your config.toml and calibration will be lost. [y/N]'
+        Write-Host 'Your configuration and calibration are kept, and brought up to date'
+        Write-Host 'with any settings this version adds or no longer has.'
+        $answer = Read-Host 'Replace the installed app? [y/N]'
         if ($answer -notmatch '^[Yy]') {
             Write-Host 'Cancelled. Nothing was changed.'
             exit 0
         }
     }
-    Write-Step "Removing the existing install"
+    Write-Step 'Setting your configuration aside'
+    $kept = Join-Path ([System.IO.Path]::GetTempPath()) ("glasslinkxp-keep-" + [guid]::NewGuid())
+    New-Item -ItemType Directory -Force -Path $kept | Out-Null
+    foreach ($name in $Keep) {
+        $from = Join-Path $Target $name
+        if (Test-Path $from) { Copy-Item $from (Join-Path $kept $name); Write-Ok "kept $name" }
+    }
+
+    Write-Step 'Removing the installed app'
     Remove-Item -Recurse -Force $Target
 }
 New-Item -ItemType Directory -Force -Path $Target | Out-Null
@@ -88,6 +105,13 @@ foreach ($item in 'pyproject.toml', 'uv.lock', '.python-version', 'README.md', '
 }
 Copy-Item (Join-Path $SourceRoot 'src') (Join-Path $Target 'src') -Recurse
 Write-Ok 'copied'
+
+if ($kept) {
+    Write-Step 'Putting your configuration back'
+    Copy-Item (Join-Path $kept '*') $Target -Force
+    Remove-Item -Recurse -Force $kept -ErrorAction SilentlyContinue
+    Write-Ok 'restored'
+}
 
 # --------------------------------------------------------------------------
 # 3. uv, then the interpreter and dependencies from the lockfile
@@ -120,6 +144,19 @@ try {
     $venvPython = Join-Path $Target '.venv\Scripts\python.exe'
     if (-not (Test-Path $venvPython)) { Fail 'uv sync did not produce .venv\Scripts\python.exe' }
     Write-Ok "interpreter: $((& $venvPython -V) -join '')"
+
+    # ----------------------------------------------------------------------
+    # 3a. Bring a config kept from an older install up to date
+    # ----------------------------------------------------------------------
+    # Settings this version has get added at their documented value, ones it
+    # no longer has get dropped, and anything already set is left alone. A
+    # first install has nothing to migrate and says so.
+    Write-Step 'Checking your configuration against this version'
+    & $venvPython -m glasslinkxp.main migrate-config -c (Join-Path $Target 'config.toml')
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn2 'the configuration could not be brought up to date -- see above.'
+        Write-Warn2 "your previous file is untouched at $(Join-Path $Target 'config.toml')"
+    }
 
     # ----------------------------------------------------------------------
     # 4. Language data for Tesseract

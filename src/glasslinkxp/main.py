@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 import signal
 import statistics
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 import numpy as np
@@ -657,6 +659,50 @@ def cmd_gui(args: argparse.Namespace, config: AppConfig) -> int:
     return launch(getattr(args, "config", None))
 
 
+def cmd_migrate_config(args: argparse.Namespace, config: AppConfig) -> int:
+    """Bring an existing config.toml up to date with this version's settings.
+
+    Run by the installer after it has put a newer GlassLinkXP over an older
+    one. Like ``gui`` it works on the config *file* rather than on the
+    AppConfig loaded from it -- there may not be one, which is not an error
+    here: a first install has nothing to migrate and says so.
+    """
+    import tomli_w
+
+    from . import configmigrate
+    from .config import PACKAGE_DIR
+
+    path = Path(getattr(args, "config", None) or "config.toml")
+    example_path = Path(args.example) if args.example else PACKAGE_DIR.parent / "config.example.toml"
+    if not path.is_file():
+        print(f"no configuration at {path} -- nothing to migrate")
+        return 0
+    if not example_path.is_file():
+        LOG.error("cannot find the settings this version has: %s", example_path)
+        return 2
+
+    user = tomllib.loads(path.read_text(encoding="utf-8"))
+    example = tomllib.loads(example_path.read_text(encoding="utf-8"))
+    merged, changes = configmigrate.reconcile(user, example)
+
+    if not changes.any:
+        print(f"{path} is already up to date ({example_path.name})")
+        return 0
+
+    backup = path.with_suffix(path.suffix + ".bak")
+    shutil.copy2(path, backup)
+    path.write_text(tomli_w.dumps(merged), encoding="utf-8")
+
+    for added in changes.added:
+        print(f"  added   {added}")
+    for removed in changes.removed:
+        print(f"  removed {removed}")
+    for kept in changes.kept_untouched:
+        print(f"  kept    [{kept}] (not a setting this version reads -- left alone)")
+    print(f"updated {path}; the previous version is {backup.name}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     # -c and -v live on a shared parent so they are accepted both before and
     # after the subcommand: `main -v run` and `main run -v` are equally natural
@@ -770,6 +816,20 @@ def build_parser() -> argparse.ArgumentParser:
     synth_cmd = sub.add_parser("synth", help="write synthetic softkey frames for offline testing", parents=[common])
     synth_cmd.add_argument("--out", default="frames", help="output directory")
     synth_cmd.set_defaults(func=cmd_synth)
+
+    migrate = sub.add_parser(
+        "migrate-config",
+        help="add settings this version has to an existing config.toml, and drop ones it no longer has",
+        parents=[common],
+    )
+    migrate.add_argument(
+        "--example", default=None,
+        help="the settings this version has (default: the config.example.toml beside the package)",
+    )
+    # Like `gui`, this works on the config file rather than on a loaded
+    # AppConfig, and a missing one is not an error: a first install has
+    # nothing to migrate.
+    migrate.set_defaults(func=cmd_migrate_config, tolerate_missing_config=True)
     return parser
 
 

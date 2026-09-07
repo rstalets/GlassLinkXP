@@ -17,7 +17,7 @@ src/                         everything that ships: this is copied wholesale
   glasslinkxp/
     main.py       CLI: run | gui | list-windows | manage-windows | calibrate
                        | dump-cells | dump-colors | bench | screen-template
-                       | tune | synth
+                       | tune | synth | migrate-config
     gui/          the window: one tab per command, over the same CLI, plus the
                   setup wizard bar (wizard.py) -- see docs/GUI.md
     capture.py    WGC backend (Windows) + PNG backend (offline dev/test)
@@ -27,6 +27,9 @@ src/                         everything that ships: this is copied wholesale
     ocr.py        persistent Tesseract API, char whitelist, vocabulary snapping
     color.py      cell background -> black / white / yellow / red, + text colour
     pipeline.py   frame -> cells -> change gating -> labels + colours
+    configmigrate.py  brings a config.toml kept across an update in line
+                  with the settings this version has (the migrate-config
+                  subcommand, which install.ps1 runs)
     publish.py    X-Plane WebSocket and REST clients, console output
     synth.py      synthetic G1000 softkey frames for offline work
     labels.txt    the softkey vocabulary (edit this)
