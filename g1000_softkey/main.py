@@ -60,10 +60,8 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
-def _open_sources(
-    config: AppConfig, image: str | None, managed: frozenset[str] = frozenset()
-) -> dict[str, FrameSource]:
-    return sources_for(config.active_displays, image, managed=managed)
+def _open_sources(config: AppConfig, image: str | None) -> dict[str, FrameSource]:
+    return sources_for(config.active_displays, image)
 
 
 def _log_report(report: windowmgr.Report, routine: bool) -> None:
@@ -136,7 +134,7 @@ def _reopen_closed(
     if display.key not in report.managed:
         return  # no window to attach to yet; the retry interval applies
     try:
-        rebuilt = sources_for([display], None, managed=report.managed)[display.key]
+        rebuilt = sources_for([display], None)[display.key]
     except CaptureError as exc:
         LOG.warning("%s is open again, but could not be captured: %s", display.key, exc)
         return
@@ -431,8 +429,8 @@ def cmd_run(args: argparse.Namespace, config: AppConfig) -> int:
     # Before the sources are opened: WgcCapture resolves its window in its
     # constructor and fails if it is not there, so a pop-out that has to be
     # opened has to be opened before that, not after.
-    managed = _manage_windows(config, args.image).managed
-    sources = _open_sources(config, args.image, managed)
+    _manage_windows(config, args.image)
+    sources = _open_sources(config, args.image)
     reader = SoftkeyReader(config.ocr)
     names: list[str] = []
     for display in config.active_displays:

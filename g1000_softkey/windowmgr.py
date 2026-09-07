@@ -20,8 +20,8 @@ Three things, in this order, per display:
 
 Only ``pfd`` and ``mfd`` are managed, because those are the displays there are
 commands for (see :data:`POPOUT_COMMANDS`). A display configured under any
-other name is left entirely alone, and its own ``manage_window_size`` still
-applies.
+other name is left entirely alone -- captured as the user has arranged it,
+since nothing else in the daemon sizes or moves a window.
 
 **Testing.** Everything Windows-only is reached through :class:`WindowOps` and
 a command client, both injectable, so the decision-making here -- which window
@@ -131,10 +131,11 @@ class Report:
 
     @property
     def managed(self) -> frozenset[str]:
-        """Displays whose window this pass has sized and placed.
+        """Displays whose window is now on screen at the right size and place.
 
-        What ``capture.sources_for`` needs: those windows must not then be
-        resized a second time by the per-display settings.
+        Which is also the question "is there a window to attach a capture to",
+        and that is what the daemon reads it for when replacing a capture whose
+        window closed.
         """
         return frozenset(o.key for o in self.outcomes if o.ok)
 

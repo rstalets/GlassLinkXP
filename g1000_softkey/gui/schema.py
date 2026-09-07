@@ -119,17 +119,6 @@ DISPLAY = Group(
         Setting("dataref_prefix", "path", "Dataref prefix",
                 "Where the labels are published. Leave empty for g1000/softkey/<name>. "
                 "Changing it means re-editing every Stream Deck button.", optional=True),
-        Setting("manage_window_size", "bool", "Let the daemon resize this window",
-                "Off by default, and deliberately: a pop-out may be feeding external "
-                "avionics hardware where its size and position are part of a physical "
-                "setup, and breaking that to make OCR marginally easier is not a trade "
-                "to make silently."),
-        Setting("window_size", "toml", "Resize to",
-                "The client size to force the window to, as [width, height]. Only used "
-                "when the box above is ticked. The G1000 renders to a 1024x768 texture, "
-                "so a smaller display area throws detail away before capture sees it -- "
-                "but the pop-out includes the bezel, so the window has to be bigger than "
-                "that. Find the number with one calibration pass.", optional=True),
     ),
 )
 
@@ -144,10 +133,11 @@ WINDOW_MANAGEMENT = Group(
                 "Pops out the PFD and MFD if they are not already open, sizes them, and "
                 "puts them in the top-left corner of the monitor X-Plane is on. Only the "
                 "displays named 'pfd' and 'mfd' are managed, because those are the ones "
-                "X-Plane has pop-out commands for. While this is on it is the only thing "
-                "that sizes those windows, and the per-display 'Resize to' setting is not "
-                "consulted -- two settings fixing one window's size is one more than can "
-                "be true at once. Turn it off to place the windows yourself."),
+                "X-Plane has pop-out commands for. It also puts a pop-out back if you "
+                "close one while the daemon is running. Turn it off to place the windows "
+                "yourself -- which is the right call if a pop-out is feeding avionics "
+                "hardware, where its size and position are part of a physical setup. "
+                "Nothing else in the daemon sizes or moves a window."),
         Setting("size", "toml", "Pop-out size",
                 "The client size the pop-outs are set to, as [width, height]. MUST BE 4:3: "
                 "the G1000 draws a 4:3 panel, and the strip position is stored as fractions "

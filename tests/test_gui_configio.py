@@ -15,6 +15,7 @@ from g1000_softkey.config import (
     OcrConfig,
     PublishConfig,
     StripGeometry,
+    WindowManagementConfig,
     default_config,
     load_config,
 )
@@ -36,12 +37,12 @@ def test_a_thoroughly_non_default_config_round_trips(tmp_path):
         displays=(
             DisplayConfig(
                 key="pfd", window_title='the "left" one', enabled=False,
-                dataref_prefix="my/prefix", manage_window_size=True,
-                window_size=(1400, 1000),
+                dataref_prefix="my/prefix",
                 geometry=StripGeometry(x=0.1, y=0.8, w=0.7, h=0.09, cells=6,
                                        cell_pad_x=0.2, cell_pad_y=0.3),
             ),
         ),
+        window_management=WindowManagementConfig(enabled=False, size=(1600, 1200)),
         ocr=OcrConfig(
             engine="pytesseract", lang="deu", tessdata_path="/opt/tess data",
             psm=10, whitelist="ABC/-\\", upscale=6.5,
@@ -276,7 +277,7 @@ def test_a_config_full_of_bytes_that_are_not_text_is_reported(tmp_path):
     ("app", "change_tolerance", "6", 6),
     ("ocr", "whitelist", " ABC ", "ABC"),
     ("ocr", "sharpen_ladder", "[[0.0, 0.0], [0.5, 1.0]]", [[0.0, 0.0], [0.5, 1.0]]),
-    ("display", "window_size", "[1400, 1000]", [1400, 1000]),
+    ("window_management", "size", "[1600, 1200]", [1600, 1200]),
     ("ocr", "tessdata_path", "", None),
 ])
 def test_form_values_parse(section, key, text, expected):

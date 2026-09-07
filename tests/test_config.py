@@ -4,6 +4,7 @@ from g1000_softkey.config import (
     AppConfig,
     ConfigError,
     ConfigNotFound,
+    DisplayConfig,
     PublishConfig,
     StripGeometry,
     default_config,
@@ -94,80 +95,47 @@ def test_bad_loop_rate():
 
 
 # ---------------------------------------------------------------------------
-# window_size: forcing the pop-out larger so the capture has more pixels
+# The per-display sizing settings, now retired
 # ---------------------------------------------------------------------------
+#
+# [display.<name>] used to carry manage_window_size and window_size, and while
+# they and [window_management] both existed there had to be a rule about which
+# of them sized a pop-out. The rule was "the per-display one is not consulted
+# for a display window management handles", which is a setting that is quietly
+# ignored -- the form drew a tickbox that did nothing. The pair went instead.
 
 
-def test_window_size_is_read_as_a_tuple(tmp_path):
-    """TOML gives a list; the frozen config needs a tuple."""
+@pytest.mark.parametrize("line", [
+    "manage_window_size = true",
+    "window_size = [1400, 1000]",
+])
+def test_a_retired_display_setting_is_named_rather_than_lumped_in_with_typos(
+    tmp_path, caplog, line
+):
+    """Somebody who set these meant the daemon to size their pop-out.
+
+    "ignoring unknown keys" would be true and useless: it does not say that
+    the daemon still sizes the window, from somewhere else. So the warning
+    names the key and where its job went.
+    """
     path = tmp_path / "config.toml"
-    path.write_text(
-        '[display.pfd]\nwindow_title = "G1000 PFD"\nwindow_size = [1400, 1000]\n',
-        encoding="utf-8",
-    )
-    config = load_config(path)
-    assert config.display("pfd").window_size == (1400, 1000)
+    path.write_text(f'[display.pfd]\nwindow_title = "G1000 PFD"\n{line}\n',
+                    encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        config = load_config(path)
+
+    assert "window_management" in caplog.text
+    assert line.split(" =")[0] in caplog.text
+    # And it still loads: an old config file is not a broken one.
+    assert config.display("pfd").window_title == "G1000 PFD"
 
 
-def test_window_size_defaults_to_none_so_nothing_is_resized(tmp_path):
-    path = tmp_path / "config.toml"
-    path.write_text('[display.pfd]\nwindow_title = "G1000 PFD"\n', encoding="utf-8")
-    assert load_config(path).display("pfd").window_size is None
+@pytest.mark.parametrize("name", ["manage_window_size", "window_size"])
+def test_the_retired_settings_are_gone_from_the_display(name):
+    from dataclasses import fields
 
-
-@pytest.mark.parametrize("value", ["1400", "[1400]", "[1400, 1000, 900]"])
-def test_a_malformed_window_size_is_rejected_with_the_display_named(tmp_path, value):
-    path = tmp_path / "config.toml"
-    path.write_text(f"[display.pfd]\nwindow_size = {value}\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match="display.pfd.window_size"):
-        load_config(path)
-
-
-def test_window_size_alone_does_not_authorise_resizing(tmp_path):
-    """Off by default: a pop-out may be driving external avionics hardware."""
-    path = tmp_path / "config.toml"
-    path.write_text(
-        '[display.pfd]\nwindow_title = "G1000 PFD"\nwindow_size = [1400, 1000]\n',
-        encoding="utf-8",
-    )
-    display = load_config(path).display("pfd")
-    assert display.window_size == (1400, 1000)
-    assert display.manage_window_size is False
-
-
-def test_resizing_happens_only_when_explicitly_enabled(tmp_path):
-    path = tmp_path / "config.toml"
-    path.write_text(
-        '[display.pfd]\nwindow_title = "G1000 PFD"\n'
-        "window_size = [1400, 1000]\nmanage_window_size = true\n",
-        encoding="utf-8",
-    )
-    assert load_config(path).display("pfd").manage_window_size is True
-
-
-def test_managing_the_size_without_a_size_is_rejected(tmp_path):
-    """Otherwise it silently does nothing and looks like a resize that failed."""
-    path = tmp_path / "config.toml"
-    path.write_text(
-        '[display.pfd]\nwindow_title = "G1000 PFD"\nmanage_window_size = true\n',
-        encoding="utf-8",
-    )
-    with pytest.raises(ConfigError, match="no window_size is set"):
-        load_config(path)
-
-
-def test_displays_decide_independently(tmp_path):
-    """One display can drive hardware while the other is ours to resize."""
-    path = tmp_path / "config.toml"
-    path.write_text(
-        '[display.pfd]\nwindow_title = "PFD"\n'
-        "window_size = [1400, 1000]\nmanage_window_size = true\n"
-        '[display.mfd]\nwindow_title = "MFD"\n',
-        encoding="utf-8",
-    )
-    config = load_config(path)
-    assert config.display("pfd").manage_window_size is True
-    assert config.display("mfd").manage_window_size is False
+    assert name not in {f.name for f in fields(DisplayConfig)}
 
 
 def test_the_field_width_agrees_with_the_plugin():

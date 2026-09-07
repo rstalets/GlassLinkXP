@@ -284,18 +284,6 @@ def _set_window(
     )
 
 
-def resize_window(hwnd: int, width: int, height: int) -> tuple[int, int]:
-    """Resize a window so its *client area* is width x height, leaving it put.
-
-    Returns the client size actually achieved. X-Plane enforces a minimum on
-    pop-out windows, so a request below that comes back larger than asked.
-    """
-    if not is_windows():  # pragma: no cover - Windows only
-        raise CaptureError("resizing windows requires Windows")
-    placed = _set_window(hwnd, width, height)  # pragma: no cover - Windows only
-    return placed.width, placed.height  # pragma: no cover - Windows only
-
-
 def place_window(hwnd: int, x: int, y: int, width: int, height: int) -> Placement:
     """Move a window to ``x, y`` and size its client area to width x height.
 
@@ -424,8 +412,6 @@ class WgcCapture:
         window_title: str,
         cursor_capture: bool = False,
         draw_border: bool = False,
-        target_size: tuple[int, int] | None = None,
-        manage_size: bool = False,
     ) -> None:
         if not is_windows():
             raise CaptureError(
@@ -446,31 +432,10 @@ class WgcCapture:
 
         # Resolve the exact title first so we can give a useful error message
         # rather than whatever the Rust layer raises.
+        # Note this only *finds* the window. Sizing and placing a pop-out is
+        # window management's job and nothing else's -- see windowmgr -- so a
+        # capture takes the window as it is.
         window = find_window(window_title)  # pragma: no cover
-        if target_size is not None and not manage_size:  # pragma: no cover
-            LOG.info(
-                "not resizing %r: window_size is set but manage_window_size is off",
-                window.title,
-            )
-        elif target_size is not None:  # pragma: no cover - Windows only
-            want_w, want_h = target_size
-            if (window.width, window.height) != (want_w, want_h):
-                LOG.info(
-                    "resizing %r from %dx%d to %dx%d",
-                    window.title, window.width, window.height, want_w, want_h,
-                )
-                try:
-                    got_w, got_h = resize_window(window.hwnd, want_w, want_h)
-                except CaptureError as exc:
-                    LOG.warning("could not resize %r: %s", window.title, exc)
-                else:
-                    if (got_w, got_h) != (want_w, want_h):
-                        LOG.warning(
-                            "%r settled at %dx%d, not %dx%d -- X-Plane enforces a "
-                            "minimum size on pop-out windows",
-                            window.title, got_w, got_h, want_w, want_h,
-                        )
-                    window = find_window(window_title)
         LOG.info("capturing %s", window)  # pragma: no cover
 
         capture = WindowsCapture(  # pragma: no cover - Windows only
@@ -550,34 +515,22 @@ def create_source(spec: str) -> FrameSource:
 
 
 def sources_for(
-    displays: Iterable,
-    image_path: str | Path | None,
-    managed: Iterable[str] = (),
+    displays: Iterable, image_path: str | Path | None
 ) -> dict[str, FrameSource]:
     """One frame source per display; ``image_path`` overrides WGC everywhere.
 
-    ``managed`` names the displays window management has already sized and
-    placed. Those are left alone here: a second resize from a second setting
-    would be one authority too many, and the one that ran last would win by
-    accident rather than by decision. See ``windowmgr``.
+    Opening a source neither sizes nor moves anything. That used to depend on
+    which display it was for, so this took a set of the displays window
+    management had already handled in order to leave those alone -- a
+    parameter whose whole job was to stop two settings sizing one window. With
+    only one of them left there is nothing to arbitrate.
     """
-    already_sized = set(managed)
     sources: dict[str, FrameSource] = {}
     for display in displays:
         if image_path is not None:
             path = Path(image_path)
             per_display = path / f"{display.key}.png"
             sources[display.key] = ImageCapture(per_display if per_display.is_file() else path)
-        elif display.key in already_sized:
-            # Nothing about size is passed, rather than passing it and turning
-            # it off: the "window_size is set but manage_window_size is off"
-            # note below is about a config that will not do what it looks like
-            # it says, and this is not that case.
-            sources[display.key] = WgcCapture(display.window_title)
         else:
-            sources[display.key] = WgcCapture(
-                display.window_title,
-                target_size=getattr(display, "window_size", None),
-                manage_size=getattr(display, "manage_window_size", False),
-            )
+            sources[display.key] = WgcCapture(display.window_title)
     return sources

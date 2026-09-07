@@ -105,11 +105,8 @@ def document_from_config(config: AppConfig) -> dict[str, Any]:
             "window_title": display.window_title,
             "enabled": display.enabled,
             "dataref_prefix": display.dataref_prefix,
-            "manage_window_size": display.manage_window_size,
             "geometry": dict(display.geometry.as_dict()),
         }
-        if display.window_size is not None:
-            entry["window_size"] = list(display.window_size)
         document["display"][display.key] = entry
     document["ocr"] = {
         setting.key: _plain(getattr(config.ocr, setting.key))

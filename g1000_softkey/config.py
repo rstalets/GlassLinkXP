@@ -84,36 +84,10 @@ class DisplayConfig:
     geometry: StripGeometry = field(default_factory=StripGeometry)
     dataref_prefix: str = ""
     enabled: bool = True
-    #: Whether this daemon may resize the pop-out window at all.
-    #:
-    #: Off by default, and deliberately so: a pop-out may be feeding external
-    #: avionics hardware -- a RealSimGear G1000 unit, say -- where its size and
-    #: position are part of somebody's physical setup. Resizing that window
-    #: would break their panel to make our OCR marginally easier, which is not
-    #: a trade this daemon gets to make on its own.
-    manage_window_size: bool = False
-    #: Client size to force the pop-out window to, as [width, height].
-    #: Only applied when manage_window_size is true.
-    #:
-    #: The G1000 renders to a 1024x768 texture, so a pop-out whose *display
-    #: area* is smaller than that throws away real detail before capture ever
-    #: sees it -- and the glyphs are already marginal for OCR at ~10 px. Note
-    #: the pop-out includes the bezel, so the window has to be bigger than
-    #: 1024x768 for the display area itself to reach it; find the number with
-    #: one calibrate pass. Growing beyond that point only interpolates.
-    #:
-    #: Geometry is fractional, so a resize does not invalidate calibration.
-    window_size: tuple[int, int] | None = None
 
     def __post_init__(self) -> None:
         if not self.dataref_prefix:
             object.__setattr__(self, "dataref_prefix", f"g1000/softkey/{self.key}")
-        if self.manage_window_size and self.window_size is None:
-            raise ConfigError(
-                f"display.{self.key}: manage_window_size is on but no window_size is set, "
-                "so there is nothing to resize to. Give a [width, height], or turn "
-                "manage_window_size off."
-            )
 
     def dataref_names(self) -> list[str]:
         """The label (string) datarefs, one per cell."""
@@ -236,6 +210,17 @@ class ColorConfig:
             raise ConfigError("color.yellow_hue_min must not exceed color.yellow_hue_max")
 
 
+#: Per-display settings that used to size a pop-out, and no longer exist.
+#:
+#: ``[window_management]`` does that now, for both displays at once, and while
+#: both existed there had to be a rule about which of them won -- with the
+#: answer, for a window management handled, being "the per-display one is not
+#: consulted". A setting that is quietly not consulted is worse than a setting
+#: that is gone: the form still showed a tickbox, and ticking it did nothing.
+#: A config file still carrying either is warned about by name.
+RETIRED_DISPLAY_KEYS = ("manage_window_size", "window_size")
+
+
 #: What a G1000 pop-out is sized to when the configured size cannot be used.
 #: 4:3, and large enough that the 1024x768 display texture is not downsampled
 #: before capture sees it.
@@ -258,10 +243,10 @@ class WindowManagementConfig:
     without also sizing and placing it just moves the manual step. Turn the
     whole thing off to manage the windows yourself.
 
-    Note this supersedes the per-display ``manage_window_size`` /
-    ``window_size`` settings for the displays it manages: while it is on, it is
-    the only thing that sizes those windows. Two settings that both claim to
-    fix a window's size is one more than can be true at once.
+    This is the only thing in the daemon that sizes a pop-out. There was a
+    per-display pair of settings that did it too, and having both meant a rule
+    about which one won -- so the pair went rather than the rule; see
+    :data:`RETIRED_DISPLAY_KEYS`.
     """
 
     enabled: bool = True
@@ -438,15 +423,18 @@ def from_mapping(raw: Mapping[str, Any], base_dir: Path | None = None) -> AppCon
         entry.pop("geometry", None)
         entry["key"] = key
         entry["geometry"] = geometry
-        if entry.get("window_size") is not None:
-            try:
-                width, height = entry["window_size"]
-                entry["window_size"] = (int(width), int(height))
-            except (TypeError, ValueError) as exc:
-                raise ConfigError(
-                    f"display.{key}.window_size must be [width, height], "
-                    f"got {entry['window_size']!r} ({exc})"
-                ) from exc
+        for name in [k for k in RETIRED_DISPLAY_KEYS if k in entry]:
+            # Named rather than swept up by _build's "ignoring unknown keys":
+            # somebody who set these meant the daemon to size their pop-out,
+            # and being told the key is unknown does not tell them that it
+            # still will, from somewhere else.
+            LOG.warning(
+                "[display.%s] %s is no longer a setting -- sizing the pop-outs moved to "
+                "[window_management], which is on by default and sizes pfd and mfd "
+                "together. Delete the line; the size is window_management.size.",
+                key, name,
+            )
+            entry.pop(name)
         displays.append(_build(DisplayConfig, entry))
 
     config = AppConfig(

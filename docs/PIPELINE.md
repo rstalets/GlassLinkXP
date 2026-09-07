@@ -121,14 +121,17 @@ largest of the rest separates them in any arrangement anyone is likely to be
 flying, since the main view is normally full-screen and a pop-out is not.
 
 **Only `pfd` and `mfd`.** Those are the displays X-Plane has pop-out commands
-for. A display configured under any other name is left entirely alone, and its
-own `manage_window_size` still applies to it.
+for. A display configured under any other name is left entirely alone, and
+captured however the user has arranged it.
 
-**And nothing else may size those windows.** While this is on it is the only
-thing that sizes the windows it manages -- `capture.sources_for` is told which
-displays those are and does not apply the per-display `window_size` to them.
-Two settings that both fix one window's size is one more than can be true at
-once, and which of them won would come down to which happened to run last.
+**And nothing else sizes a window at all.** `[display.<name>]` used to carry
+`manage_window_size` and `window_size`, which meant a rule about which setting
+won -- and the rule was that the per-display pair was not consulted for a
+display this handles. A setting that is quietly not consulted is worse than a
+setting that is gone: the Settings form still drew a tickbox for it, and
+ticking it did nothing at all. So the pair went rather than the rule, and with
+it the parameter `capture.sources_for` took to keep the two apart. Opening a
+capture now neither sizes nor moves anything, for any display.
 
 **A closed window is a signal, not something to poll for.** Windows Graphics
 Capture calls `on_closed` when the window it was capturing goes away, so the

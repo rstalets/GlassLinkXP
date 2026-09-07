@@ -142,13 +142,15 @@ resizing and placement, the installer scripts, anything touching a live
 X-Plane, and three things in the GUI -- `pythonw.exe`, `CTRL_BREAK_EVENT` as
 the way Stop reaches the daemon, and `os.startfile`.
 
-**Only one thing may size a managed window.** `[window_management]` opens,
-sizes and places the `pfd` and `mfd` pop-outs, and while it is on the
-per-display `manage_window_size` / `window_size` are not consulted for those
-displays -- `manage_windows()` returns the keys it handled and
-`capture.sources_for` skips them. Two settings that both fix one window's size
-is one more than can be true at once, and which won would come down to which
-ran last. `tests/test_capture.py` pins it.
+**Only `[window_management]` sizes a window, and nothing else does at all.**
+Opening a capture takes the window as it finds it. `[display.<name>]` used to
+carry `manage_window_size` / `window_size` too, which needed a rule about which
+setting won -- the per-display pair was not consulted for a display window
+management handled. That is a setting quietly ignored: the Settings form drew a
+tickbox that did nothing. The pair was removed rather than the rule documented,
+along with `resize_window` and the `managed=` parameter that existed only to
+keep the two apart. If you are adding a second way to do this, don't.
+`config.RETIRED_DISPLAY_KEYS` warns anyone whose file still has them.
 
 **A frame from a closed window is not a frame.** `_LatestFrame` goes empty for
 good once the capture reports `on_closed`, and `run` treats that as "reopen the
