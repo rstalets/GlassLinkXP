@@ -25,7 +25,13 @@ from .capture import (
     list_windows,
     sources_for,
 )
-from .color import BLACK, background_name, measure_cell
+from .color import (
+    BLACK,
+    background_is_light,
+    background_name,
+    classify_cell,
+    measure_cell,
+)
 from .config import (
     AppConfig,
     ConfigError,
@@ -311,16 +317,23 @@ def cmd_dump_cells(args: argparse.Namespace, config: AppConfig) -> int:
                 binary = threshold_cell(
                     cell, config.ocr.upscale, config.ocr.threshold, first_amount, first_radius,
                 )
-                bright = ring_bright_fraction(binary)
+                # The same polarity the daemon uses, from the same call: this
+                # picture is believed, so it has to be the picture `run`
+                # produces. It was not, briefly, and that cost a round of
+                # debugging a prep image no daemon had ever made.
+                light = background_is_light(cell, config.color) if config.color.enabled else None
                 cv2.imwrite(str(out / f"{display.key}_{index:02d}_raw.png"), cell)
                 cv2.imwrite(
                     str(out / f"{display.key}_{index:02d}_prep.png"),
-                    finish_cell(binary, "auto"),
+                    finish_cell(binary, "auto", light_background=light),
                 )
                 LOG.info(
-                    "%s cell %2d: %s, ring bright %.2f -> read as %s",
-                    display.key, index, "blank" if blank else "has ink", bright,
-                    "dark text on a light box" if bright > 0.5 else "light text on a dark box",
+                    "%s cell %2d: %s, background %s -> %s%s",
+                    display.key, index, "blank" if blank else "has ink",
+                    background_name(classify_cell(cell, config.color)),
+                    "dark text on a light box" if light else "light text on a dark box",
+                    "" if config.color.enabled else
+                    f" (colour off; from the binarised ring, {ring_bright_fraction(binary):.2f})",
                 )
         print(f"wrote {len(config.active_displays) * 12 * 2} cell PNGs to {out.resolve()}")
     finally:
