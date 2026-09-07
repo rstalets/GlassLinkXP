@@ -269,7 +269,8 @@ PUBLISH = Group(
         Setting("field_width", "int", "Label field width",
                 "Bytes per label dataref. Must match FIELD_WIDTH in the X-Plane plugin and "
                 "the ':sNN' on every Stream Deck button -- changing it means re-editing "
-                "every button, so leave it at the default."),
+                "every button, so leave it at the default. 16 holds every label in "
+                "labels.txt with room to spare; wider fields made PilotsDeck slower."),
         Setting("timeout", "float", "Timeout (s)", "How long to wait for X-Plane to answer."),
         Setting("retry_interval", "float", "Retry every (s)",
                 "How long to wait between reconnection attempts when X-Plane is not answering."),

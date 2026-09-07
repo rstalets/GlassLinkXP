@@ -23,7 +23,7 @@ def test_example_config_loads():
     assert config.display("pfd").dataref_names()[0] == "glasslinkxp/softkey/pfd/1"
     assert len(config.display("mfd").dataref_names()) == 12
     assert config.loop_hz == 28.0
-    assert config.publish.field_width == 64
+    assert config.publish.field_width == 16
     assert config.color.enabled is True
 
 
