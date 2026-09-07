@@ -165,14 +165,18 @@ flowchart TD
     GATE -->|yes| INK{"ink ratio >= blank_ink_ratio?"}
 
     INK -->|no| BLANK["Empty cell<br/>never reaches OCR"]
-    INK -->|yes| LADDER["Preprocess the next sharpen_ladder rung:<br/>unsharp mask, upscale, threshold,<br/>normalise polarity, crop to content"]
+    INK -->|yes| LADDER["Threshold the next sharpen_ladder rung:<br/>unsharp mask, upscale, threshold"]
 
-    LADDER --> OCR["Tesseract reads each variant"]
+    LADDER --> POL["Finish it at the guessed polarity:<br/>normalise light/dark, crop to content"]
+    POL --> OCR["Tesseract reads each variant"]
     OCR --> SNAP["Normalise, then snap to the<br/>nearest label in labels.txt"]
     SNAP --> RANK{"Exact label hit<br/>and confidence >= accept_confidence?"}
-    RANK -->|yes| TAKE["Take it, skip the remaining rungs"]
+    RANK -->|yes| TAKE["Take it, skip the remaining variants"]
     RANK -->|"no, rungs left"| LADDER
-    RANK -->|"no, rungs exhausted"| BEST["Keep the best:<br/>exact hit first, then confidence"]
+    RANK -->|"no, rungs exhausted"| RETRY{"retry_opposite_polarity<br/>and not yet retried?"}
+    RETRY -->|yes| FLIP["Finish every rung the other way up<br/>(bitwise_not + crop, no re-threshold)"]
+    FLIP --> OCR
+    RETRY -->|no| BEST["Keep the best:<br/>exact hit first, then confidence"]
 
     TAKE --> CELLS[12 cell results]
     BEST --> CELLS
@@ -295,7 +299,51 @@ pfd cell 3  CACHED  bg=white  was bg=black -- colour changed, label unchanged, n
 | `BLANK` | discarded before OCR; the ink figure says by how much |
 | `x=` | horizontal extent of the ink |
 | `CLIPPED?` | the ink reaches the outermost pixel of the crop, and the edges it reaches are named. Ink one pixel in is not flagged: at a geometry known to be right, long labels legitimately come that close, so the boundary itself is the only line that separates a cut glyph from a full one. Both kinds of error are possible -- a label drawn hard against its own cell edge reports a clipping that is really the sim's layout, and a crop that has slipped onto a solid background reports nothing at all. The calibration editor warns from this same function. |
+| `POLARITY read the wrong way up` | the answer came from an opposite-polarity retry, so the guess about which way round this cell is drawn (see below) was wrong. The label is right; the calibration is the thing to look at, because a crop that fools that guess is one notch away from a crop that cannot be read at all. Widening `cell_pad_y` -- or the strip's `h` -- is the fix. Printed on the variant that *won*, not on the retries that were reached: a label missing from `labels.txt` reaches every rung there is while reading perfectly. |
 
 The distinction between the middle two matters when a label looks wrong: a cell
 carrying `CONFIRMED` was checked against a known page, while a bare line means
 nothing corroborated it.
+
+## Which way up a cell is
+
+A softkey is drawn light-on-dark normally and dark-on-light when it is
+selected, so the polarity has to come out of the pixels. It is guessed by
+counting bright pixels in the middle of the cell and assuming the glyphs are
+the minority there.
+
+**That guess is wrong on a tight crop**, and a tight crop is what a good
+calibration produces: the middle of one is very nearly all glyph. Measured on
+a rendered seven-character label at an 11 px cap height, the bright fraction is
+0.24 in a 40 px cell, 0.38 in a 26 px one and 0.52 in an 18 px one -- so the
+test changes its answer somewhere around a cell only half again as tall as its
+text. A live MFD capture at `h = 0.0267`, `cell_pad_y = 0.08` crossed it: a
+white-on-black TERRAIN came out of preprocessing still white on black.
+
+Nothing else in the pipeline can undo that. Sharpening, upscaling and the
+threshold method all leave polarity alone, which is why `tune` reports that no
+candidate helped and hands back the defaults -- truthfully, because polarity
+was not in the space it searched.
+
+So polarity is a rung rather than a decision, the same answer the sharpening
+ladder gave to a value that could not be guessed:
+
+```
+auto,     rung 1   <- the sharpening ladder, exactly as it was
+auto,     rung 2
+auto,     rung 3
+opposite, rung 1   <- reached only when nothing above scored a confident hit
+opposite, rung 2
+opposite, rung 3
+```
+
+Polarity is the *outer* loop on purpose. A cell that reads today stops at the
+first variant that lands on a known label confidently, so it never sees a
+retry, never pays for one, and cannot have its answer outranked by one. Over
+the offline corpus that is every cell: 59 variants built across the six menus
+and not one retry. And the retries are cheap when they do run -- both
+polarities of a rung come from the same thresholded image and differ by a
+`bitwise_not` and a crop, so the second pass is a fraction of the first rather
+than a second ladder.
+
+`ocr.retry_opposite_polarity = false` restores the old behaviour.

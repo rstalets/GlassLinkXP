@@ -8,6 +8,8 @@ instead of hoping a real capture happens to exhibit it.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -18,6 +20,7 @@ from glasslinkxp.tuning import (
     Candidate,
     TuningCase,
     TuningError,
+    format_report,
     load_truth,
     result_block,
     run_tuning,
@@ -101,10 +104,19 @@ def _cases() -> list[TuningCase]:
 
 
 def _scripted_evaluator_factory(script):
-    """script: {(cell_id, amount, radius): (text, confidence)}"""
+    """script: {(cell_id, amount, radius): (text, confidence)}
+
+    Keyed without the polarity, and the "opposite" polarity always reads
+    nothing: these tests are about which *ladder* the search picks, and a
+    scripted cell that read equally well either way up would let a candidate
+    score on a variant no real cell produces. The polarity fallback has its
+    own test below.
+    """
 
     def factory(_base):
-        def evaluate(cell, psm, method, upscale, amount, radius):
+        def evaluate(cell, psm, method, upscale, amount, radius, polarity="auto"):
+            if polarity != "auto":
+                return CellResult(index=0, text="", raw="", confidence=0.0)
             cell_id = int(cell.flat[0])
             text, confidence = script.get((cell_id, amount, radius), ("", 0.0))
             return CellResult(index=0, text=text, raw=text, confidence=confidence,
@@ -213,3 +225,52 @@ def test_result_block_is_valid_toml_the_gui_can_read_back():
     # and the GUI's own parser, fed the block the way `tune`'s stdout carries it
     lines = block.splitlines() + ["", "trailing prose the GUI must not swallow"]
     assert parse_tuning_result(lines) == parsed
+
+
+def test_the_search_sees_both_polarities_and_the_pipeline_reads_them_in_that_order():
+    """The tuner's variant order is the pipeline's, or its answers are not the
+    daemon's.
+
+    ``pick_best`` stops at the first confident exact hit, so the order the
+    variants are offered in decides which reading wins. Two modules build that
+    order -- ``pipeline.variant_ladder`` for the daemon and ``tuning._variants``
+    for the search -- and this is what keeps them the same list.
+    """
+    from dataclasses import replace
+
+    from glasslinkxp.pipeline import variant_ladder
+    from glasslinkxp.tuning import _variants
+
+    ocr = OcrConfig()
+    assert _variants(ocr.sharpen_ladder, ocr.retry_opposite_polarity) == variant_ladder(ocr)
+
+    off = replace(ocr, retry_opposite_polarity=False)
+    assert _variants(off.sharpen_ladder, off.retry_opposite_polarity) == variant_ladder(off)
+
+
+def test_a_cell_only_the_opposite_polarity_can_read_is_not_reported_as_hopeless():
+    """The report a wrongly-polarised cell used to get, and the one it gets now.
+
+    Nothing in the search space -- psm, threshold method, upscale, sharpening
+    -- changes a cell's polarity, so a cell the centre-brightness test called
+    wrong reads as nothing under every candidate, and ``tune`` truthfully
+    reported that no candidate improved on the baseline and handed back the
+    baseline's own settings. That is what "tuning stopped working" looked
+    like. With the polarity in the ladder the baseline reads it.
+    """
+    def factory(_base):
+        def evaluate(cell, psm, method, upscale, amount, radius, polarity="auto"):
+            if polarity == "opposite":
+                return CellResult(index=0, text="0", raw="0", confidence=95.0, match_score=1.0)
+            return CellResult(index=0, text="", raw="", confidence=0.0)
+        return evaluate, (lambda: None)
+
+    result = run_tuning(
+        [TuningCase(label="page", dir=Path("."), display="pfd", expect={1: "0"})],
+        OcrConfig(),
+        evaluator_factory=factory,
+        psms=(7,), methods=("otsu",), upscales=(4.0,), rungs=(), max_extra_rungs=0,
+    )
+    assert result.baseline.outcomes[0].ok, "the fallback is part of the baseline, not a candidate"
+    report = format_report(result)
+    assert "nothing to fix" in report

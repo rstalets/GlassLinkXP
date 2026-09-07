@@ -194,11 +194,11 @@ def _candidate_ladders(
 
 
 #: (raw cell image, psm, threshold method, upscale, sharpen amount, sharpen
-#: radius) -> a CellResult for that one rung. The default evaluates it for
-#: real, through the same preprocess_cell + SoftkeyReader.read the pipeline
-#: uses; tests substitute a scripted one so the search logic can be checked
-#: without Tesseract or a real capture.
-Evaluator = Callable[[np.ndarray, int, str, float, float, float], CellResult]
+#: radius, polarity) -> a CellResult for that one variant. The default
+#: evaluates it for real, through the same preprocess_cell + SoftkeyReader.read
+#: the pipeline uses; tests substitute a scripted one so the search logic can
+#: be checked without Tesseract or a real capture.
+Evaluator = Callable[[np.ndarray, int, str, float, float, float, str], CellResult]
 
 
 def default_evaluator(base: OcrConfig) -> tuple[Evaluator, Callable[[], None]]:
@@ -220,14 +220,16 @@ def default_evaluator(base: OcrConfig) -> tuple[Evaluator, Callable[[], None]]:
         return readers[psm]
 
     def evaluate(
-        cell: np.ndarray, psm: int, method: str, upscale: float, amount: float, radius: float
+        cell: np.ndarray, psm: int, method: str, upscale: float, amount: float, radius: float,
+        polarity: str = "auto",
     ) -> CellResult:
         reader = reader_for(psm)
         if reader is None:
             return CellResult(index=0, text="", confidence=0.0)
         try:
             image = preprocess_cell(
-                cell, upscale=upscale, method=method, sharpen_amount=amount, sharpen_radius=radius,
+                cell, upscale=upscale, method=method, sharpen_amount=amount,
+                sharpen_radius=radius, polarity=polarity,
             )
             return reader.read(0, image)
         except Exception:  # noqa: BLE001 - a bad combination is just a miss
@@ -280,19 +282,36 @@ class TuningResult:
     candidates_tried: int
 
 
+def _variants(
+    ladder: Sequence[tuple[float, float]], retry_opposite: bool
+) -> tuple[tuple[str, float, float], ...]:
+    """The (polarity, amount, radius) sequence, in the pipeline's order.
+
+    Kept identical to ``pipeline.variant_ladder`` by a test that runs both over
+    the same config, because the tuner's whole claim is that what it measures
+    is what the daemon will do -- and the order is load-bearing, not
+    cosmetic: ``pick_best`` stops early, so a different order can pick a
+    different answer.
+    """
+    polarities = ("auto", "opposite") if retry_opposite else ("auto",)
+    return tuple((p, a, r) for p in polarities for a, r in ladder)
+
+
 def _evaluate_candidate(
     cache: Mapping[tuple, CellResult],
     cases: Sequence[TuningCase],
     cell_ids: Sequence[CellId],
     candidate: Candidate,
     accept_confidence: float,
+    retry_opposite: bool,
 ) -> tuple[CellOutcome, ...]:
     outcomes = []
+    variants = _variants(candidate.ladder, retry_opposite)
     for cid in cell_ids:
         def _results(cid=cid):
-            for amount, radius in candidate.ladder:
+            for polarity, amount, radius in variants:
                 yield cache[(cid.case, cid.cell, candidate.psm, candidate.method,
-                             candidate.upscale, amount, radius)]
+                             candidate.upscale, amount, radius, polarity)]
 
         result = SoftkeyReader.pick_best(_results(), accept_confidence)
         outcomes.append(CellOutcome(
@@ -349,6 +368,11 @@ def run_tuning(
     search_methods = tuple(dict.fromkeys((*methods, base.threshold)))
     search_upscales = tuple(dict.fromkeys((*upscales, base.upscale)))
     rung_settings = ((0.0, 0.0), *rungs)
+    # Both polarities are always cached, even when the config has the retry
+    # switched off: the cost is one bitwise_not and a crop per entry, and a
+    # search that could not see the other polarity would report "nothing
+    # helps" for exactly the cells this is here to explain.
+    search_polarities = ("auto", "opposite")
 
     images = {(cid.case, cid.cell): cell_image(cases[cid.case], cid.cell) for cid in cell_ids}
 
@@ -361,11 +385,13 @@ def run_tuning(
             for method in search_methods:
                 for upscale in search_upscales:
                     for amount, radius in rung_settings:
-                        for cid in cell_ids:
-                            cache[(cid.case, cid.cell, psm, method, upscale, amount, radius)] = (
-                                evaluate(images[(cid.case, cid.cell)], psm, method, upscale,
-                                         amount, radius)
-                            )
+                        for polarity in search_polarities:
+                            for cid in cell_ids:
+                                cache[(cid.case, cid.cell, psm, method, upscale,
+                                       amount, radius, polarity)] = (
+                                    evaluate(images[(cid.case, cid.cell)], psm, method, upscale,
+                                             amount, radius, polarity)
+                                )
                     done_settings += 1
                     if progress:
                         progress(f"evaluated {done_settings}/{total_settings} base settings "
@@ -375,7 +401,8 @@ def run_tuning(
 
     baseline_candidate = Candidate(base.psm, base.threshold, base.upscale, ((0.0, 0.0),))
     baseline_outcomes = _evaluate_candidate(
-        cache, cases, cell_ids, baseline_candidate, base.accept_confidence
+        cache, cases, cell_ids, baseline_candidate, base.accept_confidence,
+        base.retry_opposite_polarity,
     )
     baseline_ok = {o.cell_id: o.ok for o in baseline_outcomes}
     baseline_score = CandidateScore(candidate=baseline_candidate, outcomes=baseline_outcomes,
@@ -389,7 +416,8 @@ def run_tuning(
                 for ladder in _candidate_ladders(rungs, max_extra_rungs):
                     candidate = Candidate(psm, method, upscale, ladder)
                     outcomes = _evaluate_candidate(cache, cases, cell_ids, candidate,
-                                                   base.accept_confidence)
+                                                   base.accept_confidence,
+                                                   base.retry_opposite_polarity)
                     tried += 1
                     score = _score(candidate, outcomes, baseline_ok)
                     if score.regressed:

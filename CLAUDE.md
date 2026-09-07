@@ -157,6 +157,27 @@ frame, because a softkey becoming selected changes the background while leaving
 the label identical -- so anything cheap that must not miss that case belongs
 outside the gate too.
 
+**Which way up a cell is drawn is a guess, and the guess has been wrong.**
+A softkey is light-on-dark normally and dark-on-light when selected, so
+polarity has to come out of the pixels; `strip._background_is_white` counts
+bright pixels in the middle of the cell and assumes the glyphs are the
+minority there. A *tight* crop breaks that -- the middle of one is nearly all
+glyph -- and a tight crop is what a good calibration produces. When it breaks,
+the label reaches Tesseract white-on-black and reads as nothing or as garbage,
+and nothing else in the pipeline can undo it: sharpening, upscale and the
+threshold method all leave polarity alone. That is also why `tune` reported
+that no candidate helped and handed back the defaults -- truthfully, because
+polarity was not in the space it searched. It is a rung now
+(`retry_opposite_polarity`), for the same reason the sharpening ladder
+replaced one tuned sharpening value. Do not put a threshold back here.
+
+**A label missing from `labels.txt` costs more than a wrong reading.** It is
+reported raw, which is usually right, so it looks harmless -- but it can never
+score an exact match, so it never stops the ladder early and walks every
+variant on every change. CAUTION and WARNING were missing; adding them took
+one synthetic page from 19 preprocessing passes to 9. If a page seems
+expensive, check the vocabulary before the ladder.
+
 **Windows-only paths cannot be tested here**: capture, window enumeration,
 resizing and placement, the installer scripts, anything touching a live
 X-Plane, and three things in the GUI -- `pythonw.exe`, `CTRL_BREAK_EVENT` as
@@ -205,6 +226,7 @@ None of these couplings is visible to the type checker:
 | `WindowInfo.__str__` | `test_gui_logparse.py` -- `parse_window` is fed a formatted `WindowInfo`, over quoting, backslashes, non-ASCII, and the negative screen coordinates a monitor left of or above the primary is addressed by |
 | which displays `manage_windows` reports as managed | `test_capture.py` -- `sources_for` must not resize a window window management already sized |
 | what `calibrate`, `dump-colors`, `screen-template` or `tune` print | `test_gui_logparse.py` -- `parse_calibration` / `parse_colors` / `parse_screen_block` / `parse_tuning_result` are fed the real commands' output over synthetic frames or a scripted search |
+| the order of the preprocessing variants | `test_tuning.py` -- `pipeline.variant_ladder` and `tuning._variants` are run over one config and compared. `pick_best` stops early, so the order decides the answer, and the tuner's whole claim is that what it measures is what the daemon will do |
 | the shape of a `tune --truth` file | `test_tuning.py` -- the GUI's `configio.dumps_truth` (which cannot import `tuning.py`: that pulls in cv2 and Tesseract, and the GUI must never run the pipeline in its own process) is fed through the real `tuning.load_truth` |
 | a field on any config dataclass | `test_gui_schema.py` -- a field must be in `gui/schema.py` or in `NOT_IN_THE_FORM` with a reason |
 | `strip_rect` or `cell_rects` | `test_gui_geometry.py` and `test_gui_canvas.py` -- the calibration editor draws what `cell_rects` returns, and both check it against the real thing |

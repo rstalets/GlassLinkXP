@@ -174,6 +174,12 @@ Unsharp mask settings tried in order, as [amount, radius] pairs, until one reads
 
 How each cell is turned black and white. Applied per cell, never globally.
 
+### `retry_opposite_polarity`
+
+*Retry the other way up* — true or false. Default: `true`.
+
+After the sharpening ladder, try every rung again with light and dark swapped. Which way up a cell is drawn is guessed from how bright the middle of it is, and a tight crop fools that guess -- the label then goes to Tesseract white-on-black and reads as nothing, which no amount of sharpening fixes. Costs nothing on a cell that reads: the retries come last. Turn it off only to reproduce the old behaviour.
+
 ### `accept_confidence`
 
 *Accept confidence* — a number. Default: `80.0`.

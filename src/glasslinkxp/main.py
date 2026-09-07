@@ -39,11 +39,13 @@ from .pipeline import DisplayPipeline, DisplayResult
 from .publish import Value, create_publisher
 from .strip import (
     auto_detect_strip,
+    centre_bright_fraction,
     crop_strip,
+    finish_cell,
     is_blank,
     overlay_geometry,
-    preprocess_cell,
     split_cells,
+    threshold_cell,
 )
 
 LOG = logging.getLogger("glasslinkxp")
@@ -278,10 +280,27 @@ def cmd_calibrate(args: argparse.Namespace, config: AppConfig) -> int:
 
 
 def cmd_dump_cells(args: argparse.Namespace, config: AppConfig) -> int:
+    """Write each cell's raw crop and the picture Tesseract is actually given.
+
+    ``_prep.png`` is the *first rung of the configured ladder* -- the same
+    image ``run`` hands to Tesseract first -- and not
+    ``preprocess_cell``'s own defaults. It was the defaults once, which meant
+    the picture in the Cells tab was sharpened at 1.2/1.4 while the shipped
+    ladder starts at no sharpening at all: a diagnostic image of a variant the
+    daemon never produces. Finding the closed-counter bug took a picture of a
+    preprocessed cell; a picture of the wrong preprocessed cell is worse than
+    none, because it is believed.
+
+    The printed line carries the polarity decision for the same reason. It is
+    a threshold on a measured quantity (see ``strip._background_is_white``),
+    and until now the only way to see it was to notice that a dumped cell had
+    come out white-on-black.
+    """
     import cv2
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    first_amount, first_radius = (config.ocr.sharpen_ladder or ((0.0, 0.0),))[0]
     sources = _open_sources(config, args.image)
     try:
         for display in config.active_displays:
@@ -289,12 +308,20 @@ def cmd_dump_cells(args: argparse.Namespace, config: AppConfig) -> int:
             cells = split_cells(frame, display.geometry)
             for index, cell in enumerate(cells, start=1):
                 blank = is_blank(cell, config.ocr.blank_ink_ratio)
+                binary = threshold_cell(
+                    cell, config.ocr.upscale, config.ocr.threshold, first_amount, first_radius,
+                )
+                bright = centre_bright_fraction(binary)
                 cv2.imwrite(str(out / f"{display.key}_{index:02d}_raw.png"), cell)
                 cv2.imwrite(
                     str(out / f"{display.key}_{index:02d}_prep.png"),
-                    preprocess_cell(cell, config.ocr.upscale, config.ocr.threshold),
+                    finish_cell(binary, "auto"),
                 )
-                LOG.info("%s cell %2d: %s", display.key, index, "blank" if blank else "has ink")
+                LOG.info(
+                    "%s cell %2d: %s, centre bright %.2f -> read as %s",
+                    display.key, index, "blank" if blank else "has ink", bright,
+                    "dark text on a light box" if bright > 0.5 else "light text on a dark box",
+                )
         print(f"wrote {len(config.active_displays) * 12 * 2} cell PNGs to {out.resolve()}")
     finally:
         for source in sources.values():

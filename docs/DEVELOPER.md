@@ -149,6 +149,24 @@ if that hash has been pruned).
   `docs/CONFIGURATION.md` for the full reference, generated from the same
   text the GUI's Settings tab shows beside each field.
 
+### If a label reads as garbage after a good-looking calibration
+
+Check `run -v` for `POLARITY read the wrong way up`, and check that the
+label is in `labels.txt`. Those are the two failures that look like bad OCR
+and are not.
+
+The first is a crop tight enough that the middle of the cell is nearly all
+glyph, which fools the light/dark guess -- see *Which way up a cell is* in
+`docs/PIPELINE.md`. The polarity rung reads the cell anyway, so the label
+comes out right; the line is there because a crop that close to the line has
+no margin left. Giving the strip a little more `h` is the fix.
+
+The second is quieter. A label the vocabulary does not know is reported raw,
+which is usually right, but it can never score an exact match -- so it never
+stops the ladder early and walks every variant there is on every change. On
+the offline corpus, adding the two missing labels took `alerts` from 19
+preprocessing passes to 9.
+
 ## Latency
 
 Where the delay between a softkey press and the Stream Deck face actually
@@ -190,6 +208,33 @@ than there really are.
 ## Verified offline
 
 On Linux/CPython 3.11, Tesseract 5.3.4 (system) with `tesserocr` 2.11:
+
+* The polarity failure and the rung that answers it, measured rather than
+  argued. `eng.traineddata` here is byte-identical to the file `install.ps1`
+  downloads (sha256 `7d4322bd...70b2`, tessdata_fast 4.1.0), so this is the
+  model a user's install runs.
+
+  Rendered labels at an 11 px cap height, varying only the crop -- the bright
+  fraction of the centre band, which is what the light/dark guess thresholds
+  at 0.5:
+
+  | cell height | TERRAIN | NEXRAD | MAP |
+  | --- | --- | --- | --- |
+  | 40 px | 0.24 | -- | 0.15 |
+  | 26 px | 0.38 | 0.35 | 0.23 |
+  | 20 px | 0.48 | 0.53 | 0.29 |
+  | 16 px | 0.51 | 0.53 | 0.30 |
+
+  Above the line the cell is handed to Tesseract still white-on-black:
+  NEXRAD at 16 px reads at confidence 0 with the sharpening ladder alone and
+  92 with the polarity rung; TERRAIN at 20 px goes from 69 to 96. Nothing in
+  the corpus regressed. The rendering is DejaVu, not X-Plane's font, so these
+  numbers locate the *mechanism*, not a threshold to tune to -- the live
+  capture is the measurement that matters, and the one that prompted this
+  (an MFD at `h = 0.0267`, `cell_pad_y = 0.08`) was over the line.
+* The fallback is free on everything that already read: 59 preprocessing
+  variants built across the six synthetic menus, none of them a retry, every
+  label identical with `retry_opposite_polarity` on and off.
 
 * The tests pass (`python -m pytest -q`), including the full frame -> labels
   pipeline over 5 synthetic softkey menus (60 cells: 49 labels + 11 blanks),

@@ -261,21 +261,34 @@ def sharpen(gray: np.ndarray, amount: float, radius: float) -> np.ndarray:
     return cv2.addWeighted(gray, 1.0 + amount, blurred, -amount, 0)
 
 
-def preprocess_cell(
+#: The polarities :func:`preprocess_cell` will finish a thresholded cell in.
+#:
+#: ``"auto"`` is :func:`_background_is_white`'s answer and is what the first
+#: pass of the ladder uses; ``"opposite"`` is the other one. There is
+#: deliberately no way to name a polarity absolutely: the caller that needs
+#: the second option needs it *because* the first was wrong, and "the other
+#: one" is the only description of it that cannot itself be wrong.
+POLARITIES = ("auto", "opposite")
+
+
+def threshold_cell(
     cell: np.ndarray,
     upscale: float = 4.0,
     method: str = "otsu",
-    border: int = 8,
     sharpen_amount: float = 1.2,
     sharpen_radius: float = 1.4,
 ) -> np.ndarray:
-    """Return a binarised, OCR-ready cell: black text on a white background.
+    """Sharpen, upscale and binarise one cell, without deciding its polarity.
+
+    Split out from :func:`preprocess_cell` because this is the expensive half
+    -- an unsharp mask, a 4x resize and a threshold -- and both polarities of
+    a given rung share it exactly. The ladder thresholds once per rung and
+    finishes the result twice.
 
     Thresholding is done *per cell* rather than once for the whole strip
     because the selected softkey is drawn with a bright highlight box behind
     it; a single global threshold either loses that cell or blows out the
-    others. Polarity is then normalised by assuming the glyphs are the
-    minority class, which handles the highlighted cell for free.
+    others.
     """
     gray = to_gray(cell)
     gray = sharpen(gray, sharpen_amount, sharpen_radius)
@@ -284,15 +297,30 @@ def preprocess_cell(
 
     if method == "adaptive":
         block = max(3, (min(gray.shape) // 2) | 1)
-        binary = cv2.adaptiveThreshold(
+        return cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, block, 5
         )
-    elif method == "otsu":
+    if method == "otsu":
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    else:
-        raise ValueError(f"unknown threshold method {method!r} (use 'otsu' or 'adaptive')")
+        return binary
+    raise ValueError(f"unknown threshold method {method!r} (use 'otsu' or 'adaptive')")
 
-    if not _background_is_white(binary):
+
+def finish_cell(binary: np.ndarray, polarity: str = "auto", border: int = 8) -> np.ndarray:
+    """Normalise a thresholded cell to dark glyphs on light paper.
+
+    ``polarity`` selects between :func:`_background_is_white`'s answer and the
+    other one; see :data:`POLARITIES`. Cheap on purpose -- a ``bitwise_not``,
+    a crop and a border -- so that trying both costs a fraction of a rung
+    rather than a whole one.
+    """
+    if polarity not in POLARITIES:
+        raise ValueError(f"unknown polarity {polarity!r} (use one of {POLARITIES})")
+
+    flip = not _background_is_white(binary)
+    if polarity == "opposite":
+        flip = not flip
+    if flip:
         # The bright class is the text, not the paper -> flip so that
         # Tesseract gets dark glyphs on a light background.
         binary = cv2.bitwise_not(binary)
@@ -306,13 +334,27 @@ def preprocess_cell(
     return binary
 
 
-def _background_is_white(binary: np.ndarray) -> bool:
-    """Is the bright class the background rather than the glyphs?
+def preprocess_cell(
+    cell: np.ndarray,
+    upscale: float = 4.0,
+    method: str = "otsu",
+    border: int = 8,
+    sharpen_amount: float = 1.2,
+    sharpen_radius: float = 1.4,
+    polarity: str = "auto",
+) -> np.ndarray:
+    """Return a binarised, OCR-ready cell: black text on a white background."""
+    binary = threshold_cell(cell, upscale, method, sharpen_amount, sharpen_radius)
+    return finish_cell(binary, polarity, border)
 
-    Decided on the *centre* of the cell, where the label lives: glyphs are
-    always the minority there. Looking at the whole cell would get the
-    highlighted softkey wrong whenever its box covers less than half the
-    cell, which happens as soon as the crop is a little generous.
+
+def centre_bright_fraction(binary: np.ndarray) -> float:
+    """What fraction of the cell's centre is the bright class.
+
+    The number :func:`_background_is_white` decides on, exposed so that a
+    human can look at it: this is a threshold on a measured quantity, and
+    every other one in this project has a diagnostic that prints the real
+    value from a real capture. ``dump-cells`` prints this one.
     """
     height, width = binary.shape[:2]
     centre = binary[
@@ -321,7 +363,37 @@ def _background_is_white(binary: np.ndarray) -> bool:
     ]
     if centre.size == 0:
         centre = binary
-    return float(np.mean(centre > 0)) > 0.5
+    return float(np.mean(centre > 0))
+
+
+def _background_is_white(binary: np.ndarray) -> bool:
+    """Is the bright class the background rather than the glyphs?
+
+    Decided on the *centre* of the cell, where the label lives, rather than
+    on the whole cell: a whole-cell majority gets the highlighted softkey
+    wrong whenever its box covers less than half the cell, which happens as
+    soon as the crop is a little generous.
+
+    **This is a guess and it is wrong on real captures.** It assumes the
+    glyphs are the minority of the centre band, and that assumption fails
+    from the other direction -- a *tight* crop, which is what a good
+    calibration produces, leaves the centre band containing little but the
+    glyphs. Measured on a rendered 7-character label at an 11 px cap height:
+    the bright fraction is 0.24 in a 40 px cell, 0.38 in a 26 px one and 0.52
+    in an 18 px one, so the test changes its answer somewhere around a cell
+    only half again as tall as its text. A live MFD capture at
+    ``h = 0.0267``, ``cell_pad_y = 0.08`` crossed it: a white-on-black
+    TERRAIN came back out of here still white on black, unreadable, and no
+    amount of sharpening or upscaling could recover it because none of them
+    change polarity.
+
+    So this is no longer trusted on its own. It picks which polarity the
+    ladder tries *first*, and :data:`POLARITIES` gives the ladder the other
+    one to fall back to -- the same reason the sharpening ladder replaced a
+    single tuned sharpening value. Do not add a threshold here; the answer
+    this function is being asked for is not recoverable from a pixel count.
+    """
+    return centre_bright_fraction(binary) > 0.5
 
 
 def _crop_to_content(binary: np.ndarray, margin: int = 2) -> np.ndarray:

@@ -52,6 +52,14 @@ class CellResult:
     match_score: float = 0.0  # difflib ratio of raw -> text, 0..1
     blank: bool = False
     ocr_ran: bool = True     # False when served from the change-gating cache
+    #: Which variant of the preprocessing ladder this reading came from, as an
+    #: index into it. Zero for a cell read straight off the gentle path, which
+    #: is nearly all of them. It is here so the pipeline can say *which* rung
+    #: won without anything having to re-derive it: "reached a polarity retry"
+    #: and "was decided by one" are different facts, and only the second is
+    #: worth printing -- an out-of-vocabulary label reaches every rung there is
+    #: while reading perfectly.
+    variant: int = 0
     by_screen: str = ""      # value came from this known softkey page
     confirmed_by: str = ""   # page agreed with a reading OCR was unsure of
     #: Background colour class, 0=black 1=white 2=yellow 3=red (see color.py).
@@ -256,9 +264,13 @@ class SoftkeyReader:
         preprocessing being about as expensive per rung as the early exit was
         saving on OCR.
         """
-        return self.pick_best(
-            (self.read(index, image) for image in images), self.config.accept_confidence
-        )
+        def numbered():
+            for position, image in enumerate(images):
+                result = self.read(index, image)
+                result.variant = position
+                yield result
+
+        return self.pick_best(numbered(), self.config.accept_confidence)
 
     @staticmethod
     def pick_best(results: Iterable["CellResult"], accept_confidence: float) -> "CellResult":
