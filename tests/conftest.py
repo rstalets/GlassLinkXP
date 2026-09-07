@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from g1000_softkey.config import default_config  # noqa: E402
-from g1000_softkey.ocr import SoftkeyReader  # noqa: E402
+from glasslinkxp.config import default_config  # noqa: E402
+from glasslinkxp.ocr import SoftkeyReader  # noqa: E402
 
 
 @pytest.fixture(scope="session")

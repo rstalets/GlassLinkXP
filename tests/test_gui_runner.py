@@ -5,8 +5,8 @@ import time
 
 import pytest
 
-from g1000_softkey.gui import prefs
-from g1000_softkey.gui.runner import (
+from glasslinkxp.gui import prefs
+from glasslinkxp.gui.runner import (
     CommandRunner,
     Failed,
     Finished,

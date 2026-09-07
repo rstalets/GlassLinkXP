@@ -13,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from g1000_softkey.color import RED, WHITE
-from g1000_softkey.config import StripGeometry
-from g1000_softkey.gui import commands, configio, prefs
-from g1000_softkey.gui.runner import Failed, Finished, Line, Started
+from glasslinkxp.color import RED, WHITE
+from glasslinkxp.config import StripGeometry
+from glasslinkxp.gui import commands, configio, prefs
+from glasslinkxp.gui.runner import Failed, Finished, Line, Started
 
 tk = pytest.importorskip("tkinter")
 
@@ -24,7 +24,7 @@ tk = pytest.importorskip("tkinter")
 @pytest.fixture
 def gui(tmp_path, monkeypatch):
     """A built window, isolated from the real preferences and checkout."""
-    from g1000_softkey.gui.app import build
+    from glasslinkxp.gui.app import build
 
     monkeypatch.setattr(prefs, "prefs_path", lambda: tmp_path / "gui.json")
     monkeypatch.setattr(prefs, "project_root", lambda: tmp_path)
@@ -39,7 +39,7 @@ def gui(tmp_path, monkeypatch):
 
 
 def _tab(app, class_name):
-    from g1000_softkey.gui import tabs
+    from glasslinkxp.gui import tabs
 
     widget = app.notebook.tabs()[tabs.tab_index(class_name)]
     return app.root.nametowidget(widget)
@@ -47,7 +47,7 @@ def _tab(app, class_name):
 
 def _entry_for(settings_tab, path):
     """The widget the Settings form built for one setting, found by its variable."""
-    from g1000_softkey.gui.widgets import HintEntry
+    from glasslinkxp.gui.widgets import HintEntry
 
     variable = {p: v for p, _s, v in settings_tab._fields}[path]
     name = str(variable)
@@ -67,7 +67,7 @@ def _descendants(widget):
 
 
 def test_every_tab_builds(gui):
-    from g1000_softkey.gui import tabs
+    from glasslinkxp.gui import tabs
 
     assert len(gui.notebook.tabs()) == len(tabs.TAB_CLASSES)
     for index in range(len(tabs.TAB_CLASSES)):
@@ -81,7 +81,7 @@ def test_tab_titles_are_distinct(gui):
 
 
 def test_tabs_are_looked_up_by_class_not_by_position(gui):
-    from g1000_softkey.gui import tabs
+    from glasslinkxp.gui import tabs
 
     for index, cls in enumerate(tabs.TAB_CLASSES):
         assert tabs.tab_index(cls.__name__) == index
@@ -95,8 +95,52 @@ def test_opening_with_no_config_file_falls_back_to_the_defaults(gui):
     assert "no file" in gui.config_display.get()
 
 
+def test_first_run_with_no_config_lands_on_start_here_regardless_of_the_remembered_tab(
+    tmp_path, monkeypatch,
+):
+    from glasslinkxp.gui import tabs
+    from glasslinkxp.gui.app import build
+
+    monkeypatch.setattr(prefs, "prefs_path", lambda: tmp_path / "gui.json")
+    monkeypatch.setattr(prefs, "project_root", lambda: tmp_path)
+    prefs.save({**prefs.DEFAULTS, "tab": tabs.tab_index("RunTab")})
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:  # pragma: no cover
+        pytest.skip(f"no display available for Tk ({exc})")
+    root.withdraw()
+    try:
+        app = build(root, None)
+        assert app.first_run is True
+        assert app.notebook.index("current") == tabs.tab_index("StartTab")
+    finally:
+        root.destroy()
+
+
+def test_a_config_file_turns_first_run_off_and_honours_the_remembered_tab(tmp_path, monkeypatch):
+    from glasslinkxp.gui import tabs
+    from glasslinkxp.gui.app import build
+
+    monkeypatch.setattr(prefs, "prefs_path", lambda: tmp_path / "gui.json")
+    monkeypatch.setattr(prefs, "project_root", lambda: tmp_path)
+    prefs.save({**prefs.DEFAULTS, "tab": tabs.tab_index("RunTab")})
+    path = tmp_path / "config.toml"
+    path.write_text("[app]\nloop_hz = 3.5\n", encoding="utf-8")
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:  # pragma: no cover
+        pytest.skip(f"no display available for Tk ({exc})")
+    root.withdraw()
+    try:
+        app = build(root, path)
+        assert app.first_run is False
+        assert app.notebook.index("current") == tabs.tab_index("RunTab")
+    finally:
+        root.destroy()
+
+
 def test_opening_a_config_file_reads_it(tmp_path, monkeypatch):
-    from g1000_softkey.gui.app import build
+    from glasslinkxp.gui.app import build
 
     monkeypatch.setattr(prefs, "prefs_path", lambda: tmp_path / "gui.json")
     monkeypatch.setattr(prefs, "project_root", lambda: tmp_path)
@@ -119,7 +163,7 @@ def test_a_config_that_is_not_utf_8_still_opens_the_window(tmp_path, monkeypatch
     """A config.toml saved as UTF-16 used to mean no window at all: the decode
     error is a ValueError, which read_document did not turn into a
     ConfigIoError, which is the only thing app.load_config catches."""
-    from g1000_softkey.gui.app import build
+    from glasslinkxp.gui.app import build
 
     monkeypatch.setattr(prefs, "prefs_path", lambda: tmp_path / "gui.json")
     monkeypatch.setattr(prefs, "project_root", lambda: tmp_path)
@@ -171,12 +215,12 @@ def test_an_unreadable_config_is_reported_rather_than_fatal(gui, tmp_path):
 
 def test_the_board_fills_in_from_the_daemons_own_output(gui):
     run = _tab(gui, "RunTab")
-    run.on_event(Line("18:04:11 INFO    g1000_softkey: [pfd] 1:INSET | 2:- | 3:PFD"
+    run.on_event(Line("18:04:11 INFO    glasslinkxp: [pfd] 1:INSET | 2:- | 3:PFD"
                       "  bg: 3=white"))
     board = run._boards["pfd"]
     assert board._boxes[0].cget("text") == "INSET"
     assert board._boxes[1].cget("text") == ""
-    from g1000_softkey.gui.widgets import CELL_COLORS
+    from glasslinkxp.gui.widgets import CELL_COLORS
 
     assert board._boxes[2].cget("background") == CELL_COLORS[WHITE][0]
 
@@ -184,7 +228,7 @@ def test_the_board_fills_in_from_the_daemons_own_output(gui):
 def test_a_warning_cell_is_drawn_as_one(gui):
     run = _tab(gui, "RunTab")
     run.on_event(Line("[pfd] 1:WARNING  bg: 1=red"))
-    from g1000_softkey.gui.widgets import CELL_COLORS
+    from glasslinkxp.gui.widgets import CELL_COLORS
 
     assert run._boards["pfd"]._boxes[0].cget("background") == CELL_COLORS[RED][0]
 
@@ -205,9 +249,9 @@ def test_a_cell_reading_as_a_pipe_does_not_freeze_the_board(gui):
 def test_a_display_that_stops_delivering_frames_is_shown_as_such(gui):
     run = _tab(gui, "RunTab")
     run._set_running(True)
-    run.on_event(Line("WARNING g1000_softkey: no frames from pfd after 4s. The window must"))
+    run.on_event(Line("WARNING glasslinkxp: no frames from pfd after 4s. The window must"))
     assert "No frames from pfd" in run.state_text.get()
-    run.on_event(Line("INFO g1000_softkey: pfd is delivering frames again"))
+    run.on_event(Line("INFO glasslinkxp: pfd is delivering frames again"))
     assert run.state_text.get() == "Running"
 
 
@@ -249,8 +293,8 @@ def test_a_daemon_that_will_not_start_is_reported(gui):
 
 def test_the_exact_command_is_shown_above_the_output(gui):
     run = _tab(gui, "RunTab")
-    run.on_event(Started(["python", "-m", "g1000_softkey.main", "run"]))
-    assert "g1000_softkey.main run" in run.output.contents()
+    run.on_event(Started(["python", "-m", "glasslinkxp.main", "run"]))
+    assert "glasslinkxp.main run" in run.output.contents()
 
 
 def test_the_run_tab_offers_debug_output(gui):
@@ -316,8 +360,8 @@ def test_the_output_pane_does_not_grow_without_limit(gui):
 
 def _cell_pngs(tmp_path):
     """A real dump-cells folder, the way the Cells tab actually gets one."""
-    from g1000_softkey import synth
-    from g1000_softkey.main import main as cli_main
+    from glasslinkxp import synth
+    from glasslinkxp.main import main as cli_main
 
     frames = tmp_path / "frames"
     synth.write_menus(frames)
@@ -379,8 +423,8 @@ def test_cells_tab_boxes_are_never_shorter_than_the_picture_they_show(gui, tmp_p
     and a fixed box combined with allow_shrink=False clips whatever does not
     fit rather than blurring it. The box must size itself to the picture, not
     the other way around."""
-    from g1000_softkey import synth
-    from g1000_softkey.main import main as cli_main
+    from glasslinkxp import synth
+    from glasslinkxp.main import main as cli_main
 
     tall = StripGeometry(y=0.80, h=0.10, cell_pad_y=0.03)
     frames = tmp_path / "frames"
@@ -422,8 +466,8 @@ def test_add_tuning_page_snapshots_pixels_so_a_later_capture_cannot_overwrite_th
     ``{key}_{cell:02d}_raw.png`` files in place, so an earlier page's queued
     *labels* ended up checked against a *different* page's pixels the moment
     a second page was captured."""
-    from g1000_softkey import synth
-    from g1000_softkey.main import main as cli_main
+    from glasslinkxp import synth
+    from glasslinkxp.main import main as cli_main
 
     frames = tmp_path / "frames"
     synth.write_menus(frames)
@@ -536,7 +580,7 @@ def test_a_string_where_a_number_belongs_does_not_raise_ConfigError(gui):
     and comes back out as a TypeError, which is neither a ConfigError nor a
     ValueError -- so a validator that catches only those two lets it escape.
     """
-    from g1000_softkey.config import ConfigError, from_mapping
+    from glasslinkxp.config import ConfigError, from_mapping
 
     with pytest.raises(Exception) as raised:
         from_mapping({"app": {"loop_hz": "12"}})
@@ -576,7 +620,7 @@ def test_the_open_folder_buttons_use_the_folder_the_command_writes_into(gui,
                                                                        tmp_path):
     """Each tab had its own copy of this, and CommandSpec.output_option -- the
     declaration of which box holds the folder -- was read nowhere."""
-    from g1000_softkey.gui import tabs
+    from glasslinkxp.gui import tabs
 
     opened = []
     monkeypatch.setattr(tabs, "open_folder", lambda path: opened.append(Path(path)) or "")
@@ -592,7 +636,7 @@ def test_the_open_folder_buttons_use_the_folder_the_command_writes_into(gui,
 
 
 def test_open_folder_says_so_when_there_is_nothing_there_yet(gui, monkeypatch, tmp_path):
-    from g1000_softkey.gui import tabs
+    from glasslinkxp.gui import tabs
 
     opened = []
     monkeypatch.setattr(tabs, "open_folder", lambda path: opened.append(path) or "")
@@ -607,7 +651,7 @@ def test_the_publisher_choice_is_remembered(tmp_path, monkeypatch):
     """It was read out of the preferences at startup and never written back,
     so "console" -- the setting somebody deliberately picks while they are
     still checking the readings -- was forgotten every time."""
-    from g1000_softkey.gui.app import build
+    from glasslinkxp.gui.app import build
 
     monkeypatch.setattr(prefs, "prefs_path", lambda: tmp_path / "gui.json")
     monkeypatch.setattr(prefs, "project_root", lambda: tmp_path)
@@ -656,7 +700,7 @@ def _ticking_runner(monkeypatch, gui, ticks, events_on_tick=None):
 def test_the_poll_loop_keeps_running_when_a_handler_raises(gui, monkeypatch):
     import time
 
-    from g1000_softkey.gui import app as app_module
+    from glasslinkxp.gui import app as app_module
 
     monkeypatch.setattr(app_module, "POLL_MS", 1)
     ticks = []
@@ -715,7 +759,7 @@ def test_the_form_shows_a_field_for_every_setting(gui):
     was, is a count that disagrees by a number rather than anything that says
     which group is missing.
     """
-    from g1000_softkey.gui import tabs
+    from glasslinkxp.gui import tabs
 
     settings = _tab(gui, "SettingsTab")
     once = sum(len(group.settings) for _page, group, _path in tabs.SETTINGS_PAGES)
@@ -724,7 +768,7 @@ def test_the_form_shows_a_field_for_every_setting(gui):
 
 
 def test_editing_a_field_and_saving_writes_the_file(gui, tmp_path):
-    from g1000_softkey.config import load_config
+    from glasslinkxp.config import load_config
 
     path = tmp_path / "config.toml"
     configio.save(path, configio.default_document(), backup=False)
@@ -765,7 +809,7 @@ def test_saving_the_form_does_not_bake_this_installs_paths_into_the_config(gui, 
 
 
 def test_the_packages_own_file_is_shown_as_a_hint_beside_the_empty_box(gui):
-    from g1000_softkey.config import OcrConfig
+    from glasslinkxp.config import OcrConfig
 
     settings = _tab(gui, "SettingsTab")
     entry = _entry_for(settings, ("ocr", "screens_file"))
@@ -787,7 +831,7 @@ def test_the_hint_gets_out_of_the_way_of_a_path_of_your_own(gui):
 
 def test_clearing_the_box_is_the_way_back_to_the_packages_file(gui, tmp_path):
     """It used to raise "Pages file cannot be empty", which left no way back."""
-    from g1000_softkey.config import OcrConfig, load_config
+    from glasslinkxp.config import OcrConfig, load_config
 
     path = tmp_path / "config.toml"
     document = configio.default_document()
@@ -811,7 +855,7 @@ def test_a_whole_number_written_as_a_float_does_not_block_the_whole_form(gui, tm
                                                                         monkeypatch):
     """One legal `change_tolerance = 6.0` used to fail Save for every field:
     the form rendered it as "6.0" and then refused its own text."""
-    from g1000_softkey.config import load_config
+    from glasslinkxp.config import load_config
 
     warnings = []
     monkeypatch.setattr("tkinter.messagebox.showwarning",
@@ -915,7 +959,7 @@ def test_the_window_list_is_parsed_and_can_be_applied(gui):
     real object is what the neighbouring test does, and it is why that one
     survived the same change.
     """
-    from g1000_softkey.capture import WindowInfo
+    from glasslinkxp.capture import WindowInfo
 
     listed = [
         WindowInfo(hwnd=0x10F42, title="G1000 PFD (Cessna)", class_name="X-System",
@@ -937,7 +981,7 @@ def test_a_window_whose_title_has_an_apostrophe_is_listed(gui):
     """It was dropped, and the tab said "No windows matched" with the line
     plainly visible above it. Built from a real WindowInfo, because a sample
     typed into a test is what hid this in the first place."""
-    from g1000_softkey.capture import WindowInfo
+    from glasslinkxp.capture import WindowInfo
 
     window = WindowInfo(hwnd=0x10F42, title="Cirrus SR22's PFD", class_name="X-Plane",
                         width=1288, height=832, pid=1234)
@@ -1004,7 +1048,7 @@ def test_a_number_that_is_not_a_number_is_refused_not_swallowed(gui):
 
 
 def test_saving_writes_the_geometry_that_is_on_screen(gui, tmp_path):
-    from g1000_softkey.config import load_config
+    from glasslinkxp.config import load_config
 
     path = tmp_path / "config.toml"
     configio.save(path, configio.default_document(), backup=False)
@@ -1073,7 +1117,7 @@ def test_the_source_display_still_gets_the_editor(calibrated):
 
 
 def test_saving_the_source_writes_the_follower_too(calibrated):
-    from g1000_softkey.config import load_config
+    from glasslinkxp.config import load_config
 
     _gui, calibrate, path = calibrated
     calibrate.display.set("pfd")
@@ -1097,7 +1141,7 @@ def test_the_save_button_says_where_it_is_going(calibrated):
 
 
 def test_unticking_gives_the_follower_its_own_calibration(calibrated):
-    from g1000_softkey.config import load_config
+    from glasslinkxp.config import load_config
 
     _gui, calibrate, path = calibrated
     calibrate.display.set("pfd")
@@ -1198,8 +1242,12 @@ def test_the_colour_table_is_parsed(gui):
 
 
 def test_a_recorded_page_can_be_appended_to_the_pages_file(gui, tmp_path, monkeypatch):
+    """PagesTab is not shown in the notebook (see TAB_CLASSES), but the class
+    itself is still exercised directly here rather than dropped along with it."""
+    from glasslinkxp.gui.tabs import PagesTab
+
     monkeypatch.setattr("tkinter.messagebox.askokcancel", lambda *a, **k: True)
-    pages = _tab(gui, "PagesTab")
+    pages = PagesTab(gui)
     screens = tmp_path / "screens.toml"
     screens.write_text("# pages\n", encoding="utf-8")
     configio.set_in(gui.document, ("ocr", "screens_file"), str(screens))
@@ -1233,7 +1281,7 @@ def test_the_vocabulary_tab_edits_the_file_the_daemon_reads(gui, tmp_path):
 
 
 def test_a_relative_path_in_the_config_resolves_beside_the_config(gui, tmp_path):
-    from g1000_softkey.gui.tabs import config_path_setting
+    from glasslinkxp.gui.tabs import config_path_setting
 
     gui.config_path = tmp_path / "config.toml"
     configio.set_in(gui.document, ("ocr", "labels_file"), "my-labels.txt")
@@ -1241,7 +1289,7 @@ def test_a_relative_path_in_the_config_resolves_beside_the_config(gui, tmp_path)
 
 
 def test_the_walkthrough_only_points_at_tabs_that_exist(gui):
-    from g1000_softkey.gui import tabs
+    from glasslinkxp.gui import tabs
 
     for _title, _text, target in tabs.STEPS:
         if target:

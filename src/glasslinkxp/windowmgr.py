@@ -13,7 +13,7 @@ Three things, in this order, per display:
 1. **Open it.** If no window matches the display's ``window_title``, fire the
    sim command that pops it out and wait for the window to appear.
 2. **Size it.** The client area goes to ``window_management.size``, which must
-   be 4:3 -- see :class:`~g1000_softkey.config.WindowManagementConfig`.
+   be 4:3 -- see :class:`~glasslinkxp.config.WindowManagementConfig`.
 3. **Place it.** Top-left of the monitor X-Plane is running on. The taskbar
    sits at the bottom of a monitor, so the top-left corner is the part of it
    least likely to have anything over the top of the window.

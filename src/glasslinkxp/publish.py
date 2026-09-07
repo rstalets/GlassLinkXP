@@ -224,7 +224,7 @@ class WebApiPublisher:
         if missing:
             LOG.warning(
                 "%d of %d datarefs are not registered in X-Plane (e.g. %s). Is "
-                "PI_G1000SoftkeyLabels.py installed in Resources/plugins/PythonPlugins/?",
+                "PI_GlassLinkXP.py installed in Resources/plugins/PythonPlugins/?",
                 len(missing), len(wanted), sorted(missing)[0],
             )
         if found:

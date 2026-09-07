@@ -196,7 +196,7 @@ class CommandRunner:
     def drain(self, limit: int = 500) -> list[Event]:
         """Everything the child has said since the last call.
 
-        Bounded because a chatty child at 12 Hz can out-produce a 20 Hz UI
+        Bounded because a chatty child at 28 Hz can out-produce a 20 Hz UI
         poll, and a drain that emptied an unbounded queue would let the GUI
         spend the whole frame appending text. The remainder is simply read on
         the next poll.

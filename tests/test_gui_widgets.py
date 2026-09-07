@@ -12,7 +12,7 @@ import pytest
 
 tk = pytest.importorskip("tkinter")
 
-from g1000_softkey.gui.widgets import ImageView, _load_scaled  # noqa: E402
+from glasslinkxp.gui.widgets import ImageView, _load_scaled  # noqa: E402
 
 
 @pytest.fixture

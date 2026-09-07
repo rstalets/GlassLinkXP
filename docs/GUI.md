@@ -1,6 +1,6 @@
 # The window
 
-`g1000 gui` opens a window over the same commands the CLI has. It exists
+`glasslinkxp gui` opens a window over the same commands the CLI has. It exists
 because the people this project is for are pilots rather than programmers, and
 the setup it needs -- find a window title, discover where a strip of pixels
 sits inside it, and write both into a TOML file -- is a lot to ask of somebody
@@ -11,11 +11,11 @@ For what the daemon does once it is running, see [PIPELINE.md](PIPELINE.md).
 ## What it is, and what it is not
 
 The GUI runs no part of the pipeline itself. Every button spawns
-`python -m g1000_softkey.main <subcommand>` and shows what it said.
+`python -m glasslinkxp.main <subcommand>` and shows what it said.
 
 ```mermaid
 flowchart LR
-    subgraph GUI["g1000 gui  (Tk, one process)"]
+    subgraph GUI["glasslinkxp gui  (Tk, one process)"]
         TABS["Tabs<br/>collect arguments"]
         DOC["config.toml<br/>read and written here"]
         OUT["Output panes,<br/>pictures, softkey board"]
@@ -74,10 +74,14 @@ bar with a count and the traceback kept on the app (`poll_failures`,
 | Calibrate | `calibrate` | Draw the strip on the captured frame with the mouse, judge it in a magnified close-up, and work through three steps. The MFD copies the PFD unless told otherwise. See below. |
 | Cells | `dump-cells`, `tune` | Every cell as Tesseract receives it, next to the raw crop. Type what a cell should read, queue the page, repeat on other pages, then Run tuning searches sharpening/upscale/threshold settings that fix a queued cell without breaking another. See below. |
 | Colours | `dump-colors` | Each cell's ring BGR/HSV and how it classified, with the rows drawn in the colour they were called. |
-| Pages | `screen-template` | Record a softkey page into `screens.toml`. |
 | Vocabulary | -- | `labels.txt` in an editor. |
 | Settings | -- | Every setting in the config file, as a form, plus a raw TOML editor. |
 | Tools | `bench`, `synth` | Timings, and synthetic frames. |
+
+`PagesTab` (`screen-template`, records a softkey page into `screens.toml`) is
+still defined and tested but deliberately left out of `TAB_CLASSES` in
+`tabs.py` -- the page-lookup feature it authors for stays on, it just is not
+exposed to users yet.
 
 ## The Cells tab: true resolution over density
 
@@ -314,9 +318,9 @@ disagreeing with the daemon. What the board shows is what the daemon said.
 ## Files
 
 ```
-g1000_softkey/gui/
+glasslinkxp/gui/
   __init__.py   launch(); the message when Tk is missing
-  __main__.py   python -m g1000_softkey.gui
+  __main__.py   python -m glasslinkxp.gui
   app.py        the window: shared state, the two child processes, the tab strip
   tabs.py       one class per tab
   widgets.py    output pane, image view, the softkey board, form helpers
@@ -356,7 +360,7 @@ document and the form cannot say different things, and a test fails if the
 checked-in file falls behind:
 
 ```
-python -m g1000_softkey.gui.schema > docs/CONFIGURATION.md
+python -m glasslinkxp.gui.schema > docs/CONFIGURATION.md
 ```
 
 The writer was the worse half. It quietly assumed everything it met would be

@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-APP_DIR_NAME = "g1000-softkey"
+APP_DIR_NAME = "glasslinkxp"
 FILE_NAME = "gui.json"
 
 DEFAULTS: dict[str, Any] = {
@@ -99,10 +99,16 @@ def resolve_config_path(explicit: str | os.PathLike[str] | None,
 
 
 def project_root() -> Path:
-    """The checkout this package lives in, where config.toml normally sits."""
-    return Path(__file__).resolve().parents[2]
+    """Where the user's own files live: config.toml, calibration/, frames/.
+
+    The installed app's root -- one level above ``src/``, where the venv and
+    the launcher scripts sit too -- not the package directory itself, so a
+    user's working files land somewhere they would think to look rather than
+    buried inside the installed code.
+    """
+    return Path(__file__).resolve().parents[3]
 
 
 def example_config() -> Path | None:
-    path = project_root() / "config.example.toml"
+    path = project_root() / "src" / "config.example.toml"
     return path if path.is_file() else None

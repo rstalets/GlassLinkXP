@@ -1,4 +1,4 @@
-# Working on g1000-softkey
+# Working on GlassLinkXP
 
 ## What this is and why it exists
 
@@ -20,33 +20,37 @@ truth, and it is a low-resolution, anti-aliased, GPU-composited image.**
 | `docs/PIPELINE.md` | Flowcharts of the daemon loop and the per-frame path, why the stages are ordered as they are, and a key for reading `-v` output. **Start here.** |
 | `docs/GUI.md` | How the window is put together, why it spawns the CLI rather than calling it, and the couplings that let it -- each pinned by a test. |
 | `docs/CONFIGURATION.md` | Every setting, generated from `gui/schema.py`. `config.toml` carries no comments because the GUI rewrites it. |
-| `README.md` | Setup, calibration workflow, PilotsDeck wiring, troubleshooting, and -- importantly -- *Verified offline* and *Not verified here*. |
+| `docs/DEVELOPER.md` | Layout, offline dev workflow, latency numbers, known limitations, and -- importantly -- *Verified offline* and *Not verified here*. |
+| `README.md` | The end-user install/use/troubleshoot doc that ships in the distribution zip. Keep it short; deeper material belongs in `docs/DEVELOPER.md`. |
 | `PLAN.md` | The original design rationale, including approaches that were considered and rejected. |
-| `config.example.toml` | A starting point to copy, commented because people read it. The generated reference above is the authority. |
+| `src/config.example.toml` | A starting point to copy, commented because people read it. The generated reference above is the authority. |
+
+Everything under `src/` ships in the distribution zip (see `install.ps1`);
+everything else here (`tests/`, `docs/`, `CLAUDE.md`, `PLAN.md`) is dev-only.
 
 ## Shape of the system
 
 Two processes, deliberately:
 
-- **A standalone Python daemon** (`g1000_softkey/`) captures, recognises and
+- **A standalone Python daemon** (`src/glasslinkxp/`) captures, recognises and
   publishes. All the expensive work lives here.
-- **A small XPPython3 plugin** (`xppython3/PI_G1000SoftkeyLabels.py`) does
+- **A small XPPython3 plugin** (`src/xppython3/PI_GlassLinkXP.py`) does
   nothing but *create* the datarefs, because X-Plane's Web API can write a
   dataref but cannot create one.
 
 They are split this way because XPPython3 callbacks run inline with X-Plane's
 flight loop, so anything slow there costs frame rate.
 
-Plus a third, optional one: **the GUI** (`g1000_softkey/gui/`), which is a Tk
+Plus a third, optional one: **the GUI** (`src/glasslinkxp/gui/`), which is a Tk
 window over the same CLI. It implements no part of the pipeline -- every button
-spawns `python -m g1000_softkey.main <subcommand>` and shows what it said, so
+spawns `python -m glasslinkxp.main <subcommand>` and shows what it said, so
 it cannot drift into doing something the documentation does not describe, and
 so a crash in capture or OCR takes down a child rather than the window. It is
 also the only way to stop the daemon with a signal it handles: `cmd_run` calls
 `signal.signal`, which only works on the main thread, and Tk owns that.
 
 ```
-g1000_softkey/
+src/glasslinkxp/
   main.py       CLI: run, gui, list-windows, manage-windows, calibrate,
                      dump-cells, dump-colors, bench, screen-template, tune, synth
   capture.py    Windows Graphics Capture, plus a PNG backend for offline work
@@ -66,6 +70,12 @@ g1000_softkey/
                 app.py, tabs.py and widgets.py import Tk; the rest, geometry.py
                 included, is tested without a display
 ```
+
+`pyproject.toml` maps `[tool.setuptools] package-dir` at the repository root
+to `src/`, so `uv sync --locked` at the root behaves identically for a dev
+checkout and for a copy installed under `%appdata%` by `install.ps1` --
+the installer just copies the manifest and `src/` there and runs the same
+command.
 
 ## The lesson this codebase was built on
 
@@ -198,9 +208,9 @@ test rather than a comment.
 
 ```
 python -m pytest -q              # all offline, keep them green
-python -m g1000_softkey.main synth --out frames
-python -m g1000_softkey.main run --once --image frames/xpdr.png --publisher console -v
-python -m g1000_softkey.main gui                       # the window
+python -m glasslinkxp.main synth --out frames
+python -m glasslinkxp.main run --once --image frames/xpdr.png --publisher console -v
+python -m glasslinkxp.main gui                       # the window
 ```
 
 The GUI's own tests need tkinter to import and a display to run, and those are
@@ -215,7 +225,7 @@ xvfb-run -a python -m pytest -q
 ```
 
 The window itself can be driven headlessly the same way, which is how it was
-checked: `xvfb-run -a python -m g1000_softkey.gui`, with `PIL.ImageGrab` for
+checked: `xvfb-run -a python -m glasslinkxp.gui`, with `PIL.ImageGrab` for
 screenshots. Point the frame source at `frames/` and every tab works with no
 X-Plane and no Windows.
 
@@ -235,15 +245,15 @@ commit, not afterwards.
 | if you change | also update |
 | --- | --- |
 | a pipeline stage, or the order of stages | the flowcharts in `docs/PIPELINE.md` |
-| how the pop-out windows are opened, sized or placed | the *Managing the pop-out windows* flowchart and rationale in `docs/PIPELINE.md`, and the `[window_management]` block in `config.example.toml` |
+| how the pop-out windows are opened, sized or placed | the *Managing the pop-out windows* flowchart and rationale in `docs/PIPELINE.md`, and the `[window_management]` block in `src/config.example.toml` |
 | anything printed by `-v` | the "Reading the debug output" table in `docs/PIPELINE.md` |
-| a config setting, or its default | `gui/schema.py` (the help text is the documentation), then regenerate `docs/CONFIGURATION.md` -- a test fails until you do -- and `config.example.toml` |
+| a config setting, or its default | `gui/schema.py` (the help text is the documentation), then regenerate `docs/CONFIGURATION.md` -- a test fails until you do -- and `src/config.example.toml` |
 | a CLI subcommand or flag | the command list in `CLAUDE.md` and the relevant `README.md` section, and `gui/commands.py` -- `test_gui_commands.py` fails until the GUI covers it |
 | a tab, or how the GUI runs a command | `docs/GUI.md`, including its flowchart and the tab table |
 | anything a CLI subcommand prints that the GUI reads | `gui/logparse.py` -- and its format-then-parse test; see *Things that will catch you out* |
 | a config dataclass field | `gui/schema.py` -- see *Things that will catch you out* |
-| dataref names, types or field width | `README.md` PilotsDeck wiring, the plugin docstring, `config.example.toml` |
-| what has been tested on real hardware | the *Verified offline* / *Not verified here* sections of `README.md` |
+| dataref names, types or field width | `README.md` PilotsDeck wiring, the plugin docstring, `src/config.example.toml` |
+| what has been tested on real hardware | the *Verified offline* / *Not verified here* sections of `docs/DEVELOPER.md` |
 
 **The Mermaid diagrams in `docs/` must be re-rendered to confirm they still
 parse.**

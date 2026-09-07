@@ -140,7 +140,7 @@ def _is_package_default(section_config: Any, setting: schema.Setting, section: s
     """Whether this value is only the path to the package's own copy of a file.
 
     Those defaults are absolute paths into whichever checkout is running --
-    ``.../g1000_softkey/screens.toml`` -- and a document is what the form
+    ``.../glasslinkxp/screens.toml`` -- and a document is what the form
     fills its boxes from and what Save writes back out. Copying one into
     config.toml pins the file to this install, so moving or reinstalling the
     project leaves the daemon pointing at a file that is not there; the user
@@ -216,7 +216,7 @@ def save_text(path: str | Path, text: str, backup: bool = True) -> Path | None:
 HEADER = """\
 # G1000 softkey daemon configuration.
 #
-# Written by the g1000 GUI. What each setting means, and why its default is
+# Written by the glasslinkxp GUI. What each setting means, and why its default is
 # what it is, lives in docs/CONFIGURATION.md -- saving from the Settings form
 # rewrites this file and does not keep comments, so the reasoning is kept
 # somewhere that survives. The previous version is saved beside this one as

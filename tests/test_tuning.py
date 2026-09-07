@@ -11,10 +11,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from g1000_softkey.config import OcrConfig
-from g1000_softkey.gui import configio
-from g1000_softkey.ocr import CellResult
-from g1000_softkey.tuning import (
+from glasslinkxp.config import OcrConfig
+from glasslinkxp.gui import configio
+from glasslinkxp.ocr import CellResult
+from glasslinkxp.tuning import (
     Candidate,
     TuningCase,
     TuningError,
@@ -119,7 +119,7 @@ def _fake_cell_images(monkeypatch):
     """Cells are identified by a fill value, not read from disk."""
     images = {1: CELL_A, 2: CELL_B}
     monkeypatch.setattr(
-        "g1000_softkey.tuning.cell_image", lambda case, cell: images[cell]
+        "glasslinkxp.tuning.cell_image", lambda case, cell: images[cell]
     )
 
 
@@ -201,7 +201,7 @@ def test_search_reports_success_when_everything_already_reads_correctly():
 def test_result_block_is_valid_toml_the_gui_can_read_back():
     import tomllib
 
-    from g1000_softkey.gui.logparse import parse_tuning_result
+    from glasslinkxp.gui.logparse import parse_tuning_result
 
     candidate = Candidate(psm=8, method="adaptive", upscale=6.0, ladder=((0.0, 0.0), (0.5, 1.0)))
     block = result_block(candidate)

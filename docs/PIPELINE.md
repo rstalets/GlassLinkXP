@@ -10,7 +10,7 @@ reads what the daemon printed -- see [GUI.md](GUI.md).
 
 ```mermaid
 flowchart TD
-    START([g1000 run]) --> CFG[Load config.toml]
+    START([glasslinkxp run]) --> CFG[Load config.toml]
     CFG --> WM{"window_management<br/>enabled?"}
     WM -->|"no, or --image"| SRC
     WM -->|yes| MANAGE["Open, size and place the pop-outs<br/>see below"]
@@ -21,7 +21,7 @@ flowchart TD
 
     PUB --> RESOLVE{"Resolve dataref names to ids<br/>GET /api/v1/datarefs"}
     RESOLVE -->|48 of 48| READY[Ready]
-    RESOLVE -->|some missing| WARN["Warn: is PI_G1000SoftkeyLabels.py<br/>installed in PythonPlugins?"]
+    RESOLVE -->|some missing| WARN["Warn: is PI_GlassLinkXP.py<br/>installed in PythonPlugins?"]
     WARN --> READY
     RESOLVE -->|X-Plane not reachable| RETRY["Retry every retry_interval"]
     RETRY --> RESOLVE
@@ -132,7 +132,7 @@ quietly ignored rather than one that does what it says.
 
 **A closed window is a signal, not something to poll for.** Windows Graphics
 Capture calls `on_closed` when the window it was capturing goes away, so the
-daemon reopens the pop-out on the next cycle -- within about 80 ms at 12 Hz --
+daemon reopens the pop-out on the next cycle -- within about 36 ms at 28 Hz --
 rather than on a timer. Nothing reconnects: a WGC session does not outlive its
 window, so the source is replaced rather than repaired. The only interval
 involved paces a reopen that *failed*, so that a sim which has shut down does

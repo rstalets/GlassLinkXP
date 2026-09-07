@@ -94,7 +94,7 @@ APP = Group(
     "catching up.",
     (
         Setting("loop_hz", "float", "Rate (Hz)",
-                "Captures per second. 12 Hz keeps the worst case under about 85 ms. "
+                "Captures per second. 28 Hz keeps the worst case under about 36 ms. "
                 "With change gating on, an unchanged cycle costs a fraction of a "
                 "millisecond, so a high rate is nearly free."),
         Setting("change_gating", "bool", "Skip unchanged cells",
@@ -117,34 +117,26 @@ DISPLAY = Group(
                 "A distinctive part of the pop-out window's title, matched case "
                 "insensitively. Use the Find windows tab to see the real titles."),
         Setting("dataref_prefix", "path", "Dataref prefix",
-                "Where the labels are published. Leave empty for g1000/softkey/<name>. "
+                "Where the labels are published. Leave empty for glasslinkxp/softkey/<name>. "
                 "Changing it means re-editing every Stream Deck button.", optional=True),
     ),
 )
 
 WINDOW_MANAGEMENT = Group(
     "window_management", "Pop-out windows",
-    "Whether the daemon opens, sizes and positions the PFD and MFD pop-outs itself. "
-    "On, this replaces a pre-flight routine that fails quietly when you get it wrong: "
-    "a window that was never popped out, or one with the taskbar over the bottom of "
-    "it, reads as no labels rather than as an error.",
+    "Whether GlassLinkXP opens, sizes and positions the PFD and MFD pop-outs itself, "
+    "instead of you doing it by hand before every flight.",
     (
         Setting("enabled", "bool", "Manage the pop-out windows",
                 "Pops out the PFD and MFD if they are not already open, sizes them, and "
-                "puts them in the top-left corner of the monitor X-Plane is on. Only the "
-                "displays named 'pfd' and 'mfd' are managed, because those are the ones "
-                "X-Plane has pop-out commands for. It also puts a pop-out back if you "
-                "close one while the daemon is running. Turn it off to place the windows "
-                "yourself -- which is the right call if a pop-out is feeding avionics "
-                "hardware, where its size and position are part of a physical setup. "
-                "Nothing else in the daemon sizes or moves a window."),
+                "puts them in the top-left corner of the monitor X-Plane is on. Also "
+                "reopens a pop-out you close while running. Turn off to place the windows "
+                "yourself -- the right call if a pop-out feeds avionics hardware whose size "
+                "and position must not change."),
         Setting("size", "toml", "Pop-out size",
-                "The client size the pop-outs are set to, as [width, height]. MUST BE 4:3: "
-                "the G1000 draws a 4:3 panel, and the strip position is stored as fractions "
-                "of the window, so a window of any other shape moves the softkey strip out "
-                "from under your calibration. Anything else falls back to 1280x960, which "
-                "is comfortably above the 1024x768 the G1000 is drawn at, so the labels are "
-                "not downsampled before they are read."),
+                "The client size the pop-outs are set to, as [width, height]. Must be 4:3, "
+                "since the strip position is stored as fractions of the window. Anything "
+                "else falls back to 1280x960."),
     ),
 )
 
@@ -169,9 +161,7 @@ GEOMETRY = Group(
 
 OCR = Group(
     "ocr", "Reading the labels",
-    "How the cropped cells are turned into text. The glyphs are only about 10 pixels "
-    "tall, so most of this is about giving Tesseract a fair chance at them -- and about "
-    "not trusting it too far when it fails.",
+    "How the cropped cells are turned into text.",
     (
         Setting("lang", "text", "Language", "Tesseract language data to use."),
         Setting("tessdata_path", "path", "Tessdata folder",
@@ -187,33 +177,24 @@ OCR = Group(
                 "How much each cell is enlarged before reading. Tesseract wants roughly a "
                 "30 pixel cap height: raise this for a small pop-out, lower it for a 4K one."),
         Setting("sharpen_ladder", "toml", "Sharpening ladder",
-                "Unsharp mask settings tried in order, as [amount, radius] pairs. "
-                "Thresholding a 10 pixel glyph can close the counters of 0, 6, 8 and 9, "
-                "and a filled counter is not a character; sharpening reopens them, but too "
-                "much rings and turns a 0 into a B. So rather than fix one value, each rung "
-                "is tried and the answer the vocabulary agrees with is kept. The first rung "
-                "is no sharpening at all, so this can never do worse than not trying."),
+                "Unsharp mask settings tried in order, as [amount, radius] pairs, until one "
+                "reads a known label. The first rung is no sharpening, so this can never "
+                "do worse than not trying. Use the Cells tab's tuner rather than editing "
+                "this by hand."),
         Setting("threshold", "choice", "Threshold method",
                 "How each cell is turned black and white. Applied per cell, never globally.",
                 choices=("otsu", "adaptive")),
         Setting("accept_confidence", "float", "Accept confidence",
                 "A vocabulary hit at least this confident stops the sharpening ladder "
-                "early. Landing on a known label is not proof of being right when every "
-                "digit 0-7 is a valid softkey, so below this the remaining rungs are still "
-                "tried. 0 always tries every rung."),
+                "early. 0 always tries every rung."),
         Setting("screen_confidence", "float", "Page lookup below",
-                "Below this confidence, a cell may be filled in from a known softkey page. "
-                "Recognising a 10 pixel digit is hard; recognising which page is showing, "
-                "from the labels that did read cleanly, is easy -- and the page says what "
-                "the hard cell must be. 0 turns page lookup off."),
+                "Below this confidence, a cell may be filled in from a known softkey page "
+                "instead of guessed at. 0 turns page lookup off."),
         Setting("screen_match_confidence", "float", "Identify a page above",
                 "A page is only recognised when its identifying cells all read at least "
-                "this confidently. Higher than the setting above on purpose: an "
-                "identification made from a guess would spread that guess into every cell "
-                "it fills."),
+                "this confidently."),
         Setting("screens_file", "path", "Pages file",
-                "The known softkey pages. Add one with the Screen template tab. Set this "
-                "only to point at a file of your own.",
+                "The known softkey pages. Set this only to point at a file of your own.",
                 optional=True, package_default=True),
         Setting("labels_file", "path", "Vocabulary file",
                 "The list of labels a reading is snapped to. Edit it in the Vocabulary tab; "
@@ -227,9 +208,7 @@ OCR = Group(
                 "label on it at all."),
         Setting("blank_contrast", "int", "Ink contrast",
                 "How far a pixel has to sit from the cell's dominant tone to count as ink. "
-                "The G1000 dims unavailable softkeys rather than hiding them, so too high a "
-                "value reads a dim but present label as an empty cell -- and short labels "
-                "break first. Lower it to about 20 if dim labels are being dropped."),
+                "Lower it to about 20 if dim (unavailable) labels are being dropped."),
     ),
 )
 
@@ -237,20 +216,17 @@ COLOR = Group(
     "color", "Background colour",
     "Each cell's background is classified black / white / yellow / red and published "
     "next to the label, so a button can show that a softkey is selected or that the "
-    "sim is warning about something. THESE DEFAULTS HAVE NEVER BEEN CHECKED AGAINST A "
-    "REAL G1000 FRAME -- they came from plausible swatches. Run the Colours tab against "
-    "your own display and move them to fit what it prints.",
+    "sim is warning about something. Check these against your own display with the "
+    "Colours tab and move them to fit what it prints -- the shipped defaults have not "
+    "been checked against a real G1000 frame.",
     (
         Setting("enabled", "bool", "Classify backgrounds", "Turn off to publish labels only."),
         Setting("ring_fraction", "float", "Sample ring",
                 "The outermost fraction of each cell, per side, used to sample the "
-                "background. Labels are centred, so this ring is essentially never glyph; "
-                "too large and it starts eating into the text."),
+                "background."),
         Setting("value_max", "int", "Black above brightness",
-                "Brightness (V) at or below this is black, whatever the hue. Tested first, "
-                "so dimming the display can only ever push a cell towards black and can "
-                "never turn a yellow into a red. Raise it if a black cell reads as coloured; "
-                "lower it if a dim caution reads as black."),
+                "Brightness (V) at or below this is black, whatever the hue. Raise it if a "
+                "black cell reads as coloured; lower it if a dim caution reads as black."),
         Setting("saturation_max", "int", "White below saturation",
                 "Saturation at or below this is colourless, so the cell is white -- "
                 "brightness has already ruled out black."),
@@ -279,15 +255,13 @@ PUBLISH = Group(
                 "Where X-Plane serves its web API. Enable it in Settings -> Network if it "
                 "does not answer."),
         Setting("api_version", "choice", "API version",
-                "Only a fallback. The daemon asks X-Plane which API versions it serves and "
-                "uses the newest one; this is what it falls back to when that question goes "
-                "unanswered, which means a sim too old to answer it. Leave it at v1.",
+                "Only a fallback for a sim too old to say which versions it supports. "
+                "Leave it at v1.",
                 choices=("v1", "v2", "v3")),
         Setting("field_width", "int", "Label field width",
-                "Bytes per label dataref. THIS IS FIXED IN THREE PLACES THAT MUST AGREE: "
-                "here, FIELD_WIDTH in the X-Plane plugin (which needs a sim restart), and "
-                "the ':s64' on every Stream Deck button. Changing it means re-editing every "
-                "button, so it is set generously once rather than tuned."),
+                "Bytes per label dataref. Must match FIELD_WIDTH in the X-Plane plugin and "
+                "the ':sNN' on every Stream Deck button -- changing it means re-editing "
+                "every button, so leave it at the default."),
         Setting("timeout", "float", "Timeout (s)", "How long to wait for X-Plane to answer."),
         Setting("retry_interval", "float", "Retry every (s)",
                 "How long to wait between reconnection attempts when X-Plane is not answering."),
@@ -350,12 +324,12 @@ time somebody pressed a button. This file is where the reasoning lives
 instead. `config.example.toml` is a starting point to copy; a missing config
 file is not an error, and every setting below has a working default.
 
-> Generated from `g1000_softkey/gui/schema.py`, which is also what the
+> Generated from `src/glasslinkxp/gui/schema.py`, which is also what the
 > Settings form is built from -- so the form and this document cannot say
 > different things. Regenerate with:
 >
 > ```
-> python -m g1000_softkey.gui.schema > docs/CONFIGURATION.md
+> python -m glasslinkxp.gui.schema > docs/CONFIGURATION.md
 > ```
 """
 

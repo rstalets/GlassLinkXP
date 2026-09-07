@@ -1,6 +1,6 @@
-"""``python -m g1000_softkey.gui`` -- open the window directly.
+"""``python -m glasslinkxp.gui`` -- open the window directly.
 
-Equivalent to ``python -m g1000_softkey.main gui``; this spelling exists so a
+Equivalent to ``python -m glasslinkxp.main gui``; this spelling exists so a
 desktop shortcut does not have to carry a subcommand.
 """
 
@@ -14,7 +14,7 @@ from . import launch
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="g1000-softkey-gui",
+        prog="glasslinkxp-gui",
         description="Graphical interface for the G1000 softkey daemon.",
     )
     parser.add_argument(

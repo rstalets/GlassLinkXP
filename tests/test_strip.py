@@ -4,9 +4,9 @@ import cv2
 import numpy as np
 import pytest
 
-from g1000_softkey import synth
-from g1000_softkey.config import StripGeometry
-from g1000_softkey.strip import (
+from glasslinkxp import synth
+from glasslinkxp.config import StripGeometry
+from glasslinkxp.strip import (
     sharpen,
     auto_detect_strip,
     cell_rects,
@@ -107,7 +107,7 @@ def test_the_shared_pass_answers_what_the_three_passes_did(menu, contrast):
 def test_the_shared_pass_measures_the_cell_once(monkeypatch):
     """Not an optimisation that can quietly stop being one: three calls to
     to_gray per cell is what this replaced."""
-    import g1000_softkey.strip as strip_module
+    import glasslinkxp.strip as strip_module
 
     calls = []
     real = strip_module.to_gray

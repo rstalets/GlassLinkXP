@@ -4,7 +4,7 @@ The daemon is a command line program and always will be -- it has to run
 unattended, next to a flight simulator, and be scriptable. But most of the
 people it is for are pilots rather than programmers, and asking them to type
 
-    .\\g1000 -c config.toml calibrate --out calibration
+    .\\glasslinkxp -c config.toml calibrate --out calibration
 
 to find out where the softkey strip is, and then to edit a TOML file by hand
 to say what they found, is asking a great deal.
@@ -35,7 +35,7 @@ Fedora.
 Everything the GUI does can also be done from the command line, which needs
 none of this:
 
-    python -m g1000_softkey.main --help
+    python -m glasslinkxp.main --help
 """
 
 

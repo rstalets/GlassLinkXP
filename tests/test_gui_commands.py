@@ -8,8 +8,8 @@ command the GUI can produce is parsed here by main.py's own parser.
 
 import pytest
 
-from g1000_softkey.gui import commands
-from g1000_softkey.main import build_parser
+from glasslinkxp.gui import commands
+from glasslinkxp.main import build_parser
 
 
 def _sample(option: commands.Option):

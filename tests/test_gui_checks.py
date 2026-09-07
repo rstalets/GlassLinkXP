@@ -3,10 +3,10 @@
 import numpy as np
 import pytest
 
-from g1000_softkey import synth
-from g1000_softkey.config import OcrConfig, StripGeometry
-from g1000_softkey.gui import checks
-from g1000_softkey.strip import clipped_edges, ink_bounds, ink_extent
+from glasslinkxp import synth
+from glasslinkxp.config import OcrConfig, StripGeometry
+from glasslinkxp.gui import checks
+from glasslinkxp.strip import clipped_edges, ink_bounds, ink_extent
 
 
 @pytest.fixture(scope="module")
@@ -150,7 +150,7 @@ def test_a_frame_is_read_exactly_as_the_capture_path_reads_it(tmp_path):
     asserted about channel counts."""
     import cv2
 
-    from g1000_softkey.capture import ImageCapture
+    from glasslinkxp.capture import ImageCapture
 
     with_alpha = np.zeros((30, 60, 4), dtype=np.uint8)
     with_alpha[..., :3] = 200

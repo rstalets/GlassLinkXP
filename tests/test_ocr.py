@@ -1,16 +1,16 @@
 import numpy as np
 import pytest
 
-from g1000_softkey import synth
-from g1000_softkey.config import OcrConfig, StripGeometry
-from g1000_softkey.ocr import (
+from glasslinkxp import synth
+from glasslinkxp.config import OcrConfig, StripGeometry
+from glasslinkxp.ocr import (
     CellResult,
     LabelVocabulary,
     SoftkeyReader,
     normalise,
     resolve_tessdata,
 )
-from g1000_softkey.strip import preprocess_cell, split_cells
+from glasslinkxp.strip import preprocess_cell, split_cells
 
 VOCAB = LabelVocabulary.from_file(OcrConfig().labels_file, cutoff=0.62)
 

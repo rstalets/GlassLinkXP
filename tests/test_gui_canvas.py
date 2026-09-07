@@ -12,11 +12,11 @@ from dataclasses import replace
 
 import pytest
 
-from g1000_softkey.config import StripGeometry
-from g1000_softkey.gui import geometry as geo
-from g1000_softkey.gui import prefs, tabs
-from g1000_softkey.gui.widgets import CELL_COLOR
-from g1000_softkey.strip import cell_rects
+from glasslinkxp.config import StripGeometry
+from glasslinkxp.gui import geometry as geo
+from glasslinkxp.gui import prefs, tabs
+from glasslinkxp.gui.widgets import CELL_COLOR
+from glasslinkxp.strip import cell_rects
 
 tk = pytest.importorskip("tkinter")
 
@@ -28,7 +28,7 @@ def editor(tmp_path, monkeypatch):
     """A mapped window on the Calibrate tab, with a picture loaded."""
     from PIL import Image
 
-    from g1000_softkey.gui.app import build
+    from glasslinkxp.gui.app import build
 
     monkeypatch.setattr(prefs, "prefs_path", lambda: tmp_path / "gui.json")
     monkeypatch.setattr(prefs, "project_root", lambda: tmp_path)
@@ -289,8 +289,8 @@ def test_zoom_changes_how_much_of_the_frame_the_close_up_shows(editor):
 
 def _real_frame(calibrate, tmp_path):
     """Swap the blank test picture for a synthetic strip with real labels."""
-    from g1000_softkey import synth
-    from g1000_softkey.gui import checks
+    from glasslinkxp import synth
+    from glasslinkxp.gui import checks
 
     frames = tmp_path / "frames"
     frames.mkdir(exist_ok=True)
@@ -324,7 +324,7 @@ def test_a_reasonable_crop_says_nothing(editor, tmp_path):
 
 
 def test_saving_a_clipped_geometry_asks_first(editor, tmp_path, monkeypatch):
-    from g1000_softkey.gui import configio
+    from glasslinkxp.gui import configio
 
     app, calibrate = editor
     _real_frame(calibrate, tmp_path)
@@ -348,8 +348,8 @@ def test_saving_a_clipped_geometry_asks_first(editor, tmp_path, monkeypatch):
 def test_saying_yes_saves_it_anyway(editor, tmp_path, monkeypatch):
     """Asked, not refused: the check cannot tell a clipped glyph from a label
     that fills its cell, and a block would train people to work around it."""
-    from g1000_softkey.config import load_config
-    from g1000_softkey.gui import configio
+    from glasslinkxp.config import load_config
+    from glasslinkxp.gui import configio
 
     app, calibrate = editor
     path = tmp_path / "config.toml"
@@ -366,8 +366,8 @@ def test_saying_yes_saves_it_anyway(editor, tmp_path, monkeypatch):
 
 
 def test_a_clean_save_is_not_interrupted(editor, tmp_path, monkeypatch):
-    from g1000_softkey.config import load_config
-    from g1000_softkey.gui import configio
+    from glasslinkxp.config import load_config
+    from glasslinkxp.gui import configio
 
     app, calibrate = editor
     path = tmp_path / "config.toml"

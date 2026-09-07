@@ -2,7 +2,7 @@
 rem ---------------------------------------------------------------------------
 rem  Open the G1000 softkey window.
 rem
-rem  Double-click this file, or make a shortcut to it. Like g1000.cmd it calls
+rem  Double-click this file, or make a shortcut to it. Like glasslinkxp.cmd it calls
 rem  the venv interpreter directly, so there is nothing to activate and
 rem  PowerShell's execution policy never enters into it.
 rem
@@ -12,15 +12,14 @@ rem  console interpreter first, because a pythonw that cannot import tkinter
 rem  fails with no window and no message at all.
 rem ---------------------------------------------------------------------------
 setlocal
-set "PY=%~dp0.venv\Scripts\python.exe"
-set "PYW=%~dp0.venv\Scripts\pythonw.exe"
+set "PY=%~dp0..\.venv\Scripts\python.exe"
+set "PYW=%~dp0..\.venv\Scripts\pythonw.exe"
 
 if not exist "%PY%" (
     echo(
     echo   No interpreter at %PY%
     echo(
-    echo   The virtual environment has not been created yet. Run:
-    echo       powershell -ExecutionPolicy Bypass -File "%~dp0scripts\install-windows.ps1"
+    echo   Run install.cmd in the folder above this one first.
     echo(
     exit /b 1
 )
@@ -34,13 +33,13 @@ if errorlevel 1 (
     echo(
     echo   Everything the window does can be done from the command line, which
     echo   needs none of it:
-    echo       g1000 --help
+    echo       glasslinkxp --help
     echo(
     exit /b 1
 )
 
 if exist "%PYW%" (
-    start "" "%PYW%" -m g1000_softkey.gui %*
+    start "" "%PYW%" -m glasslinkxp.gui %*
 ) else (
-    "%PY%" -m g1000_softkey.gui %*
+    "%PY%" -m glasslinkxp.gui %*
 )

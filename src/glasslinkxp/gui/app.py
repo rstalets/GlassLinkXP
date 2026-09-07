@@ -27,11 +27,11 @@ from .runner import CommandRunner, Event, Failed, Finished, Line, Started
 from .widgets import OutputPane, StatusBar, help_label
 
 #: How often the UI drains the child processes' output. 20 Hz: fast enough
-#: that the log reads as live next to a 12 Hz daemon, slow enough that the
+#: that the log reads as live next to a 28 Hz daemon, slow enough that the
 #: draining itself is not what the main thread spends its time on.
 POLL_MS = 50
 
-TITLE = "G1000 softkey labels"
+TITLE = "GlassLinkXP"
 
 
 class GuiApp:
@@ -45,6 +45,11 @@ class GuiApp:
         self.config_path: Path | None = prefs.resolve_config_path(
             config_path, self.prefs.get("config_path"), self.project_root
         )
+        #: No config file found on launch -- nothing has been calibrated yet.
+        #: Read once at startup rather than kept in sync with config_path: it
+        #: describes how this session started, not whether a file happens to
+        #: be open right now, so creating one with New... does not turn it off.
+        self.first_run = self.config_path is None
         self.document: dict[str, Any] = {}
         self._config_listeners: list[Callable[[], None]] = []
 
@@ -463,6 +468,17 @@ def build(root: tk.Tk, config_path: str | Path | None = None) -> GuiApp:
     app = GuiApp(root, config_path)
     for tab in tabs.build_tabs(app):
         app.add_tab(tab, tab.tab_title)
-    app.select_tab(int(app.prefs.get("tab") or 0))
+    if app.first_run:
+        # No config yet, so nothing has been calibrated: land on the
+        # walkthrough regardless of which tab a previous install last used,
+        # rather than dropping a new user onto a Run tab that will not work.
+        app.select_tab(tabs.tab_index("StartTab"))
+        app.set_status(
+            "First run: start X-Plane with your aircraft on the ground, then work "
+            "through the steps below.",
+            "info",
+        )
+    else:
+        app.select_tab(int(app.prefs.get("tab") or 0))
     app.notify_config_changed()
     return app

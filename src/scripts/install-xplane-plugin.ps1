@@ -5,7 +5,7 @@
 .DESCRIPTION
     The daemon reads pixels and publishes labels, but something has to create
     the datarefs it writes into -- the X-Plane Web API can write a dataref but
-    cannot create one. That is all PI_G1000SoftkeyLabels.py does.
+    cannot create one. That is all PI_GlassLinkXP.py does.
 
     Three things have to be true before the plugin runs:
 
@@ -16,7 +16,7 @@
       2. <X-Plane>/Resources/plugins/PythonPlugins exists. XPPython3 creates
          it on the first X-Plane run, so on a fresh install it is not there
          yet. This script creates it if needed, which is harmless.
-      3. PI_G1000SoftkeyLabels.py sits in that folder. XPPython3 loads plugins
+      3. PI_GlassLinkXP.py sits in that folder. XPPython3 loads plugins
          by the PI_ prefix.
 
 .PARAMETER XPlanePath
@@ -36,11 +36,11 @@
     Skip installing. Ask a RUNNING X-Plane whether the 48 datarefs exist.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File scripts\install-xplane-plugin.ps1
+    powershell -ExecutionPolicy Bypass -File src\scripts\install-xplane-plugin.ps1
 
 .EXAMPLE
     # after starting X-Plane, confirm the datarefs actually registered
-    powershell -ExecutionPolicy Bypass -File scripts\install-xplane-plugin.ps1 -VerifyOnly
+    powershell -ExecutionPolicy Bypass -File src\scripts\install-xplane-plugin.ps1 -VerifyOnly
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -108,7 +108,7 @@ if ($XPlanePath) {
     if ($hits.Count -eq 0) {
         Fail @'
 Could not find X-Plane 12. Pass it explicitly:
-  scripts\install-xplane-plugin.ps1 -XPlanePath "D:\X-Plane 12"
+  src\scripts\install-xplane-plugin.ps1 -XPlanePath "D:\X-Plane 12"
 '@
     }
     if ($hits.Count -gt 1) {
@@ -123,7 +123,7 @@ Write-Ok "X-Plane 12: $XPlanePath"
 $pluginsDir  = Join-Path $XPlanePath 'Resources\plugins'
 $xp3Dir      = Join-Path $pluginsDir 'XPPython3'
 $pyPluginDir = Join-Path $pluginsDir 'PythonPlugins'
-$sourcePlug  = Join-Path $RepoRoot 'xppython3\PI_G1000SoftkeyLabels.py'
+$sourcePlug  = Join-Path $RepoRoot 'xppython3\PI_GlassLinkXP.py'
 
 # --------------------------------------------------------------------------
 # Verify-only: ask a running X-Plane whether the datarefs exist
@@ -134,8 +134,8 @@ function Invoke-Verify {
     $names = @()
     foreach ($d in @('pfd','mfd')) {
         1..12 | ForEach-Object {
-            $names += "g1000/softkey/$d/$_"
-            $names += "g1000/softkey/$d/$_/bg"
+            $names += "glasslinkxp/softkey/$d/$_"
+            $names += "glasslinkxp/softkey/$d/$_/bg"
         }
     }
 
@@ -184,7 +184,7 @@ function Invoke-Verify {
 
 if ($VerifyOnly) {
     if (Invoke-Verify) {
-        Write-Host "`nAll 48 datarefs are live. PilotsDeck address: g1000/softkey/pfd/1:s64" -ForegroundColor Green
+        Write-Host "`nAll 48 datarefs are live. PilotsDeck address: glasslinkxp/softkey/pfd/1:s64" -ForegroundColor Green
         exit 0
     }
     exit 1
@@ -246,9 +246,9 @@ if (Test-Path $pyPluginDir) {
 # --------------------------------------------------------------------------
 # The plugin itself
 # --------------------------------------------------------------------------
-Write-Step 'Installing PI_G1000SoftkeyLabels.py'
+Write-Step 'Installing PI_GlassLinkXP.py'
 if (-not (Test-Path $sourcePlug)) { Fail "plugin source not found: $sourcePlug" }
-$dest = Join-Path $pyPluginDir 'PI_G1000SoftkeyLabels.py'
+$dest = Join-Path $pyPluginDir 'PI_GlassLinkXP.py'
 if ((Test-Path $dest) -and -not $Force) {
     $a = (Get-FileHash $sourcePlug -Algorithm SHA256).Hash
     $b = (Get-FileHash $dest       -Algorithm SHA256).Hash
@@ -274,10 +274,10 @@ Write-Host @"
  Next:
    1. $(if ($running) { 'RESTART X-Plane (it is running now -- plugins load at startup)' } else { 'Start X-Plane 12 and load an aircraft with a G1000' })
    2. Confirm the 48 datarefs registered:
-        scripts\install-xplane-plugin.ps1 -VerifyOnly
+        src\scripts\install-xplane-plugin.ps1 -VerifyOnly
    3. Pop out the PFD and MFD into their own windows, then:
-        .\g1000 list-windows
-        .\g1000 calibrate --display pfd
+        .\glasslinkxp list-windows
+        .\glasslinkxp calibrate --display pfd
 
  If the plugin does not load, look in the X-Plane root at:
    Log.txt  and  XPPython3.log

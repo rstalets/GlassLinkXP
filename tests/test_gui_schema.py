@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from g1000_softkey import config as daemon_config
-from g1000_softkey.gui import schema
+from glasslinkxp import config as daemon_config
+from glasslinkxp.gui import schema
 
 #: Which config dataclass each form group describes. Read from the schema
 #: itself rather than restated here: the reference documentation is generated
@@ -68,7 +68,7 @@ def test_the_publish_targets_are_the_ones_create_publisher_knows():
     """Both lists are short and both are edited by hand; keep them together."""
     import inspect
 
-    from g1000_softkey.publish import create_publisher
+    from glasslinkxp.publish import create_publisher
 
     source = inspect.getsource(create_publisher)
     for target in schema.setting("publish", "target").choices:
@@ -99,12 +99,12 @@ def test_the_reference_documentation_is_up_to_date():
     the form is saved -- so that document is where the reasoning for every
     setting lives, and it has to be regenerated when the schema changes:
 
-        python -m g1000_softkey.gui.schema > docs/CONFIGURATION.md
+        python -m glasslinkxp.gui.schema > docs/CONFIGURATION.md
     """
     assert DOC.is_file(), f"{DOC} is missing; regenerate it"
     assert DOC.read_text(encoding="utf-8") == schema.as_markdown(), (
         "docs/CONFIGURATION.md no longer matches gui/schema.py. Regenerate it:\n"
-        "    python -m g1000_softkey.gui.schema > docs/CONFIGURATION.md"
+        "    python -m glasslinkxp.gui.schema > docs/CONFIGURATION.md"
     )
 
 
@@ -145,7 +145,7 @@ def test_every_group_describes_a_real_config_table():
 
 
 def test_every_group_of_settings_is_rendered_somewhere_in_the_form():
-    tabs = pytest.importorskip("g1000_softkey.gui.tabs")
+    tabs = pytest.importorskip("glasslinkxp.gui.tabs")
 
     placed = {group for _page, group, _path in tabs.SETTINGS_PAGES}
     placed |= set(tabs.PER_DISPLAY_GROUPS)
@@ -158,7 +158,7 @@ def test_every_group_of_settings_is_rendered_somewhere_in_the_form():
 
 
 def test_the_form_does_not_render_a_group_twice():
-    tabs = pytest.importorskip("g1000_softkey.gui.tabs")
+    tabs = pytest.importorskip("glasslinkxp.gui.tabs")
 
     groups = [group for _page, group, _path in tabs.SETTINGS_PAGES]
     assert len(groups) == len(set(groups))
@@ -166,7 +166,7 @@ def test_the_form_does_not_render_a_group_twice():
 
 
 def test_every_group_is_placed_on_a_page_that_exists():
-    tabs = pytest.importorskip("g1000_softkey.gui.tabs")
+    tabs = pytest.importorskip("glasslinkxp.gui.tabs")
 
     unknown = {page for page, _group, _path in tabs.SETTINGS_PAGES
                if page not in tabs.SETTINGS_PAGE_NAMES}
@@ -179,7 +179,7 @@ def test_each_group_reads_from_the_toml_table_it_documents():
     Pointed at the wrong table, a group renders perfectly and edits something
     else -- or nothing, silently creating a section the daemon never reads.
     """
-    tabs = pytest.importorskip("g1000_softkey.gui.tabs")
+    tabs = pytest.importorskip("glasslinkxp.gui.tabs")
 
     for _page, group, path in tabs.SETTINGS_PAGES:
         assert path == (group.section,), (

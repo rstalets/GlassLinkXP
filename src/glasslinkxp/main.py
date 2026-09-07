@@ -44,7 +44,7 @@ from .strip import (
     split_cells,
 )
 
-LOG = logging.getLogger("g1000_softkey")
+LOG = logging.getLogger("glasslinkxp")
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +413,7 @@ def cmd_synth(args: argparse.Namespace, config: AppConfig) -> int:
     paths = synth.write_menus(args.out)
     for path in paths:
         print(path)
-    print(f"\nUse one as a frame source, e.g.:\n  python -m g1000_softkey.main run "
+    print(f"\nUse one as a frame source, e.g.:\n  python -m glasslinkxp.main run "
           f"--image {paths[0]} --publisher console")
     return 0
 
@@ -566,9 +566,9 @@ def cmd_tune(args: argparse.Namespace, config: AppConfig) -> int:
     candidate that fixes something without making a cell that already read
     correctly read wrong.
 
-        g1000 dump-cells --out cells_page1
+        glasslinkxp dump-cells --out cells_page1
         # edit cells_page1's captures into a truth file, then:
-        g1000 tune --truth truth.toml
+        glasslinkxp tune --truth truth.toml
 
     See ``TuningCase`` in ``tuning.py`` for the truth file's shape.
     """
@@ -673,7 +673,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser = argparse.ArgumentParser(
-        prog="g1000-softkey",
+        prog="glasslinkxp",
         description="OCR the X-Plane G1000 softkey strip into X-Plane datarefs.",
         parents=[common],
     )

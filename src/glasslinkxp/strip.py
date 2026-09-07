@@ -104,13 +104,13 @@ class CellInk:
     there is, where it reaches, and whether it touches an edge -- and each
     used to start over from the same two operations, a grayscale conversion
     and a median. Three passes for three answers, twelve cells a frame,
-    twelve frames a second, on the CPU Tesseract is already competing for.
-    Measured, not assumed. On a real 12-cell capture, median of 200 runs:
+    twenty-eight frames a second, on the CPU Tesseract is already competing
+    for. Measured, not assumed. On a real 12-cell capture, median of 200 runs:
     0.643 + 0.692 + 0.684 = 2.019 ms per frame separately, against 0.532 ms
     for the shared pass. Repeated offline on a synthetic frame -- a slower
     machine, so the absolute numbers are not comparable, but the same shape:
     0.95 + 1.20 + 1.17 = 3.31 ms against 1.21 ms. At the default loop_hz of
-    12 that is CPU handed back to Tesseract, which has no GPU path and is
+    28 that is CPU handed back to Tesseract, which has no GPU path and is
     competing with X-Plane for it.
 
     The mask and the ratio are computed on construction because the ratio is

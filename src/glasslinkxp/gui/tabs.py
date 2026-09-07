@@ -107,27 +107,31 @@ class Tab(ttk.Frame):
 #: the tab strip cannot silently point these buttons at the wrong one.
 STEPS: tuple[tuple[str, str, str], ...] = (
     ("Pop the PFD and MFD out into their own windows in X-Plane",
-     "In X-Plane, right-click each G1000 display and pop it out. The daemon reads the "
-     "labels out of those windows' pixels -- it can read them even when the windows are "
-     "behind something else, but they do have to exist and be drawing.", ""),
-    ("Tell the daemon which windows those are",
+     "Right-click each G1000 display and pop it out. GlassLinkXP can read the labels even "
+     "when a window is behind something else, but it does have to exist and be drawing.", ""),
+    ("Tell GlassLinkXP which windows those are",
      "The Find windows tab lists everything open. Pick the two pop-outs and apply them "
      "to the PFD and the MFD.", "WindowsTab"),
     ("Line the reader up with the softkey strip",
-     "The Calibrate tab takes a picture of each window, draws the twelve boxes it is "
-     "about to read on top of it, and offers you a starting geometry. Each box has to sit "
-     "around exactly one label. This is the step that matters most: nearly every bad "
-     "reading later turns out to be a box in the wrong place.", "CalibrateTab"),
+     "The Calibrate tab takes a picture of each window and draws the twelve boxes it is "
+     "about to read on top of it. Each box has to sit around exactly one label -- this is "
+     "the step that matters most, since nearly every bad reading turns out to be a box in "
+     "the wrong place.", "CalibrateTab"),
     ("Check what the reader is actually looking at",
-     "The Cells tab shows every cell as Tesseract gets it: black text on white, about "
+     "The Cells tab shows every cell as it is about to be read: black text on white, about "
      "30 pixels tall. If a cell is clipped or inverted, fix the geometry rather than the "
      "OCR settings.", "CellsTab"),
+    ("Fix a label that reads wrong",
+     "Type what a cell should say into the box below it on the Cells tab, then press "
+     "Run tuning. It searches sharpening settings for one that fixes it without breaking "
+     "any other cell you have queued.", "CellsTab"),
     ("Watch the labels before wiring anything up",
      "On the Run tab, set Publish to 'console' and press Start. The board fills in with "
-     "what the daemon is reading. Nothing is sent to X-Plane in this mode.", "RunTab"),
+     "what is being read. Nothing is sent to X-Plane in this mode.", "RunTab"),
     ("Send them to X-Plane",
-     "Install the plugin (see README.md), then set Publish to 'websocket' and press Start. "
-     "Your Stream Deck buttons read g1000/softkey/pfd/1:s64 and .../1/bg.", "RunTab"),
+     "Install the X-Plane plugin (see README.md), then set Publish to 'websocket' and press "
+     "Start. Your Stream Deck buttons read glasslinkxp/softkey/pfd/1:s64 and .../1/bg.",
+     "RunTab"),
 )
 
 
@@ -140,16 +144,21 @@ class StartTab(Tab):
         scroll.pack(fill="both", expand=True)
         body = scroll.body
 
-        section_heading(body, "Putting the live G1000 softkey labels on a Stream Deck").pack(
+        section_heading(body, "GlassLinkXP: live G1000 softkey labels on a Stream Deck").pack(
             anchor="w", pady=(0, 4)
         )
         help_label(
             body,
-            "X-Plane draws the softkey labels straight to the screen and offers no way to "
-            "read them back, so this reads them out of the picture instead and republishes "
-            "them as datarefs your Stream Deck can show. That means it has to be shown "
-            "exactly where on the screen to look, once, which is what the steps below are for.",
+            "GlassLinkXP reads the softkey labels off the G1000 screen and republishes them "
+            "so a Stream Deck can show them. It has to be shown where on the screen to look, "
+            "once -- that is what the steps below are for.",
             width=860,
+        ).pack(anchor="w", pady=(0, 8))
+        ttk.Label(
+            body,
+            text="Before you start: X-Plane must be running, with your aircraft on the "
+                 "ground and the G1000 visible.",
+            foreground=WARN_COLOR, wraplength=860, justify="left",
         ).pack(anchor="w", pady=(0, 12))
 
         for number, (title, text, target) in enumerate(STEPS, start=1):
@@ -260,13 +269,9 @@ class RunTab(Tab):
 
         help_label(
             self,
-            "Publish to: leave it empty to use whatever the configuration says. 'console' "
-            "reads the labels and prints them without touching X-Plane, which is the safe "
-            "thing to watch first. Debug output adds a line per cell saying what was read, "
-            "what it snapped to and how confident it was -- it is the first thing to turn "
-            "on when a label comes out wrong. The board below fills in from the daemon's "
-            "own output, so it shows exactly what is being published, including which "
-            "cells the sim has highlighted.",
+            "Publish to: leave it empty to use the configuration's setting. 'console' prints "
+            "the labels without touching X-Plane -- the safe thing to watch first. Debug "
+            "output adds a line per cell: what was read, what it snapped to, confidence.",
             width=900,
         ).pack(anchor="w", pady=(6, 8))
 
@@ -315,7 +320,7 @@ class RunTab(Tab):
             # here means the reason is on screen next to the settings that
             # caused it, rather than in a log the user has to go and find.
             messagebox.showerror(
-                "G1000 softkey labels",
+                "GlassLinkXP",
                 f"The configuration will not load:\n\n{problem}\n\nFix it on the Settings tab.",
                 parent=self.app.root,
             )
@@ -435,13 +440,9 @@ class WindowsTab(Tab):
 
         help_label(
             self,
-            "With pop-out management on -- it is on unless you turned it off in Settings -- "
-            "listing the windows pops the PFD and MFD out first, so they are here to be "
-            "picked. Only a distinctive part of the title is stored, matched without regard "
-            "to case, so it keeps working if X-Plane adds something to the title. Only "
-            "X-Plane's own windows are listed unless you ask for all of them. This needs "
-            "Windows -- it reads the list from the operating system, and there is no "
-            "equivalent to read on Linux or macOS.",
+            "Listing the windows pops the PFD and MFD out first, unless you turned that off "
+            "in Settings. Only X-Plane's own windows are shown unless you tick "
+            "'Show every window'. Windows only.",
             width=900,
         ).pack(anchor="w", pady=(6, 8))
 
@@ -1165,13 +1166,13 @@ class CalibrateTab(Tab):
         try:
             configio.validate(document, base_dir=base)
         except Exception as exc:  # noqa: BLE001 - every failure is a message to show
-            messagebox.showerror("G1000 softkey labels",
+            messagebox.showerror("GlassLinkXP",
                                  f"That geometry will not load:\n\n{exc}",
                                  parent=self.app.root)
             return
         if self.app.config_path is None:
             messagebox.showinfo(
-                "G1000 softkey labels",
+                "GlassLinkXP",
                 "There is no configuration file open yet. Press New... at the top of the "
                 "window to make one, then save again.",
                 parent=self.app.root,
@@ -1205,7 +1206,7 @@ class CalibrateTab(Tab):
         if not clips:
             return True
         return bool(messagebox.askokcancel(
-            "G1000 softkey labels",
+            "GlassLinkXP",
             f"{checks.describe(clips, key)}\n\n{checks.ADVICE}\n\n"
             "Save it anyway?",
             parent=self.app.root, icon="warning", default="cancel",
@@ -1264,16 +1265,12 @@ class CellsTab(Tab):
 
         help_label(
             self,
-            "Top row of each pair is the cell as it reaches Tesseract: it should be black "
-            "text on a white background, with the letters filling most of the height, and "
-            "it should look that way for the highlighted softkey too. Bottom row is the "
-            "raw crop. It is shown at the true size Tesseract received, not shrunk to fit -- "
-            "a smoothed-down preview of a binary image is how the last closed-counter bug "
-            "hid, so scroll rather than trust a blurrier picture. If a cell is clipped or has "
-            "its neighbour's label in it, go back to Calibrate -- that is a geometry problem "
-            "and no amount of OCR tuning will fix it. If a cell looks right but reads wrong, "
-            "type what it should say in the box below it and use the sharpening tuner "
-            "underneath.",
+            "Top row of each pair is the cell as it is read: black text on white, filling "
+            "most of the cell's height, including for the highlighted softkey. Bottom row "
+            "is the raw crop, shown at true size -- scroll rather than trust a shrunk "
+            "picture. If a cell is clipped or has its neighbour's label in it, go back to "
+            "Calibrate. If a cell looks right but reads wrong, type what it should say "
+            "below it and use the sharpening tuner underneath.",
             width=900,
         ).pack(anchor="w", pady=(6, 8))
 
@@ -1474,13 +1471,13 @@ class CellsTab(Tab):
         try:
             configio.validate(document, base_dir=base)
         except Exception as exc:  # noqa: BLE001 - every failure is a message to show
-            messagebox.showerror("G1000 softkey labels",
+            messagebox.showerror("GlassLinkXP",
                                  f"Those settings will not load:\n\n{exc}",
                                  parent=self.app.root)
             return
         if self.app.config_path is None:
             messagebox.showinfo(
-                "G1000 softkey labels",
+                "GlassLinkXP",
                 "There is no configuration file open yet. Press New... at the top of the "
                 "window to make one, then run tuning again.",
                 parent=self.app.root,
@@ -1685,7 +1682,7 @@ class PagesTab(Tab):
             return
         path = config_path_setting(self.app, "screens_file")
         if not messagebox.askokcancel(
-            "G1000 softkey labels",
+            "GlassLinkXP",
             f"Add this page to\n{path}\n\nAnything the command flagged as unsure is added "
             "as a comment, not as a label. You can edit the file afterwards.",
             parent=self.app.root,
@@ -1981,7 +1978,7 @@ class SettingsTab(Tab):
                 configio.set_in(document, path, configio.parse_field(setting, text))
         except configio.ConfigIoError as exc:
             self.app.set_status(str(exc), "error")
-            messagebox.showwarning("G1000 softkey labels", str(exc), parent=self.app.root)
+            messagebox.showwarning("GlassLinkXP", str(exc), parent=self.app.root)
             return None
         return document
 
@@ -1993,7 +1990,7 @@ class SettingsTab(Tab):
         try:
             configio.validate(document, base_dir=base)
         except Exception as exc:  # noqa: BLE001 - every failure is a message to show
-            messagebox.showerror("G1000 softkey labels",
+            messagebox.showerror("GlassLinkXP",
                                  f"These settings will not load:\n\n{exc}",
                                  parent=self.app.root)
             self.app.set_status(str(exc), "error")
@@ -2008,13 +2005,13 @@ class SettingsTab(Tab):
         try:
             configio.validate(document, base_dir=base)
         except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("G1000 softkey labels",
+            messagebox.showerror("GlassLinkXP",
                                  f"These settings will not load, so they were not saved:\n\n{exc}",
                                  parent=self.app.root)
             return
         if self.app.config_path is None:
             messagebox.showinfo(
-                "G1000 softkey labels",
+                "GlassLinkXP",
                 "There is no configuration file open yet. Press New... at the top of the "
                 "window to make one, then save again.",
                 parent=self.app.root,
@@ -2023,7 +2020,7 @@ class SettingsTab(Tab):
         try:
             backup = configio.save(self.app.config_path, document)
         except configio.ConfigIoError as exc:
-            messagebox.showerror("G1000 softkey labels", str(exc), parent=self.app.root)
+            messagebox.showerror("GlassLinkXP", str(exc), parent=self.app.root)
             return
         self.app.document = document
         self.app.notify_config_changed()
@@ -2057,7 +2054,7 @@ class SettingsTab(Tab):
 
     def save_raw(self) -> None:
         if self.app.config_path is None:
-            messagebox.showinfo("G1000 softkey labels",
+            messagebox.showinfo("GlassLinkXP",
                                 "Press New... at the top of the window to make a "
                                 "configuration file first.",
                                 parent=self.app.root)
@@ -2066,7 +2063,7 @@ class SettingsTab(Tab):
         try:
             backup = configio.save_text(self.app.config_path, text)
         except configio.ConfigIoError as exc:
-            messagebox.showerror("G1000 softkey labels", str(exc), parent=self.app.root)
+            messagebox.showerror("GlassLinkXP", str(exc), parent=self.app.root)
             return
         self.app.load_config(quiet=True)
         self.app.set_status(
@@ -2141,10 +2138,12 @@ class ToolsTab(Tab):
         self.app.set_status("The frame source now points at the test frames.")
 
 
-#: The tab order.
+#: The tab order. PagesTab (the screen-template/page-authoring UI) is
+#: deliberately not shown here -- it stays defined and tested, just not
+#: exposed to users yet.
 TAB_CLASSES = (
     StartTab, RunTab, WindowsTab, CalibrateTab, CellsTab,
-    ColorsTab, PagesTab, VocabularyTab, SettingsTab, ToolsTab,
+    ColorsTab, VocabularyTab, SettingsTab, ToolsTab,
 )
 
 

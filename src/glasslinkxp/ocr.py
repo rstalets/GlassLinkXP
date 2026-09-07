@@ -108,9 +108,9 @@ class TesserocrEngine:
             import tesserocr  # noqa: F401
         except ImportError as exc:
             raise OcrUnavailable(
-                "tesserocr is not installed. Run scripts/install-windows.ps1, which "
-                "installs the pinned prebuilt wheel with `uv sync --locked`; elsewhere, "
-                "`uv sync --locked` in a checkout does the same."
+                "tesserocr is not installed. Run install.cmd, which installs the pinned "
+                "prebuilt wheel with `uv sync --locked`; in a dev checkout, `uv sync "
+                "--locked` at the repository root does the same."
             ) from exc
         from PIL import Image
 

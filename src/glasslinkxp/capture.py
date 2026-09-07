@@ -212,7 +212,7 @@ def find_window(title_substring: str) -> WindowInfo:  # pragma: no cover - Windo
     if not matches:
         raise CaptureError(
             f"no visible window title contains {title_substring!r}. "
-            "Run 'python -m g1000_softkey.main list-windows' to see what is open, and check "
+            "Run 'python -m glasslinkxp.main list-windows' to see what is open, and check "
             "that the G1000 display is popped out into its own window."
         )
     if len(matches) > 1:

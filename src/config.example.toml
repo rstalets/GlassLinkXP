@@ -1,5 +1,5 @@
 # G1000 softkey OCR daemon -- copy to config.toml and edit.
-# Run with:  python -m g1000_softkey.main -c config.toml run
+# Run with:  python -m glasslinkxp.main -c config.toml run
 #
 # This file is a starting point to copy, kept commented because it is read by
 # people. docs/CONFIGURATION.md is the full reference, generated from the same
@@ -11,12 +11,10 @@
 # if you keep notes in there.
 
 [app]
-# Capture/OCR rate. 4 Hz is plenty: softkeys change only when you press one,
-# and with change gating on, unchanged cells cost nothing.
-# 12 Hz keeps the worst-case detection delay under ~85 ms. Change gating makes
-# an unchanged cycle cost a fraction of a millisecond, so a high rate is nearly
-# free; the OCR only runs on cells whose pixels actually moved.
-loop_hz = 12.0
+# Capture/OCR rate. Softkeys only change when you press one, and with change
+# gating on, unchanged cells cost nothing -- so a high rate is nearly free.
+# 28 Hz keeps the worst-case detection delay under ~36 ms.
+loop_hz = 28.0
 # Skip OCR for cells whose pixels did not change since the previous frame.
 change_gating = true
 # Per-pixel intensity difference that counts as a change (0..255).
@@ -69,21 +67,21 @@ size = [1280, 960]
 
 # --- displays --------------------------------------------------------------
 # One section per captured window. `key` is the table name and also the
-# dataref prefix: g1000/softkey/<key>/1..12
+# dataref prefix: glasslinkxp/softkey/<key>/1..12
 #
 # window_title is a case-insensitive SUBSTRING of the pop-out window title.
-# Run `python -m g1000_softkey.main list-windows` on the X-Plane machine to
+# Run `python -m glasslinkxp.main list-windows` on the X-Plane machine to
 # see the real titles, then paste a distinctive part of them here.
 #
 # geometry is expressed as FRACTIONS of the window's client area so it
 # survives a resize. Get a starting point from:
-#   python -m g1000_softkey.main -c config.toml calibrate
+#   python -m glasslinkxp.main -c config.toml calibrate
 # then check calibration/<key>_overlay.png and nudge the numbers.
 
 [display.pfd]
 window_title = "G1000 PFD"
 enabled = true
-# dataref_prefix = "g1000/softkey/pfd"   # defaults to g1000/softkey/<key>
+# dataref_prefix = "glasslinkxp/softkey/pfd"   # defaults to glasslinkxp/softkey/<key>
 
 [display.pfd.geometry]
 x = 0.050      # left edge of the softkey strip
@@ -137,7 +135,7 @@ accept_confidence = 80.0
 # BACK sit in cells 9-11 is easy, and that only happens on the transponder
 # keypad -- whose layout is fixed, so the hard cells can be looked up instead of
 # recognised. Pages live in screens_file; add one with:
-#     g1000 screen-template --display pfd --name my-page
+#     glasslinkxp screen-template --display pfd --name my-page
 screen_confidence = 80.0
 # A page is only identified when its match cells all read at least this
 # confidently -- higher on purpose, because an identification made from a guess
@@ -153,15 +151,15 @@ blank_ink_ratio = 0.004  # below this fraction of "ink" a cell is reported as ""
 # XPDR code screen while longer labels still read is the signature. Lower it to
 # ~20 if dim labels are being dropped.
 blank_contrast = 40
-# labels_file = "g1000_softkey/labels.txt"   # relative paths resolve next to this file
+# labels_file = "glasslinkxp/labels.txt"   # relative paths resolve next to this file
 # tessdata_path = "C:/Program Files/Tesseract-OCR/tessdata"
 
 # --- softkey background colour ---------------------------------------------
 # Each cell's background is classified into one of four colours and published
 # as an int alongside the label:
 #
-#   g1000/softkey/pfd/1        the label string
-#   g1000/softkey/pfd/1/bg     0 black, 1 white, 2 yellow, 3 red
+#   glasslinkxp/softkey/pfd/1        the label string
+#   glasslinkxp/softkey/pfd/1/bg     0 black, 1 white, 2 yellow, 3 red
 #
 # The label itself is published exactly as the sim draws it -- the daemon
 # never prepends a colour hint or any other markup. What colour to draw the
@@ -178,7 +176,7 @@ blank_contrast = 40
 # from a capture -- nobody who wrote them has seen an X-Plane frame. Check them
 # against your own display before trusting them:
 #
-#     g1000 -c config.toml dump-colors
+#     glasslinkxp -c config.toml dump-colors
 #
 # with one softkey selected. It prints each cell's ring BGR and HSV and how it
 # classified, which is the measurement these numbers should come from.

@@ -1,7 +1,7 @@
 """Every CLI subcommand the GUI can launch, described as data.
 
 The GUI does not call ``cmd_run`` and friends in-process. It spawns
-``python -m g1000_softkey.main ...`` and reads the output back, for three
+``python -m glasslinkxp.main ...`` and reads the output back, for three
 reasons:
 
 * ``cmd_run`` installs SIGINT/SIGTERM handlers, and ``signal.signal`` only
@@ -56,7 +56,7 @@ class Option:
 
 @dataclass(frozen=True)
 class CommandSpec:
-    """A subcommand of ``g1000_softkey.main``."""
+    """A subcommand of ``glasslinkxp.main``."""
 
     name: str
     title: str
@@ -263,7 +263,7 @@ def build_argv(
     """Turn a spec plus the GUI's field values into an argv for ``main()``.
 
     ``-c`` and ``-v`` go first, matching the form written throughout the docs
-    (``g1000 -c config.toml run``); ``main.py`` accepts them on either side.
+    (``glasslinkxp -c config.toml run``); ``main.py`` accepts them on either side.
     """
     argv: list[str] = []
     if config:
@@ -316,8 +316,8 @@ def child_interpreter(executable: str | None = None) -> str:
 
 
 def full_command(argv: list[str], executable: str | None = None) -> list[str]:
-    """``argv`` prefixed with the interpreter and ``-m g1000_softkey.main``."""
-    return [child_interpreter(executable), "-m", "g1000_softkey.main", *argv]
+    """``argv`` prefixed with the interpreter and ``-m glasslinkxp.main``."""
+    return [child_interpreter(executable), "-m", "glasslinkxp.main", *argv]
 
 
 def quote_command(command: list[str]) -> str:

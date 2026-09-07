@@ -87,7 +87,7 @@ class DisplayConfig:
 
     def __post_init__(self) -> None:
         if not self.dataref_prefix:
-            object.__setattr__(self, "dataref_prefix", f"g1000/softkey/{self.key}")
+            object.__setattr__(self, "dataref_prefix", f"glasslinkxp/softkey/{self.key}")
 
     def dataref_names(self) -> list[str]:
         """The label (string) datarefs, one per cell."""
@@ -305,7 +305,7 @@ class PublishConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
-    loop_hz: float = 12.0
+    loop_hz: float = 28.0
     change_gating: bool = True
     change_tolerance: int = 6
     displays: tuple[DisplayConfig, ...] = ()

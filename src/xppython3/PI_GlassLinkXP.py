@@ -1,12 +1,12 @@
 """XPPython3 plugin: writable datarefs for the G1000 softkey labels and the
 colour of the cell each label sits on.
 
-    g1000/softkey/pfd/1 .. 12        pilot PFD   (sim/GPS/g1000n1_softkeyN)
-    g1000/softkey/mfd/1 .. 12        MFD         (sim/GPS/g1000n3_softkeyN)
-    g1000/softkey/<display>/N/bg     int: 0 black, 1 white, 2 yellow, 3 red
+    glasslinkxp/softkey/pfd/1 .. 12        pilot PFD   (sim/GPS/g1000n1_softkeyN)
+    glasslinkxp/softkey/mfd/1 .. 12        MFD         (sim/GPS/g1000n3_softkeyN)
+    glasslinkxp/softkey/<display>/N/bg     int: 0 black, 1 white, 2 yellow, 3 red
 
 Each label is a fixed 64-byte, NUL-padded UTF-8 field, so PilotsDeck reads it
-as ``g1000/softkey/pfd/1:s64``. The ``/bg`` datarefs are Int, not byte arrays:
+as ``glasslinkxp/softkey/pfd/1:s64``. The ``/bg`` datarefs are Int, not byte arrays:
 X-Plane types a dataref at registration, and a Stream Deck plugin choosing an
 image by value wants a number, not the string "2".
 
@@ -47,8 +47,8 @@ FIELD_WIDTH = 64
 
 class PythonInterface:
     def __init__(self):
-        self.name = "G1000 Softkey Labels"
-        self.sig = "com.github.g1000softkey.labels"
+        self.name = "GlassLinkXP"
+        self.sig = "com.github.glasslinkxp"
         self.desc = ("Publishes G1000 softkey labels as writable byte-array datarefs "
                      "and their cell background colour as writable int datarefs.")
         self.accessors = []
@@ -59,7 +59,7 @@ class PythonInterface:
     def XPluginStart(self):
         for display in DISPLAYS:
             for index in range(1, CELLS + 1):
-                name = "g1000/softkey/{}/{}".format(display, index)
+                name = "glasslinkxp/softkey/{}/{}".format(display, index)
                 self._create_dataref(name)
                 self._create_int_dataref(name + "/bg")
         xp.log("created {} softkey datarefs ({} labels of {} bytes + {} colours)".format(

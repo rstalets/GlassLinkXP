@@ -8,21 +8,21 @@ missing, which command that means firing, whose monitor the result belongs on
 What these tests do *not* prove is that SetWindowPos moves an X-Plane pop-out,
 that the pop-out commands are named what this thinks they are named, or that
 X-Plane's windows really do all carry the ``X-System`` class. Those need a
-Windows box with the sim running; see README's *Not verified here*.
+Windows box with the sim running; see docs/DEVELOPER.md's *Not verified here*.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from g1000_softkey.capture import Placement, WindowInfo
-from g1000_softkey.command import CommandError
-from g1000_softkey.config import (
+from glasslinkxp.capture import Placement, WindowInfo
+from glasslinkxp.command import CommandError
+from glasslinkxp.config import (
     AppConfig,
     DisplayConfig,
     WindowManagementConfig,
 )
-from g1000_softkey.windowmgr import POPOUT_COMMANDS, manage_windows
+from glasslinkxp.windowmgr import POPOUT_COMMANDS, manage_windows
 
 SIM = "X-System"
 

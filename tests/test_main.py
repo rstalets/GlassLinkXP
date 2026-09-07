@@ -4,13 +4,13 @@ import json
 
 import pytest
 
-from g1000_softkey import main as main_module
-from g1000_softkey import synth
-from g1000_softkey.color import BLACK, RED, WHITE, YELLOW
-from g1000_softkey.config import DisplayConfig, PublishConfig
-from g1000_softkey.main import _values, main
-from g1000_softkey.ocr import CellResult
-from g1000_softkey.pipeline import DisplayResult
+from glasslinkxp import main as main_module
+from glasslinkxp import synth
+from glasslinkxp.color import BLACK, RED, WHITE, YELLOW
+from glasslinkxp.config import DisplayConfig, PublishConfig
+from glasslinkxp.main import _values, main
+from glasslinkxp.ocr import CellResult
+from glasslinkxp.pipeline import DisplayResult
 
 
 @pytest.fixture(scope="module")
@@ -57,9 +57,9 @@ def test_synth_writes_frames(tmp_path):
 
 def test_run_once_publishes_the_labels_it_read(frames, published):
     assert main(["run", "--image", str(frames / "pfd_top.png"), "--once"]) == 0
-    assert published.values["g1000/softkey/pfd/1"] == "INSET"
-    assert published.values["g1000/softkey/mfd/12"] == "ALERTS"
-    assert published.values["g1000/softkey/pfd/2"] == ""
+    assert published.values["glasslinkxp/softkey/pfd/1"] == "INSET"
+    assert published.values["glasslinkxp/softkey/mfd/12"] == "ALERTS"
+    assert published.values["glasslinkxp/softkey/pfd/2"] == ""
     assert published.closed, "run must close the publisher on the way out"
 
 
@@ -159,14 +159,14 @@ def test_values_publish_a_label_and_a_colour_per_cell():
         CellResult(index=4, text="", background=YELLOW, blank=True),
     ])
     values = _values(display, result)
-    assert values["g1000/softkey/pfd/1"] == "INSET"
-    assert values["g1000/softkey/pfd/1/bg"] == BLACK
-    assert values["g1000/softkey/pfd/2/bg"] == WHITE
-    assert values["g1000/softkey/pfd/3/bg"] == YELLOW
-    assert values["g1000/softkey/pfd/4/bg"] == RED
+    assert values["glasslinkxp/softkey/pfd/1"] == "INSET"
+    assert values["glasslinkxp/softkey/pfd/1/bg"] == BLACK
+    assert values["glasslinkxp/softkey/pfd/2/bg"] == WHITE
+    assert values["glasslinkxp/softkey/pfd/3/bg"] == YELLOW
+    assert values["glasslinkxp/softkey/pfd/4/bg"] == RED
     # A blank cell publishes an empty label and still reports its colour.
-    assert values["g1000/softkey/pfd/5"] == ""
-    assert values["g1000/softkey/pfd/5/bg"] == YELLOW
+    assert values["glasslinkxp/softkey/pfd/5"] == ""
+    assert values["glasslinkxp/softkey/pfd/5/bg"] == YELLOW
     assert all(isinstance(v, int) for k, v in values.items() if k.endswith("/bg"))
 
 
@@ -183,12 +183,12 @@ def test_labels_go_out_exactly_as_the_sim_draws_them():
         CellResult(index=1, text="WARNING", background=RED),
     ])
     values = _values(display, result)
-    assert values["g1000/softkey/pfd/1"] == "STD BARO"
-    assert values["g1000/softkey/pfd/2"] == "WARNING"
+    assert values["glasslinkxp/softkey/pfd/1"] == "STD BARO"
+    assert values["glasslinkxp/softkey/pfd/2"] == "WARNING"
 
 
 def test_the_longest_label_fits_the_default_field_width():
-    from g1000_softkey.publish import encode_field
+    from glasslinkxp.publish import encode_field
 
     longest = "FLIGHT PLAN"
     width = PublishConfig().field_width
@@ -197,11 +197,11 @@ def test_the_longest_label_fits_the_default_field_width():
 
 def test_run_publishes_the_cell_colours_alongside_the_labels(frames, published):
     assert main(["run", "--image", str(frames / "alerts.png"), "--once"]) == 0
-    assert published.values["g1000/softkey/pfd/5/bg"] == YELLOW
-    assert published.values["g1000/softkey/pfd/6/bg"] == RED
-    assert published.values["g1000/softkey/pfd/9/bg"] == WHITE
-    assert published.values["g1000/softkey/pfd/1/bg"] == BLACK
-    assert published.values["g1000/softkey/pfd/5"] == "CAUTION"
+    assert published.values["glasslinkxp/softkey/pfd/5/bg"] == YELLOW
+    assert published.values["glasslinkxp/softkey/pfd/6/bg"] == RED
+    assert published.values["glasslinkxp/softkey/pfd/9/bg"] == WHITE
+    assert published.values["glasslinkxp/softkey/pfd/1/bg"] == BLACK
+    assert published.values["glasslinkxp/softkey/pfd/5"] == "CAUTION"
 
 
 def test_dump_colors_prints_the_measurements(frames, tmp_path, capsys):
@@ -226,7 +226,7 @@ def test_gui_opens_the_window(monkeypatch):
         seen["path"] = config_path
         return 0
 
-    monkeypatch.setattr("g1000_softkey.gui.launch", fake_launch)
+    monkeypatch.setattr("glasslinkxp.gui.launch", fake_launch)
     assert main(["-c", "some/config.toml", "gui"]) == 0
     assert seen["path"] == "some/config.toml"
 
@@ -234,7 +234,7 @@ def test_gui_opens_the_window(monkeypatch):
 def test_gui_still_opens_when_the_config_file_is_not_there_yet(monkeypatch, tmp_path):
     """Making that file is one of the things the GUI is for, so a missing one
     is not the error it is for every other subcommand."""
-    monkeypatch.setattr("g1000_softkey.gui.launch", lambda config_path=None: 0)
+    monkeypatch.setattr("glasslinkxp.gui.launch", lambda config_path=None: 0)
     assert main(["-c", str(tmp_path / "not-yet.toml"), "gui"]) == 0
 
 
@@ -248,7 +248,7 @@ def test_gui_refuses_a_config_file_that_is_broken_rather_than_absent(monkeypatch
     over a file that only needed one number corrected.
     """
     opened = []
-    monkeypatch.setattr("g1000_softkey.gui.launch",
+    monkeypatch.setattr("glasslinkxp.gui.launch",
                         lambda config_path=None: opened.append(config_path) or 0)
 
     broken = tmp_path / "broken.toml"
@@ -290,7 +290,7 @@ class _LostSource:
 
 
 def _report(managed=("pfd",), opened=()):
-    from g1000_softkey.windowmgr import DisplayOutcome, Report
+    from glasslinkxp.windowmgr import DisplayOutcome, Report
 
     return Report(
         outcomes=tuple(
@@ -322,7 +322,7 @@ def reopening(monkeypatch):
 
 
 def _config(enabled=True):
-    from g1000_softkey.config import AppConfig, WindowManagementConfig
+    from glasslinkxp.config import AppConfig, WindowManagementConfig
 
     return AppConfig(
         displays=(DisplayConfig(key="pfd", window_title="G1000 PFD"),),

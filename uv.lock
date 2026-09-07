@@ -78,7 +78,7 @@ wheels = [
 ]
 
 [[package]]
-name = "g1000-softkey"
+name = "glasslinkxp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

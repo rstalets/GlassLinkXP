@@ -8,18 +8,18 @@ going blank for a user.
 
 import pytest
 
-from g1000_softkey.color import BACKGROUND_NAMES, BLACK, RED, WHITE, YELLOW
-from g1000_softkey.gui import logparse
-from g1000_softkey.main import _format_row
-from g1000_softkey.ocr import CellResult
-from g1000_softkey.pipeline import DisplayResult
+from glasslinkxp.color import BACKGROUND_NAMES, BLACK, RED, WHITE, YELLOW
+from glasslinkxp.gui import logparse
+from glasslinkxp.main import _format_row
+from glasslinkxp.ocr import CellResult
+from glasslinkxp.pipeline import DisplayResult
 
 LABELS = ["INSET", "", "PFD", "OBS", "CDI", "DME", "XPDR", "IDENT",
           "TMR/REF", "NRST", "ALERTS", "FLIGHT PLAN"]
 
 #: The daemon's own logging format, so the parser is exercised behind the
 #: prefix it actually arrives with rather than on a bare message.
-PREFIX = "18:04:11 INFO    g1000_softkey: "
+PREFIX = "18:04:11 INFO    glasslinkxp: "
 
 
 def _result(labels=None, backgrounds=None, display="pfd"):
@@ -75,8 +75,8 @@ def test_a_label_with_a_slash_survives():
 
 @pytest.mark.parametrize("line", [
     "",
-    "18:04:11 INFO    g1000_softkey: running at 12.0 Hz, gating=True, publisher=console",
-    "18:04:11 WARNING g1000_softkey: loop overran: 190 ms > 83 ms budget",
+    "18:04:11 INFO    glasslinkxp: running at 12.0 Hz, gating=True, publisher=console",
+    "18:04:11 WARNING glasslinkxp: loop overran: 190 ms > 83 ms budget",
     "wrote 48 cell PNGs to /tmp/cells",
     "[pfd] not a row at all",
 ])
@@ -130,17 +130,17 @@ def test_an_unknown_background_name_falls_back_to_black():
 
 
 def test_every_background_the_daemon_can_name_is_understood():
-    from g1000_softkey.color import BACKGROUND_NAMES
+    from glasslinkxp.color import BACKGROUND_NAMES
 
     for value, name in BACKGROUND_NAMES.items():
         assert logparse.BACKGROUND_VALUES[name] == value
 
 
 @pytest.mark.parametrize("line,expected", [
-    ("18:04:11 ERROR   g1000_softkey: nope", "error"),
-    ("18:04:11 WARNING g1000_softkey: hmm", "warning"),
-    ("18:04:11 INFO    g1000_softkey: fine", "info"),
-    ("18:04:11 DEBUG   g1000_softkey: detail", "debug"),
+    ("18:04:11 ERROR   glasslinkxp: nope", "error"),
+    ("18:04:11 WARNING glasslinkxp: hmm", "warning"),
+    ("18:04:11 INFO    glasslinkxp: fine", "info"),
+    ("18:04:11 DEBUG   glasslinkxp: detail", "debug"),
     ("wrote 48 cell PNGs", "plain"),
 ])
 def test_severity_is_read_off_the_line(line, expected):
@@ -148,19 +148,19 @@ def test_severity_is_read_off_the_line(line, expected):
 
 
 def test_a_starving_display_is_noticed():
-    line = ("18:04:11 WARNING g1000_softkey: no frames from pfd after 3s. The window must "
+    line = ("18:04:11 WARNING glasslinkxp: no frames from pfd after 3s. The window must "
             "exist and be rendering")
     assert logparse.parse_health(line) == ("pfd", False)
 
 
 def test_a_recovering_display_is_noticed():
     assert logparse.parse_health(
-        "18:04:11 INFO    g1000_softkey: pfd is delivering frames again"
+        "18:04:11 INFO    glasslinkxp: pfd is delivering frames again"
     ) == ("pfd", True)
 
 
 def test_an_ordinary_line_says_nothing_about_health():
-    assert logparse.parse_health("18:04:11 INFO    g1000_softkey: [pfd] 1:INSET") is None
+    assert logparse.parse_health("18:04:11 INFO    glasslinkxp: [pfd] 1:INSET") is None
 
 
 # -- the window list -------------------------------------------------------
@@ -175,7 +175,7 @@ def test_an_ordinary_line_says_nothing_about_health():
 
 
 def _window(title="G1000 PFD", class_name="X-System", x=0, y=0):
-    from g1000_softkey.capture import WindowInfo
+    from glasslinkxp.capture import WindowInfo
 
     return WindowInfo(hwnd=0x10F42, title=title, class_name=class_name,
                       width=1288, height=832, pid=1234, x=x, y=y)
@@ -248,7 +248,7 @@ def test_a_class_name_with_a_quote_survives_too():
 @pytest.mark.parametrize("line", [
     "",
     "12 of 40 visible top-level windows",
-    "18:04:11 INFO    g1000_softkey: [pfd] 1:INSET",
+    "18:04:11 INFO    glasslinkxp: [pfd] 1:INSET",
     "hwnd=0x1 pid=2 3x4 class='X' title=unquoted",
 ])
 def test_lines_that_are_not_windows_are_ignored(line):
@@ -267,7 +267,7 @@ def test_lines_that_are_not_windows_are_ignored(line):
 
 @pytest.fixture(scope="module")
 def frames(tmp_path_factory):
-    from g1000_softkey import synth
+    from glasslinkxp import synth
 
     path = tmp_path_factory.mktemp("frames")
     synth.write_menus(path)
@@ -276,7 +276,7 @@ def frames(tmp_path_factory):
 
 def _run(capsys, argv):
     """Run a real subcommand and hand back the lines it printed."""
-    from g1000_softkey.main import main
+    from glasslinkxp.main import main
 
     assert main(argv) == 0, f"{argv} failed"
     return capsys.readouterr().out.splitlines()
