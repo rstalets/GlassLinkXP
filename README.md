@@ -22,8 +22,10 @@ where to start if you would rather not type any of the commands below. It runs
 the same commands and shows you what they said; see [The window](#the-window).
 
 See `PLAN.md` for the design rationale. **This is a POC**: it is verified
-offline against synthetic frames (see *Not verified here* at the bottom) and
-has not been run against a live X-Plane.
+offline against synthetic frames (see *Not verified here* at the bottom).
+The daemon **has** been run against a live X-Plane and publishes to the
+plugin's datarefs over both transports; large parts of the Windows and sim
+surface remain unexercised, and that section says which.
 
 ## Layout
 
@@ -43,7 +45,7 @@ g1000_softkey/
   labels.txt    the softkey vocabulary (edit this)
 xppython3/PI_G1000SoftkeyLabels.py   creates the 48 datarefs (24 labels + 24 colours)
 scripts/
-  install-windows.ps1        daemon: vcpkg + MSVC + uv venv + tesserocr wheel
+  install-windows.ps1        daemon: uv sync --locked + pinned tesserocr wheel + tessdata
   install-xplane-plugin.ps1  sim: XPPython3 + the dataref plugin, and -VerifyOnly
 g1000.cmd       run any command without activating the venv
 g1000-gui.cmd   open the window (double-click it, or make a shortcut)
@@ -52,7 +54,7 @@ docs/
   GUI.md        how the window is put together, and what it is coupled to
   CONFIGURATION.md  every setting and why its default is what it is
                     (generated from gui/schema.py)
-wheels/         the compiled tesserocr wheel (git-ignored, but keep it)
+tessdata/       eng.traineddata, fetched by the installer (git-ignored)
 tests/          offline tests over the whole pipeline
 ```
 
@@ -64,90 +66,83 @@ tests/          offline tests over the whole pipeline
 powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
 ```
 
-That script does everything in this section. Read on only if you want to know
-what it is doing, or you would rather do it by hand.
+That is the whole thing. It needs no compiler, no Visual Studio, no vcpkg, no
+git, and **no separate Tesseract installation** -- the UB Mannheim installer is
+not part of this setup. It takes a couple of minutes. Read on only if you want
+to know what it is doing, or would rather do it by hand.
 
-**It compiles tesserocr exactly once.** The expensive part -- vcpkg building
-Tesseract and Leptonica, then MSVC compiling the Cython extension -- produces a
-single `.whl`, which is saved in `wheels/` and repaired with `delvewheel` so it
-carries its own DLLs. Re-running the script finds that wheel and skips MSVC and
-vcpkg altogether: installing from it takes well under a second instead of the
-better part of an hour. Once it exists you can delete the vcpkg tree (several
-GB) and still rebuild the environment freely. `-RebuildWheel` forces a
-recompile; the cache is per Python minor version, so moving from 3.12 to 3.13
-does mean one more build.
+### What the installer actually does
 
-### Why `pip install tesserocr` fails on Windows
+**Everything comes down as a pinned, hash-checked artefact, and nothing is
+stored in this repository.**
 
-**tesserocr has never published a Windows wheel** -- every release on PyPI is
-macOS/manylinux/musllinux only. So pip always falls back to the sdist and
-compiles, and the compile needs Tesseract's *development* files. The UB
-Mannheim installer ships only the runtime (`tesseract.exe` plus DLLs): no
-headers, no `.lib` import libraries.
+1. **uv provisions its own CPython** at the version in `.python-version`, from
+   Astral's `python-build-standalone` builds. `python-preference =
+   "only-managed"` in `pyproject.toml` means it never falls back to a system
+   Python, so the interpreter is as pinned as the dependencies. That build
+   includes Tk, so the window works.
+2. **`uv sync --locked`** installs everything from `uv.lock`, verifying every
+   download against the SHA-256 recorded there and failing closed on a
+   mismatch.
+3. **`eng.traineddata`** is fetched from a tagged upstream commit and checked
+   against a digest in the script. It is language data, not a Python
+   distribution, so `uv.lock` cannot cover it -- this is the one download the
+   installer verifies itself. It lands in `tessdata\` and the script writes an
+   absolute `ocr.tessdata_path` into `config.toml`.
 
-`PATH` is irrelevant to this. `tesserocr`'s `setup.py` reads two other
-environment variables:
+### Where the Windows tesserocr comes from
 
-```python
-if sys.platform == "win32":
-    libpaths = os.getenv("LIBPATH", None)     # where the .lib files are
-    ...
-    includepaths = os.getenv("INCLUDE", None) # where the headers are
-```
+**tesserocr has never published a Windows wheel** -- every release on PyPI,
+2.11.0 included, is macOS/manylinux/musllinux only. pip therefore falls back to
+the sdist and compiles, and that compile needs Tesseract's *development* files,
+which the runtime installers do not ship. That is why this project used to
+build Tesseract and Leptonica from source with vcpkg and MSVC, taking the
+better part of an hour and several GB.
 
-An unset `LIBPATH` is what produces `Tesseract library not found in LIBPATH: []`.
+It no longer does.
+[simonflueckiger/tesserocr-windows_build](https://github.com/simonflueckiger/tesserocr-windows_build)
+publishes prebuilt Windows wheels, and they bundle their own Tesseract and
+Leptonica -- which is what removes the separate Tesseract install as well as
+the compiler. `pyproject.toml` names the wheel by exact URL under
+`[tool.uv.sources]`, gated on `sys_platform == 'win32'`; every other platform
+takes the PyPI wheel.
 
-Three further traps, all handled by the script:
+**Nothing is vendored.** The repository holds a URL and a hash, not a binary,
+and `tessdata/` is git-ignored so the downloaded language data cannot be
+committed by accident either.
 
-* `setup.py` keeps only `.lib` files whose **path contains the major+minor
-  digits** from `tesseract -v`, and rejects anything ending in `d.lib`.
-  Tesseract's CMake emits `tesseract{MAJOR}{MINOR}.lib`, so 5.5.x needs
-  `tesseract55.lib`; a generic `tesseract.lib` is silently skipped.
-* `pyproject.toml` has **no `[build-system]` table**, so Cython is declared
-  only through the legacy `setup_requires`. Under PEP 517 build isolation it is
-  absent and the build fails -- install the build deps yourself and pass
-  `--no-build-isolation`.
-* Since Python 3.8 `PATH` is not searched for extension-module dependencies, so
-  `tesseract55.dll` and `leptonica-*.dll` must sit beside the installed `.pyd`
-  (or be registered with `os.add_dll_directory`).
+Recording a digest on first lock is trust-on-first-use: it defends against
+later substitution, not against a bad artefact on day one. The day-one check
+was done once by hand and its result -- the DLL manifest, the versions, the
+absence of any install hooks -- is written into the commit that introduced
+`pyproject.toml`. **Repeat that inspection when the pin moves; do not bump it
+blind.** Bumping means editing the URL in `pyproject.toml`, running `uv lock`,
+and committing the new lockfile; `--locked` then holds everyone else to it.
 
 ### By hand
 
-1. **Visual Studio 2022 Build Tools** with the "Desktop development with C++"
-   workload.
-2. **Tesseract development files** via vcpkg (pulls in Leptonica):
-   ```
-   git clone https://github.com/microsoft/vcpkg C:\vcpkg
-   C:\vcpkg\bootstrap-vcpkg.bat
-   C:\vcpkg\vcpkg install tesseract:x64-windows
-   ```
-3. From an **"x64 Native Tools Command Prompt for VS 2022"**, *append* to the
-   toolchain's variables -- replacing `INCLUDE` loses `stdio.h`:
-   ```
-   set INCLUDE=%INCLUDE%;C:\vcpkg\installed\x64-windows\include
-   set LIB=%LIB%;C:\vcpkg\installed\x64-windows\lib
-   set LIBPATH=%LIBPATH%;C:\vcpkg\installed\x64-windows\lib
-   ```
-4. **Python packages** (uv or pip; the flags matter more than the tool):
-   ```
-   uv venv --python 3.12
-   uv pip install setuptools wheel "Cython>=3.0.0,<3.2.0" cysignals
-   uv pip install --no-build-isolation tesserocr
-   uv sync --locked
-   ```
-5. Copy `C:\vcpkg\installed\x64-windows\bin\*.dll` next to the installed
-   `tesserocr` package, and set `TESSDATA_PREFIX` to a directory holding
-   `eng.traineddata` (vcpkg does not install language data; the UB Mannheim
-   `tessdata` folder works).
+```
+uv sync --locked
+```
 
-### If you would rather not build anything
+Then put an `eng.traineddata` somewhere and point `ocr.tessdata_path` at its
+directory. `tessdata_fast` at tag `4.1.0` is what the installer fetches and
+what every measurement in this project was taken against -- a different variant
+is a different OCR engine as far as your labels are concerned, so re-measure
+with `tune` before switching.
 
-`conda install -c conda-forge tesserocr` ships the binding plus Tesseract and
-Leptonica prebuilt. The catch: conda-forge's **win-64 builds stop at tesserocr
-2.5.2, Python 3.8-3.11**. That is fine for this code -- it only uses
-`PyTessBaseAPI`, `SetVariable`, `SetImage`, `GetUTF8Text`, `MeanTextConf` and
-`End`, all present since 2.x -- but loosen the `tesserocr>=2.6` pin in
-`pyproject.toml` first.
+### If the wheel is ever unavailable
+
+The source-build installer -- vcpkg, MSVC, `delvewheel`, and the notes on
+`LIBPATH`, the `tesseract55.lib` version-digit trap and PEP 517 build isolation
+-- is preserved in git history rather than maintained here:
+
+```
+git show e916727:scripts/install-windows.ps1
+```
+
+conda-forge is **not** a usable second source: its `win-64` tesserocr builds
+stop at 2.5.2, last uploaded November 2022, with no Python 3.12 build at all.
 
 ### The X-Plane side
 
@@ -576,13 +571,14 @@ The following code paths are written from the documented APIs but have
   screenshots. Real-world OCR accuracy, the true default strip fractions in
   `config.example.toml`, and whether X-Plane wraps any label onto two lines
   are all unknown.
-* **The colour thresholds in `[color]`.** The classifier is tested against
-  synthetic swatches at several brightnesses, which shows it separates four
-  backgrounds and that dimming moves V while leaving hue and saturation alone.
-  It does not show that the shipped `value_max`, `saturation_max` and hue
-  windows match X-Plane's actual softkey colours -- those numbers came from
-  plausible swatches, and nothing here has seen a real frame. `dump-colors`
-  exists so the real numbers can replace them without guessing.
+* **The Windows installer itself.** `scripts\install-windows.ps1` was rewritten
+  to install a pinned, hash-checked prebuilt wheel instead of compiling
+  Tesseract. Everything it orchestrates is verified -- the wheel's contents
+  were inspected by hand, `uv lock` records its digest, and `uv sync --locked`
+  provisions an interpreter and passes the whole suite on Linux -- but **the
+  PowerShell has never been run, or even syntax-checked**: there is no
+  PowerShell in the development container. If it fails, the previous
+  source-build installer is at `git show e916727:scripts/install-windows.ps1`.
 * **The `Type_Int` datarefs.** The plugin registers them with `readInt` /
   `writeInt` per the XPPython3 documentation and the round trip is tested
   against the stubbed SDK, but no X-Plane has created one, and no Web API has
