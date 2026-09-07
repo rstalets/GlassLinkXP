@@ -157,19 +157,30 @@ frame, because a softkey becoming selected changes the background while leaving
 the label identical -- so anything cheap that must not miss that case belongs
 outside the gate too.
 
-**Which way up a cell is drawn is a guess, and the guess has been wrong.**
-A softkey is light-on-dark normally and dark-on-light when selected, so
-polarity has to come out of the pixels; `strip._background_is_white` counts
-bright pixels in the middle of the cell and assumes the glyphs are the
-minority there. A *tight* crop breaks that -- the middle of one is nearly all
-glyph -- and a tight crop is what a good calibration produces. When it breaks,
-the label reaches Tesseract white-on-black and reads as nothing or as garbage,
-and nothing else in the pipeline can undo it: sharpening, upscale and the
-threshold method all leave polarity alone. That is also why `tune` reported
-that no candidate helped and handed back the defaults -- truthfully, because
-polarity was not in the space it searched. It is a rung now
-(`retry_opposite_polarity`), for the same reason the sharpening ladder
-replaced one tuned sharpening value. Do not put a threshold back here.
+**Which way up a cell is drawn is measured on the border ring, and the ring
+is the only place that has no glyphs in it.** A softkey is light-on-dark
+normally and dark-on-light when selected, so polarity has to come out of the
+pixels. `strip._background_is_white` used to count bright pixels in the
+*middle* of the cell and assume the glyphs were the minority there, and that
+cost a bug report: on a live MFD, TERRAIN and NEXRAD came out of preprocessing
+still white-on-black while DCLTR-1 -- a longer word, same cells, same
+geometry -- read perfectly. What crosses the line is the ink coverage of the
+middle band, which depends on the crop *and on which letters the word is made
+of*; there was no crop tight enough to predict from, and the fix was not a
+better threshold on that quantity but a different quantity.
+
+`color.py` had already worked this out for the colour stage and says so in its
+own docstring, naming the failure ("the assumption `preprocess_cell()`
+makes"). The ring measurement was simply never wired through. It is now, and
+both stages share one `ring_fraction`. Over the corpus the ring separates the
+two cases by 0.83 where the middle band separated them by 0.41.
+
+The opposite polarity is still a rung (`retry_opposite_polarity`), because one
+measurement of one frame is not a proof, and nothing downstream can undo a
+wrong answer: sharpening, upscale and threshold method all leave polarity
+alone. That is why `tune` reported no candidate helped and handed back the
+defaults -- truthfully, because polarity was not in the space it searched. Do
+not put the centre test back.
 
 **A label missing from `labels.txt` costs more than a wrong reading.** It is
 reported raw, which is usually right, so it looks harmless -- but it can never

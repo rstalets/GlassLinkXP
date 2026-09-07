@@ -178,7 +178,7 @@ How each cell is turned black and white. Applied per cell, never globally.
 
 *Retry the other way up* — true or false. Default: `true`.
 
-After the sharpening ladder, try every rung again with light and dark swapped. Which way up a cell is drawn is guessed from how bright the middle of it is, and a tight crop fools that guess -- the label then goes to Tesseract white-on-black and reads as nothing, which no amount of sharpening fixes. Costs nothing on a cell that reads: the retries come last. Turn it off only to reproduce the old behaviour.
+After the sharpening ladder, try every rung again with light and dark swapped. Which way up a cell is drawn has to be worked out from the pixels, and a cell read the wrong way up goes to Tesseract white-on-black and reads as nothing, which no amount of sharpening fixes. Costs nothing on a cell that reads: the retries come last. Turn it off only to reproduce the old behaviour.
 
 ### `accept_confidence`
 

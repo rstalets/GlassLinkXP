@@ -39,11 +39,11 @@ from .pipeline import DisplayPipeline, DisplayResult
 from .publish import Value, create_publisher
 from .strip import (
     auto_detect_strip,
-    centre_bright_fraction,
     crop_strip,
     finish_cell,
     is_blank,
     overlay_geometry,
+    ring_bright_fraction,
     split_cells,
     threshold_cell,
 )
@@ -311,14 +311,14 @@ def cmd_dump_cells(args: argparse.Namespace, config: AppConfig) -> int:
                 binary = threshold_cell(
                     cell, config.ocr.upscale, config.ocr.threshold, first_amount, first_radius,
                 )
-                bright = centre_bright_fraction(binary)
+                bright = ring_bright_fraction(binary)
                 cv2.imwrite(str(out / f"{display.key}_{index:02d}_raw.png"), cell)
                 cv2.imwrite(
                     str(out / f"{display.key}_{index:02d}_prep.png"),
                     finish_cell(binary, "auto"),
                 )
                 LOG.info(
-                    "%s cell %2d: %s, centre bright %.2f -> read as %s",
+                    "%s cell %2d: %s, ring bright %.2f -> read as %s",
                     display.key, index, "blank" if blank else "has ink", bright,
                     "dark text on a light box" if bright > 0.5 else "light text on a dark box",
                 )

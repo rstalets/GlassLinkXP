@@ -74,9 +74,9 @@ class SharpenLadder:
         #: How many variants were asked for.
         self.rungs = 0
         #: Which of them were opposite-polarity retries. Reported by ``-v``:
-        #: a cell that only reads on a retry is a cell whose polarity the
-        #: centre test called wrong, which is a calibration symptom worth
-        #: seeing rather than a silently recovered one.
+        #: a cell that only reads on a retry is a cell whose polarity the ring
+        #: called wrong, which is a calibration symptom worth seeing rather
+        #: than a silently recovered one.
         self.retries = 0
 
     def __iter__(self):
@@ -333,10 +333,10 @@ class DisplayPipeline:
             # reached. Reaching one means only that no sharpening rung scored a
             # confident exact hit, which any label missing from the vocabulary
             # does while reading perfectly; being decided by one means the
-            # centre-brightness test called this cell's light/dark the wrong
-            # way round. Said out loud rather than silently recovered, because
-            # a crop tight enough to fool that test is a crop where every cell
-            # one notch worse is unreadable.
+            # border ring answered for the wrong rectangle. Said out loud
+            # rather than silently recovered: the ring carries no glyphs on a
+            # crop that is on its cell, so a cell that needs the retry is
+            # usually a crop that has slipped onto a separator or a neighbour.
             polarity = (
                 " POLARITY read the wrong way up -- answer came from the retry"
                 if cell_result.variant >= len(self.reader.config.sharpen_ladder)

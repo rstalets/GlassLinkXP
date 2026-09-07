@@ -131,10 +131,10 @@ def test_the_ladder_stops_building_when_the_reader_stops_reading(reader, config)
 def test_the_ladder_tries_every_rung_again_the_other_way_up(config):
     """Polarity doubles the variants, and the sharpening half comes first.
 
-    The centre-brightness test that picks a cell's polarity is wrong on tight
-    crops -- see ``strip._background_is_white`` -- and nothing else in the
-    ladder can undo it, so "the other one" is a variant rather than a better
-    guess. The order is asserted because ``pick_best`` stops early: putting
+    The border ring that picks a cell's polarity leaves a wide margin but is
+    still one measurement of one frame -- see ``strip._background_is_white`` --
+    and nothing else in the ladder can undo a wrong answer, so "the other one"
+    is a variant rather than a better guess. The order is asserted because ``pick_best`` stops early: putting
     the retries anywhere but last would change which answer a readable cell
     gets.
     """
@@ -160,11 +160,9 @@ def test_the_ladder_tries_every_rung_again_the_other_way_up(config):
 def test_a_cell_the_polarity_test_calls_wrong_still_reads(reader, config):
     """The failure this fallback is for, reproduced end to end.
 
-    A cell handed over already inverted -- dark box, light glyphs, tight
-    enough that the glyphs are the majority of the centre band -- is what the
-    centre-brightness test gets wrong on a real capture. With only the
-    sharpening ladder it is unreadable at every rung; the polarity retry
-    reads it.
+    A cell whose polarity the ring calls wrong -- in practice a crop that has
+    slipped off its own cell -- is unreadable at every rung of the sharpening
+    ladder, because none of them changes polarity. The retry reads it.
     """
     from dataclasses import replace
 

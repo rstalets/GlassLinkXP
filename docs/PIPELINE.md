@@ -299,7 +299,7 @@ pfd cell 3  CACHED  bg=white  was bg=black -- colour changed, label unchanged, n
 | `BLANK` | discarded before OCR; the ink figure says by how much |
 | `x=` | horizontal extent of the ink |
 | `CLIPPED?` | the ink reaches the outermost pixel of the crop, and the edges it reaches are named. Ink one pixel in is not flagged: at a geometry known to be right, long labels legitimately come that close, so the boundary itself is the only line that separates a cut glyph from a full one. Both kinds of error are possible -- a label drawn hard against its own cell edge reports a clipping that is really the sim's layout, and a crop that has slipped onto a solid background reports nothing at all. The calibration editor warns from this same function. |
-| `POLARITY read the wrong way up` | the answer came from an opposite-polarity retry, so the guess about which way round this cell is drawn (see below) was wrong. The label is right; the calibration is the thing to look at, because a crop that fools that guess is one notch away from a crop that cannot be read at all. Widening `cell_pad_y` -- or the strip's `h` -- is the fix. Printed on the variant that *won*, not on the retries that were reached: a label missing from `labels.txt` reaches every rung there is while reading perfectly. |
+| `POLARITY read the wrong way up` | the answer came from an opposite-polarity retry, so the border ring (see below) answered for the wrong rectangle -- usually a crop that has slipped off the cell onto a separator bar or a neighbour. The label is right; the calibration is the thing to look at. Printed on the variant that *won*, not on the retries that were reached: a label missing from `labels.txt` reaches every rung there is while reading perfectly. |
 
 The distinction between the middle two matters when a label looks wrong: a cell
 carrying `CONFIRMED` was checked against a known page, while a bare line means
@@ -308,25 +308,49 @@ nothing corroborated it.
 ## Which way up a cell is
 
 A softkey is drawn light-on-dark normally and dark-on-light when it is
-selected, so the polarity has to come out of the pixels. It is guessed by
-counting bright pixels in the middle of the cell and assuming the glyphs are
-the minority there.
+selected, so the polarity has to come out of the pixels.
 
-**That guess is wrong on a tight crop**, and a tight crop is what a good
-calibration produces: the middle of one is very nearly all glyph. Measured on
-a rendered seven-character label at an 11 px cap height, the bright fraction is
-0.24 in a 40 px cell, 0.38 in a 26 px one and 0.52 in an 18 px one -- so the
-test changes its answer somewhere around a cell only half again as tall as its
-text. A live MFD capture at `h = 0.0267`, `cell_pad_y = 0.08` crossed it: a
-white-on-black TERRAIN came out of preprocessing still white on black.
+It is read off the cell's **border ring**. Labels are centred, so the
+outermost few pixels of a cell are essentially never glyph, whatever the cell
+is doing -- the ring is background by construction, and a majority test over
+it needs no assumption at all. This is the same measurement, at the same
+`ring_fraction`, that the colour stage uses to name the background; `color.py`
+sets out the argument for it at length.
 
-Nothing else in the pipeline can undo that. Sharpening, upscaling and the
-threshold method all leave polarity alone, which is why `tune` reports that no
-candidate helped and hands back the defaults -- truthfully, because polarity
-was not in the space it searched.
+It used to be read off the **middle** of the cell instead, on the assumption
+that the glyphs are the minority there, and that is a real assumption that
+fails. What crosses the line is the ink coverage of the middle band, which
+depends on how tight the crop is *and on which letters the word is made of*.
+On a live MFD at `h = 0.0267`, `cell_pad_y = 0.08`, TERRAIN and NEXRAD came
+out of preprocessing still white-on-black while `DCLTR-1` -- a longer word, in
+the same cells, at the same geometry -- read perfectly: D, C, L, T, R, hyphen
+and 1 are thin open shapes and E, R, A, N, X and D are not. There was no crop
+tight enough to predict from.
 
-So polarity is a rung rather than a decision, the same answer the sharpening
-ladder gave to a value that could not be guessed:
+The two tests, measured over the 58 non-blank cells of the offline corpus:
+
+| | light-on-dark cells | light-background cells | gap |
+| --- | --- | --- | --- |
+| middle band (old) | 0.13 – 0.31 | 0.72 – 0.87 | 0.41 |
+| border ring (new) | 0.00 – 0.08 | 0.91 – 1.00 | **0.83** |
+
+The threshold is 0.50 either way. What changed is that it now sits in the
+middle of a gap rather than near the edge of one.
+
+The dark surround around a small highlight box is cropped away *before* the
+ring is read -- until it is gone, the ring is that surround rather than the
+label's own background. `_crop_to_content` guards itself (it fires only on
+four or more rows and columns that are more than half bright, which is a box
+and never a row of glyphs), so running it earlier changes nothing for a cell
+that has no frame.
+
+A wide margin is still not a proof, and nothing downstream can undo a wrong
+answer: sharpening, upscaling and the threshold method all leave polarity
+alone, which is why `tune` reports that no candidate helped and hands back the
+defaults -- truthfully, because polarity was not in the space it searched.
+
+So the other polarity is also a rung, the same answer the sharpening ladder
+gave to a value that could not be guessed:
 
 ```
 auto,     rung 1   <- the sharpening ladder, exactly as it was

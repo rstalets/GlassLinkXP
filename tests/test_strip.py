@@ -8,6 +8,11 @@ from glasslinkxp import synth
 from glasslinkxp.config import StripGeometry
 from glasslinkxp.strip import (
     sharpen,
+    RING_FRACTION,
+    _background_is_white,
+    finish_cell,
+    ring_bright_fraction,
+    threshold_cell,
     auto_detect_strip,
     cell_rects,
     changed_cells,
@@ -245,3 +250,114 @@ def test_sharpening_never_removes_counters(digit):
 def test_sharpen_is_a_no_op_when_disabled():
     cell = _tiny_digit("0")
     assert np.array_equal(sharpen(cell, 0.0, 1.4), cell)
+
+# ---------------------------------------------------------------------------
+# polarity: which way up the cell is drawn
+# ---------------------------------------------------------------------------
+
+
+def _label_cell(text, width=90, height=22, size=15, inverted=False):
+    """One softkey cell, light-on-dark or dark-on-light, drawn to order."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    background, ink = ((0, 0, 0), (255, 255, 255)) if not inverted else \
+                      ((255, 255, 255), (0, 0, 0))
+    image = Image.new("RGB", (width, height), background)
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(synth.FONT_CANDIDATES[1], size)
+    box = font.getbbox(text)
+    draw.text(
+        ((width - (box[2] - box[0])) / 2 - box[0], (height - (box[3] - box[1])) / 2 - box[1]),
+        text, font=font, fill=ink,
+    )
+    return np.array(image)[:, :, ::-1].copy()
+
+
+def _centre_bright_fraction(binary):
+    """The test this replaced, kept here so the two can be compared."""
+    height, width = binary.shape[:2]
+    centre = binary[
+        int(height * 0.20): max(1, int(height * 0.80)),
+        int(width * 0.15): max(1, int(width * 0.85)),
+    ]
+    return float(np.mean(centre > 0))
+
+
+#: Words the G1000 puts in one cell, sorted by how much ink they carry. The
+#: point of the pair is that DCLTR-1 is the *longer* string: what fills the
+#: middle of a cell is which letters a word is made of, not how many.
+DENSE = ("TERRAIN", "NEXRAD", "ENGINE", "TRAFFIC")
+SPARSE = ("DCLTR-1", "OFF", "MAP", "1")
+
+
+@pytest.mark.parametrize("text", DENSE + SPARSE)
+def test_polarity_is_decided_on_the_ring_where_there_is_never_a_glyph(text):
+    """A light-on-dark cell inverts, whatever the word is made of.
+
+    This is the bug this test exists for. Polarity used to be decided by
+    counting bright pixels in the *middle* of the cell, on the assumption that
+    the glyphs are the minority there. They are not always: what crosses the
+    line is the ink coverage of that band, which depends on how tight the crop
+    is and on which letters the word contains. On a live MFD, TERRAIN and
+    NEXRAD came out of preprocessing still white-on-black while DCLTR-1 -- a
+    longer word, same cells, same geometry -- read perfectly.
+
+    The ring carries no glyphs at all, so it needs no assumption. Asserted as
+    a *margin* rather than a verdict: both tests get these cells right, and the
+    difference that matters is how close each comes to getting them wrong.
+    """
+    binary = threshold_cell(_label_cell(text), upscale=4.0, method="otsu",
+                            sharpen_amount=0.0, sharpen_radius=0.0)
+    assert not _background_is_white(binary), f"{text} must be flipped"
+    assert ring_bright_fraction(binary) < 0.15, "the ring is background, not glyph"
+
+
+def test_the_ring_separates_the_two_cases_far_more_widely_than_the_middle_did():
+    """Measured, not asserted from taste. Over the words above: the middle
+    band leaves the two populations about 0.2 apart and the gap narrows as the
+    crop tightens, which is how a live capture closed it; the ring leaves them
+    around 0.8 apart with the threshold in the middle of it."""
+    def spread(inverted):
+        centre, ring = [], []
+        for text in DENSE + SPARSE:
+            binary = threshold_cell(
+                _label_cell(text, inverted=inverted), upscale=4.0, method="otsu",
+                sharpen_amount=0.0, sharpen_radius=0.0,
+            )
+            centre.append(_centre_bright_fraction(binary))
+            ring.append(ring_bright_fraction(binary))
+        return centre, ring
+
+    dark_centre, dark_ring = spread(False)
+    light_centre, light_ring = spread(True)
+
+    centre_gap = min(light_centre) - max(dark_centre)
+    ring_gap = min(light_ring) - max(dark_ring)
+    assert ring_gap > centre_gap
+    assert ring_gap > 0.7, "the ring's two populations sit at opposite ends"
+
+
+def test_a_highlight_box_smaller_than_the_crop_still_reads_as_a_light_background():
+    """The case the middle-of-the-cell test was written for, which the ring
+    must not lose.
+
+    A selected softkey whose white box does not fill the crop is a white box
+    with dark text inside a dark surround. Read naively, the ring is that
+    surround and would call the cell light-on-dark -- so the dark frame is
+    cropped away *before* the ring is read, and this is what pins that order.
+    """
+    inner = _label_cell("TRAFFIC", width=74, height=16, inverted=True)
+    framed = cv2.copyMakeBorder(inner, 3, 3, 8, 8, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+    binary = threshold_cell(framed, upscale=4.0, method="otsu",
+                            sharpen_amount=0.0, sharpen_radius=0.0)
+
+    finished = finish_cell(binary, "auto")
+    assert finished.mean() > 160, "a selected cell must not be turned inside out"
+
+
+def test_the_ring_is_the_colour_stage_s_ring():
+    """One number, not two. Both stages ask what a cell's background is, of
+    the same pixels; a second value for one affordance is a value that drifts."""
+    from glasslinkxp.config import ColorConfig
+
+    assert RING_FRACTION == ColorConfig().ring_fraction

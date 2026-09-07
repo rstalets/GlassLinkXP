@@ -252,8 +252,8 @@ def test_a_cell_only_the_opposite_polarity_can_read_is_not_reported_as_hopeless(
     """The report a wrongly-polarised cell used to get, and the one it gets now.
 
     Nothing in the search space -- psm, threshold method, upscale, sharpening
-    -- changes a cell's polarity, so a cell the centre-brightness test called
-    wrong reads as nothing under every candidate, and ``tune`` truthfully
+    -- changes a cell's polarity, so a cell whose polarity was read the wrong
+    way round reads as nothing under every candidate, and ``tune`` truthfully
     reported that no candidate improved on the baseline and handed back the
     baseline's own settings. That is what "tuning stopped working" looked
     like. With the polarity in the ladder the baseline reads it.

@@ -187,11 +187,11 @@ OCR = Group(
                 choices=("otsu", "adaptive")),
         Setting("retry_opposite_polarity", "bool", "Retry the other way up",
                 "After the sharpening ladder, try every rung again with light and dark "
-                "swapped. Which way up a cell is drawn is guessed from how bright the "
-                "middle of it is, and a tight crop fools that guess -- the label then goes "
-                "to Tesseract white-on-black and reads as nothing, which no amount of "
-                "sharpening fixes. Costs nothing on a cell that reads: the retries come "
-                "last. Turn it off only to reproduce the old behaviour."),
+                "swapped. Which way up a cell is drawn has to be worked out from the "
+                "pixels, and a cell read the wrong way up goes to Tesseract "
+                "white-on-black and reads as nothing, which no amount of sharpening "
+                "fixes. Costs nothing on a cell that reads: the retries come last. Turn "
+                "it off only to reproduce the old behaviour."),
         Setting("accept_confidence", "float", "Accept confidence",
                 "A vocabulary hit at least this confident stops the sharpening ladder "
                 "early. 0 always tries every rung."),

@@ -150,14 +150,14 @@ class OcrConfig:
     #: After the sharpening ladder, try every rung again with its light/dark
     #: polarity the other way round.
     #:
-    #: The polarity of a cell is guessed by counting bright pixels in the
-    #: middle of it and assuming the glyphs are the minority there (see
-    #: ``strip._background_is_white``). That guess fails on a tight crop,
-    #: where the centre band contains little but the glyphs, and when it fails
-    #: the cell goes to Tesseract as white-on-black and reads as nothing or as
-    #: garbage. Nothing else in the ladder can recover it: sharpening,
-    #: upscaling and the threshold method all leave polarity alone, which is
-    #: why a tuning run against such a cell reports that no candidate helped.
+    #: A cell's polarity is read off its border ring, where there is never a
+    #: glyph (see ``strip._background_is_white``). That is a wide margin
+    #: rather than a guess, but it is still one measurement of one frame, and
+    #: a cell it gets wrong reaches Tesseract white-on-black and reads as
+    #: nothing or as garbage. Nothing else in the ladder can recover that:
+    #: sharpening, upscaling and the threshold method all leave polarity
+    #: alone, which is why a tuning run against such a cell reports that no
+    #: candidate helped.
     #:
     #: On by default, and it costs nothing on a cell that reads: the retries
     #: sit *after* every sharpening rung, and ``read_best`` stops at the first

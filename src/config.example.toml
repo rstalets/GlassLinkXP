@@ -147,17 +147,19 @@ threshold = "otsu"       # otsu | adaptive -- per cell, never global
 #
 # Which way up a cell is drawn has to be worked out from the pixels, because
 # both happen: a normal softkey is light text on a dark box, a selected one is
-# dark text on a light box. It is guessed by counting bright pixels in the
-# middle of the cell and assuming the glyphs are the minority there -- and a
-# *tight* crop breaks that assumption, because the middle of a tight crop is
-# very nearly all glyph. When the guess is wrong the label reaches Tesseract
-# white-on-black and reads as nothing or as garbage, and no sharpening rung,
-# upscale or threshold method can undo it: none of them changes polarity. That
-# is also why a tuning run against such a cell reports that nothing helped.
+# dark text on a light box. It is read off the cell's border ring, where there
+# is never a glyph -- the same measurement the [color] section below uses to
+# name the background, and for the same reason.
 #
-# So the polarity is a rung rather than a decision. The retries come after
-# every sharpening rung, and an exact vocabulary hit stops the ladder before
-# it reaches them, so a cell that reads today costs exactly what it did.
+# That leaves a wide margin, but it is still one measurement of one frame, and
+# a cell read the wrong way up reaches Tesseract white-on-black and comes back
+# as nothing or as garbage. No sharpening rung, upscale or threshold method
+# can undo it: none of them changes polarity. That is also why a tuning run
+# against such a cell reports that nothing helped.
+#
+# So the other polarity is a rung rather than an argument. The retries come
+# after every sharpening rung, and an exact vocabulary hit stops the ladder
+# before it reaches them, so a cell that reads costs exactly what it did.
 retry_opposite_polarity = true
 fuzzy_cutoff = 0.62      # difflib cutoff for snapping to labels.txt
 blank_ink_ratio = 0.004  # below this fraction of "ink" a cell is reported as ""

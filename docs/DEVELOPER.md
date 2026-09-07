@@ -155,11 +155,12 @@ Check `run -v` for `POLARITY read the wrong way up`, and check that the
 label is in `labels.txt`. Those are the two failures that look like bad OCR
 and are not.
 
-The first is a crop tight enough that the middle of the cell is nearly all
-glyph, which fools the light/dark guess -- see *Which way up a cell is* in
-`docs/PIPELINE.md`. The polarity rung reads the cell anyway, so the label
-comes out right; the line is there because a crop that close to the line has
-no margin left. Giving the strip a little more `h` is the fix.
+The first means the border ring answered for the wrong rectangle -- see
+*Which way up a cell is* in `docs/PIPELINE.md`. In practice that is a crop
+that has slipped off its cell onto a separator bar or a neighbour, since the
+ring is background by construction on a crop that is on its cell. The
+polarity rung reads it anyway, so the label comes out right; the line is
+there because the calibration is worth another look.
 
 The second is quieter. A label the vocabulary does not know is reported raw,
 which is usually right, but it can never score an exact match -- so it never
@@ -209,29 +210,36 @@ than there really are.
 
 On Linux/CPython 3.11, Tesseract 5.3.4 (system) with `tesserocr` 2.11:
 
-* The polarity failure and the rung that answers it, measured rather than
-  argued. `eng.traineddata` here is byte-identical to the file `install.ps1`
+* The polarity failure and the measurement that replaced the guess.
+  `eng.traineddata` here is byte-identical to the file `install.ps1`
   downloads (sha256 `7d4322bd...70b2`, tessdata_fast 4.1.0), so this is the
   model a user's install runs.
 
-  Rendered labels at an 11 px cap height, varying only the crop -- the bright
-  fraction of the centre band, which is what the light/dark guess thresholds
-  at 0.5:
+  Polarity was decided on the middle of the cell, on the assumption that the
+  glyphs are the minority there. Over the 58 non-blank cells of the offline
+  corpus, that band puts the two cases 0.41 apart (0.13-0.31 light-on-dark,
+  0.72-0.87 light background) with the threshold at 0.50. The border ring
+  puts them 0.83 apart (0.00-0.08 against 0.91-1.00). Both get today's frames
+  right; the difference is how close each comes to getting them wrong, and a
+  live MFD closed the first gap while leaving the second untouched.
 
-  | cell height | TERRAIN | NEXRAD | MAP |
-  | --- | --- | --- | --- |
-  | 40 px | 0.24 | -- | 0.15 |
-  | 26 px | 0.38 | 0.35 | 0.23 |
-  | 20 px | 0.48 | 0.53 | 0.29 |
-  | 16 px | 0.51 | 0.53 | 0.30 |
+  Rendered words at one cell size and one font, only the word changing, ring
+  fraction against the middle band:
 
-  Above the line the cell is handed to Tesseract still white-on-black:
-  NEXRAD at 16 px reads at confidence 0 with the sharpening ladder alone and
-  92 with the polarity rung; TERRAIN at 20 px goes from 69 to 96. Nothing in
-  the corpus regressed. The rendering is DejaVu, not X-Plane's font, so these
-  numbers locate the *mechanism*, not a threshold to tune to -- the live
-  capture is the measurement that matters, and the one that prompted this
-  (an MFD at `h = 0.0267`, `cell_pad_y = 0.08`) was over the line.
+  | word | middle band | border ring |
+  | --- | --- | --- |
+  | TERRAIN | 0.44 | 0.05 |
+  | NEXRAD | 0.42 | 0.06 |
+  | ENGINE | 0.43 | 0.00 |
+  | DCLTR-1 | 0.36 | 0.02 |
+  | MAP | 0.27 | 0.00 |
+
+  which is the shape of the reported failure: `DCLTR-1` is the longest string
+  in the list and among the lowest on both, because what fills the middle of a
+  cell is which letters a word is made of, not how many. The rendering is
+  DejaVu, not X-Plane's font, so these locate the *mechanism* -- the live
+  capture is the measurement that matters, and on that one TERRAIN and NEXRAD
+  were over the line and DCLTR-1 was not.
 * The fallback is free on everything that already read: 59 preprocessing
   variants built across the six synthetic menus, none of them a retry, every
   label identical with `retry_opposite_polarity` on and off.
