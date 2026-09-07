@@ -15,6 +15,7 @@ from g1000_softkey.config import (
     OcrConfig,
     PublishConfig,
     StripGeometry,
+    WindowManagementConfig,
     default_config,
     load_config,
 )
@@ -36,12 +37,12 @@ def test_a_thoroughly_non_default_config_round_trips(tmp_path):
         displays=(
             DisplayConfig(
                 key="pfd", window_title='the "left" one', enabled=False,
-                dataref_prefix="my/prefix", manage_window_size=True,
-                window_size=(1400, 1000),
+                dataref_prefix="my/prefix",
                 geometry=StripGeometry(x=0.1, y=0.8, w=0.7, h=0.09, cells=6,
                                        cell_pad_x=0.2, cell_pad_y=0.3),
             ),
         ),
+        window_management=WindowManagementConfig(enabled=False, size=(1600, 1200)),
         ocr=OcrConfig(
             lang="deu", tessdata_path="/opt/tess data",
             psm=10, whitelist="ABC/-\\", upscale=6.5,
@@ -276,7 +277,7 @@ def test_a_config_full_of_bytes_that_are_not_text_is_reported(tmp_path):
     ("app", "change_tolerance", "6", 6),
     ("ocr", "whitelist", " ABC ", "ABC"),
     ("ocr", "sharpen_ladder", "[[0.0, 0.0], [0.5, 1.0]]", [[0.0, 0.0], [0.5, 1.0]]),
-    ("display", "window_size", "[1400, 1000]", [1400, 1000]),
+    ("window_management", "size", "[1600, 1200]", [1600, 1200]),
     ("ocr", "tessdata_path", "", None),
 ])
 def test_form_values_parse(section, key, text, expected):
@@ -421,3 +422,67 @@ def test_a_string_with_quotes_and_backslashes_survives(tmp_path):
     path = tmp_path / "config.toml"
     configio.save(path, document, backup=False)
     assert load_config(path).display("pfd").window_title == 'C:\\X-Plane "12"\ta\nb'
+
+
+# -- a section the writer forgets ------------------------------------------
+#
+# `document_from_config` builds the document a section at a time, and a
+# section left out of it does not fail anything on its own: the daemon's own
+# loader fills the absent table in from the dataclass defaults, so the
+# round-trip test above still passes. What breaks is the form. It fills each
+# box from the document, an absent key reads as None, and None as a bool is
+# False -- so a defaulted-on setting is drawn switched off, and the next Save
+# writes that back as `false`. [window_management] shipped that way for the
+# length of one screenshot: the box said off, and saving would have turned the
+# feature off for a user who never touched it.
+
+
+def _whole_config_sections():
+    """The sections that exist once, not once per display."""
+    return [s for s in schema.BY_SECTION if s not in ("display", "geometry")]
+
+
+@pytest.mark.parametrize("section", _whole_config_sections())
+def test_every_whole_config_section_reaches_the_document(section):
+    document = configio.default_document()
+    assert section in document, (
+        f"[{section}] is in the form but not in document_from_config, so its boxes "
+        "will show as empty or off and Save will write those values back"
+    )
+    described = {
+        setting.key for setting in schema.BY_SECTION[section].settings
+        # Deliberately absent: an empty key means "the file the package ships".
+        if not setting.package_default
+    }
+    assert described <= set(document[section]), (
+        f"{sorted(described - set(document[section]))} missing from [{section}]"
+    )
+
+
+@pytest.mark.parametrize("section", _whole_config_sections())
+def test_no_default_in_the_document_reads_as_off_when_it_is_not(section):
+    """The specific symptom, stated as the property it violates."""
+    document = configio.default_document()
+    for setting in schema.BY_SECTION[section].settings:
+        if setting.kind != "bool":
+            continue
+        expected = schema.default_value(section, setting)
+        assert document[section][setting.key] == expected, (
+            f"{section}.{setting.key} defaults to {expected} but the form would show "
+            f"{document[section].get(setting.key)!r}"
+        )
+
+
+def test_window_management_round_trips_off_its_defaults(tmp_path):
+    from g1000_softkey.config import WindowManagementConfig
+
+    config = AppConfig(
+        displays=default_config().displays,
+        window_management=WindowManagementConfig(enabled=False, size=(1600, 1200)),
+    )
+    path = tmp_path / "config.toml"
+    configio.save(path, configio.document_from_config(config), backup=False)
+
+    loaded = load_config(path).window_management
+    assert loaded.enabled is False
+    assert loaded.size == (1600, 1200)

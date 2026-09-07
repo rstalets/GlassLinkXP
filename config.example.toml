@@ -22,6 +22,51 @@ change_gating = true
 # Per-pixel intensity difference that counts as a change (0..255).
 change_tolerance = 6
 
+# --- the pop-out windows ---------------------------------------------------
+# Whether the daemon opens, sizes and places the PFD and MFD pop-outs itself.
+# On unless you turn it off, because the alternative is a pre-flight routine
+# that fails quietly: a window that was never popped out, or one with the
+# taskbar across the bottom of it, reads as no labels rather than as an error.
+#
+# When it is on, before capture starts -- and again the moment a pop-out is
+# closed, which the capture reports on its own -- it:
+#   * fires sim/GPS/g1000n1_popout / g1000n3_popout for any display whose
+#     window is not open -- note _popout, not _popup: the popup opens the panel
+#     inside the X-Plane window, where it cannot be captured;
+#   * sizes the client area to `size` below;
+#   * puts it in the top-left corner of the monitor X-Plane is running on,
+#     which is the corner the taskbar is least likely to sit over.
+#
+# Only the displays named `pfd` and `mfd` are managed -- those are the ones
+# X-Plane has pop-out commands for. Anything else is left alone.
+#
+# It needs X-Plane's web API reachable to fire the commands, i.e. the same
+# [publish] base_url below, and X-Plane's Settings -> Network -> Web API on.
+
+[window_management]
+enabled = true
+# The client size the pop-outs are set to, as [width, height].
+#
+# MUST BE 4:3. The G1000 draws a 4:3 panel and the geometry below is stored as
+# fractions of the window, so a window of any other shape moves the softkey
+# strip out from under your calibration -- which shows up as labels that will
+# not read, a long way from this line. Anything that is not 4:3 is refused,
+# with a warning, and 1280x960 used instead.
+#
+# 1280x960 by default: the G1000 renders to a 1024x768 texture, so this is
+# comfortably above the point where detail is thrown away before capture sees
+# it, and going much larger only interpolates.
+size = [1280, 960]
+
+# Turning this off leaves the windows entirely to you -- the daemon then only
+# captures whatever it finds, at whatever size and wherever you put it. That is
+# the setting to use if a pop-out is feeding external avionics hardware, a
+# RealSimGear G1000 unit for instance, where its size and position are part of
+# a physical setup and are not this daemon's to change.
+#
+# This is the only place a pop-out's size is set, and the only thing in the
+# daemon that moves a window at all.
+
 # --- displays --------------------------------------------------------------
 # One section per captured window. `key` is the table name and also the
 # dataref prefix: g1000/softkey/<key>/1..12
@@ -39,26 +84,6 @@ change_tolerance = 6
 window_title = "G1000 PFD"
 enabled = true
 # dataref_prefix = "g1000/softkey/pfd"   # defaults to g1000/softkey/<key>
-# Whether this daemon may resize the pop-out window at all. Off by default,
-# and deliberately: a pop-out may be feeding external avionics hardware -- a
-# RealSimGear G1000 unit, for instance -- where its size and position are part
-# of a physical setup. Breaking somebody's panel to make our OCR marginally
-# easier is not a trade to make silently. Both displays decide independently.
-# manage_window_size = true
-#
-# Client size to force the pop-out to, as [width, height]. Only applied when
-# manage_window_size is true above.
-#
-# The G1000 renders to a 1024x768 texture, so a pop-out whose *display area* is
-# smaller than that discards real detail before capture ever sees it -- and the
-# softkey glyphs are already marginal for OCR at around 10 px tall. The pop-out
-# includes the bezel, so the window has to be larger than 1024x768 for the
-# display area itself to reach it; find the number with one calibrate pass.
-# Growing beyond that only interpolates and will not help.
-#
-# Geometry below is fractional, so resizing does not invalidate calibration.
-# Omit to leave the window alone.
-# window_size = [1400, 1000]
 
 [display.pfd.geometry]
 x = 0.050      # left edge of the softkey strip

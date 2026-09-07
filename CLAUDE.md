@@ -47,9 +47,12 @@ also the only way to stop the daemon with a signal it handles: `cmd_run` calls
 
 ```
 g1000_softkey/
-  main.py       CLI: run, gui, list-windows, calibrate, dump-cells, dump-colors,
-                     bench, screen-template, tune, synth
+  main.py       CLI: run, gui, list-windows, manage-windows, calibrate,
+                     dump-cells, dump-colors, bench, screen-template, tune, synth
   capture.py    Windows Graphics Capture, plus a PNG backend for offline work
+  windowmgr.py  opens/sizes/places the PFD and MFD pop-outs; the Windows calls
+                are injectable, so the policy is tested without Windows
+  command.py    fires X-Plane commands over the web API (the pop-out commands)
   strip.py      strip crop, 12-cell split, per-cell preprocessing
   ocr.py        Tesseract, label vocabulary, CellResult
   color.py      border-ring sampling, HSV background classification
@@ -134,10 +137,33 @@ frame, because a softkey becoming selected changes the background while leaving
 the label identical -- so anything cheap that must not miss that case belongs
 outside the gate too.
 
-**Windows-only paths cannot be tested here**: capture, window enumeration and
-resizing, the installer scripts, anything touching a live X-Plane, and three
-things in the GUI -- `pythonw.exe`, `CTRL_BREAK_EVENT` as the way Stop reaches
-the daemon, and `os.startfile`.
+**Windows-only paths cannot be tested here**: capture, window enumeration,
+resizing and placement, the installer scripts, anything touching a live
+X-Plane, and three things in the GUI -- `pythonw.exe`, `CTRL_BREAK_EVENT` as
+the way Stop reaches the daemon, and `os.startfile`.
+
+**Only `[window_management]` sizes or moves a window, and nothing else does at
+all.** Opening a capture finds its window and changes nothing about it. There
+was briefly a per-display `manage_window_size` / `window_size` beside it, and
+two settings fixing one window's size needs a rule about which wins -- making
+the loser a setting that is quietly ignored, which is how the Settings form
+came to draw a tickbox that did nothing. If you are about to add a second way
+to size a window, don't.
+
+**A frame from a closed window is not a frame.** `_LatestFrame` goes empty for
+good once the capture reports `on_closed`, and `run` treats that as "reopen the
+pop-out and build a new source" -- a WGC session does not outlive its window,
+so there is nothing to reconnect. It shipped without that rule and the bug hid
+itself completely: the slot kept serving the last frame of a closed pop-out, so
+the labels froze where they were, the starved-display warning never fired
+because frames were still arriving, and the recovery never ran. If you are
+tempted to serve a cached frame when a source has nothing, this is why not.
+
+**A window's size and its position are measured from different rectangles.**
+`WindowInfo.width/height` is the *client* area, because that is what capture
+sees; `WindowInfo.x/y` is the *window* origin, because that is the corner
+Windows positions by. The difference is the frame, which `_set_window`
+measures rather than assumes. Do not "fix" them into agreement.
 
 **Any code that parses another module's output is a coupling, and every one
 needs a test that builds its input by calling the real producer.** Never a
@@ -156,7 +182,8 @@ None of these couplings is visible to the type checker:
 | --- | --- |
 | a subcommand or a flag in `main.py` | `test_gui_commands.py` -- every argv the GUI can build is parsed by `build_parser()`, and it asserts the GUI covers every subcommand |
 | what `_format_row` prints | `test_gui_logparse.py` -- it formats a `DisplayResult` and parses it back |
-| `WindowInfo.__str__` | `test_gui_logparse.py` -- `parse_window` is fed a formatted `WindowInfo`, over quoting, backslashes and non-ASCII |
+| `WindowInfo.__str__` | `test_gui_logparse.py` -- `parse_window` is fed a formatted `WindowInfo`, over quoting, backslashes, non-ASCII, and the negative screen coordinates a monitor left of or above the primary is addressed by |
+| which displays `manage_windows` reports as managed | `test_capture.py` -- `sources_for` must not resize a window window management already sized |
 | what `calibrate`, `dump-colors`, `screen-template` or `tune` print | `test_gui_logparse.py` -- `parse_calibration` / `parse_colors` / `parse_screen_block` / `parse_tuning_result` are fed the real commands' output over synthetic frames or a scripted search |
 | the shape of a `tune --truth` file | `test_tuning.py` -- the GUI's `configio.dumps_truth` (which cannot import `tuning.py`: that pulls in cv2 and Tesseract, and the GUI must never run the pipeline in its own process) is fed through the real `tuning.load_truth` |
 | a field on any config dataclass | `test_gui_schema.py` -- a field must be in `gui/schema.py` or in `NOT_IN_THE_FORM` with a reason |
@@ -208,6 +235,7 @@ commit, not afterwards.
 | if you change | also update |
 | --- | --- |
 | a pipeline stage, or the order of stages | the flowcharts in `docs/PIPELINE.md` |
+| how the pop-out windows are opened, sized or placed | the *Managing the pop-out windows* flowchart and rationale in `docs/PIPELINE.md`, and the `[window_management]` block in `config.example.toml` |
 | anything printed by `-v` | the "Reading the debug output" table in `docs/PIPELINE.md` |
 | a config setting, or its default | `gui/schema.py` (the help text is the documentation), then regenerate `docs/CONFIGURATION.md` -- a test fails until you do -- and `config.example.toml` |
 | a CLI subcommand or flag | the command list in `CLAUDE.md` and the relevant `README.md` section, and `gui/commands.py` -- `test_gui_commands.py` fails until the GUI covers it |

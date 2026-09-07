@@ -70,7 +70,7 @@ bar with a count and the traceback kept on the app (`poll_failures`,
 | --- | --- | --- |
 | Start here | `synth` | The six steps of setting this up, each with a button to the tab that does it. And a way to try the whole thing with no X-Plane. |
 | Run | `run` | Start/stop, the publisher, the rate, debug output, and a live board of the twelve softkeys per display. |
-| Find windows | `list-windows` | Pick the pop-out windows off a list; applying one writes `window_title` into the config. Windows only. |
+| Find windows | `list-windows`, `manage-windows` | Pick the pop-out windows off a list; applying one writes `window_title` into the config. Only X-Plane's own windows are listed unless *Show every window* is ticked. *Set up pop-outs* opens, sizes and places the PFD and MFD, then lists again -- what you are here to do is pick a window, and the ones worth picking are the ones that now exist. Windows only. |
 | Calibrate | `calibrate` | Draw the strip on the captured frame with the mouse, judge it in a magnified close-up, and work through three steps. The MFD copies the PFD unless told otherwise. See below. |
 | Cells | `dump-cells`, `tune` | Every cell as Tesseract receives it, next to the raw crop. Type what a cell should read, queue the page, repeat on other pages, then Run tuning searches sharpening/upscale/threshold settings that fix a queued cell without breaking another. See below. |
 | Colours | `dump-colors` | Each cell's ring BGR/HSV and how it classified, with the rows drawn in the colour they were called. |
@@ -280,7 +280,7 @@ change to either fails the suite rather than the user's window:
 | --- | --- | --- |
 | the argv every button builds | `main.build_parser()` | `tests/test_gui_commands.py` parses every possible argv with the real parser, and asserts the GUI covers every subcommand the CLI has |
 | the daemon's `[pfd] 1:INSET \| ...` log rows | `main._format_row()` | `tests/test_gui_logparse.py` formats a `DisplayResult` with `_format_row` and parses it back |
-| the `list-windows` lines the Find windows tab lists | `capture.WindowInfo.__str__()` | `tests/test_gui_logparse.py` formats a real `WindowInfo` and parses it back, over titles with quotes, backslashes and non-ASCII in them |
+| the `list-windows` lines the Find windows tab lists | `capture.WindowInfo.__str__()` | `tests/test_gui_logparse.py` formats a real `WindowInfo` and parses it back, over titles with quotes, backslashes and non-ASCII in them, and over the negative screen coordinates a second monitor is addressed by |
 | what `calibrate`, `dump-colors` and `screen-template` print | `main.cmd_calibrate` / `cmd_dump_colors` / `cmd_screen_template` | `tests/test_gui_logparse.py` runs each command over the synthetic frames and parses exactly what it printed |
 | the `[tuning_result]` block `tune` prints | `tuning.result_block` | `tests/test_gui_logparse.py` and `tests/test_tuning.py` both round-trip it through the real TOML parser |
 | every config setting | the dataclasses in `config.py` | `tests/test_gui_schema.py` fails if a field is neither in `gui/schema.py` nor in `NOT_IN_THE_FORM` with a reason |

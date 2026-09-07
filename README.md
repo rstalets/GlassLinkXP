@@ -31,10 +31,13 @@ surface remain unexercised, and that section says which.
 
 ```
 g1000_softkey/
-  main.py       CLI: run | gui | list-windows | calibrate | dump-cells
-                     | dump-colors | bench | screen-template | tune | synth
+  main.py       CLI: run | gui | list-windows | manage-windows | calibrate
+                     | dump-cells | dump-colors | bench | screen-template
+                     | tune | synth
   gui/          the window: one tab per command, over the same CLI (see docs/GUI.md)
   capture.py    WGC backend (Windows) + PNG backend (offline dev/test)
+  windowmgr.py  opens, sizes and places the PFD/MFD pop-outs
+  command.py    fires X-Plane commands over the web API (the pop-out commands)
   strip.py      strip crop, 12-cell split, per-cell preprocessing, auto-detect
   ocr.py        persistent Tesseract API, char whitelist, vocabulary snapping
   color.py      cell background -> black / white / yellow / red, + text colour
@@ -251,12 +254,26 @@ everything the window does regardless.
 The strip geometry depends on the pop-out window size and bezel, so it is
 expressed as *fractions* of the client area and has to be set once per setup.
 
-1. Pop the PFD and MFD out into their own windows in X-Plane.
+1. Start X-Plane. You do **not** need to pop the displays out by hand:
+   `[window_management]` is on by default, so the daemon fires
+   `sim/GPS/g1000n1_popout` and `sim/GPS/g1000n3_popout` for any display whose
+   window is not already open, sizes each to 1280x960 and puts it in the
+   top-left corner of the monitor X-Plane is on. Do it on demand with:
+   ```
+   .\g1000 -c config.toml manage-windows
+   ```
+   That needs X-Plane's web server on (Settings → Network → Web API), the same
+   one publishing uses. Turn the whole thing off with `enabled = false` under
+   `[window_management]` if you would rather place the windows yourself --
+   which is the right call if a pop-out is feeding avionics hardware whose
+   size and position are part of a physical setup.
 2. Find the window titles:
    ```
    .\g1000 list-windows
    ```
-   Copy a distinctive substring of each title into `window_title` under
+   This lists only windows of class `X-System`, which is what X-Plane's own
+   windows carry; add `--all` to see everything on the desktop. Copy a
+   distinctive substring of each title into `window_title` under
    `[display.pfd]` / `[display.mfd]` in your `config.toml` (copy
    `config.example.toml` to start).
 3. Dump the calibration images and a suggested geometry:
@@ -415,6 +432,13 @@ Settings tab shows beside each field.
 | --- | --- |
 | `no visible window title contains ...` | The display is not popped out, or the title differs. Run `list-windows`. |
 | `list-windows` errors on Linux/macOS | Expected; the capture path is Windows-only. Use `--image`. |
+| `list-windows` shows fewer windows than you expect | Only X-Plane's own windows (class `X-System`) are listed. Add `--all`, or tick *Show every window*. |
+| `X-Plane has no command called 'sim/GPS/g1000n1_popout'` | The message lists the `g1000n1` commands the sim does have; if the name has changed, turn `[window_management]` off and pop the displays out by hand. |
+| `... was accepted but no window titled like 'G1000 PFD' appeared` | The pop-out opened under a title `window_title` does not match. Run `list-windows --all` and copy the real one. |
+| Window management does nothing, and says X-Plane is not running | It looks for a window of class `X-System`. If the sim is up and this still says otherwise, `list-windows --all` will show what class its windows actually carry. |
+| A pop-out ends up smaller than `size` | X-Plane enforces a minimum on pop-out windows; the log says what it settled at. Re-check the strip geometry against that size. |
+| Labels froze and stopped following the sim | The pop-out was closed. With `[window_management]` on it is reopened within a cycle and the log says so; with it off, `no frames from ... after 3s` is the warning to look for. |
+| A pop-out you closed on purpose keeps coming back | That is window management doing its job. Set `enabled = false` under `[display.mfd]` to leave that display out of it, or turn `[window_management]` off entirely. |
 | `could not initialise Tesseract` / `tesseract executable was not found` | `TESSDATA_PREFIX` is unset or wrong. Point `ocr.tessdata_path` at the directory holding `eng.traineddata`. |
 | `X-Plane Web API unreachable` | X-Plane is not running, is older than 12.1.1, or the web server is off. The daemon keeps retrying; it never crashes the loop. |
 | `ModuleNotFoundError: No module named 'numpy'` | The venv is not active, so a system Python is running. `.venv\Scripts\Activate.ps1` (PowerShell), or call `.venv\Scripts\python.exe` directly. |
@@ -505,6 +529,29 @@ On Linux/CPython 3.11, Tesseract 5.3.4 (system) with `tesserocr` 2.11:
   frame costs ~0.4 ms. At 4 Hz that is well under the "5% of one core"
   target once the labels are stable. (`capture_ms` in the bench output is PNG
   decode for the offline source, not Windows Graphics Capture.)
+* Window management's decisions, driven through injected Windows operations
+  (`tests/test_windowmgr.py`, 30 cases): a switched-off feature does not so
+  much as enumerate the desktop; a desktop with no X-Plane on it is left alone
+  rather than having commands fired into it; windows already the right size in
+  the right corner are not touched, and a second pass over the first pass's
+  work changes nothing; each display gets its own command; a window opened for
+  one display is seen by the next rather than popped out again; the target
+  corner comes from X-Plane's monitor and not the pop-out's own; the main
+  window is picked out from among same-class windows by elimination and size;
+  and a command that fails, or that opens nothing, is reported rather than
+  raised. The command client refuses to activate anything whose name it did
+  not match exactly, which is what stops an X-Plane too old for `filter[name]`
+  -- it answers with the *whole* command list -- from having an arbitrary
+  command fired in somebody's cockpit.
+* The frame slot the capture thread writes into (`tests/test_capture.py`): the
+  newest frame wins, what comes out is a copy, and a slot whose window has
+  closed has no frame to give even though one was captured -- permanently,
+  because a WGC session does not outlive its window. Shutting down is kept
+  distinct from losing the window: both stop frames, only one invalidates the
+  last one. Plus the reopen decision itself (`tests/test_main.py`): a lost
+  capture is replaced whether management reopened the window or found it
+  already back, nothing is rebuilt when the window could not be brought back,
+  and neither `--image` nor window management switched off reopens anything.
 * Vocabulary snapping fixed 1 of 49 labels in the offline corpus
   (`TMRIREF` -> `TMR/REF`), and is unit-tested against the usual confusions
   (`lNSET`, `DCLTP`, `0BS`, `STDBARO`).
@@ -585,6 +632,42 @@ The following code paths are written from the documented APIs but have
   vs 11, and capture of an occluded X-Plane pop-out are all unexercised.
 * **`list_windows()` / `find_window()`** (ctypes `user32` enumeration). The
   non-Windows error path is tested; the Windows path is not.
+* **Window management, everywhere it touches Windows or the sim.** The
+  decisions are covered offline -- `tests/test_windowmgr.py` drives the whole
+  policy through injected operations, so which window counts as missing, which
+  command that means firing, whose monitor the result belongs on and what a
+  failure reports are all exercised on Linux. None of the following is:
+  * **That the pop-out commands are named what this thinks.**
+    `sim/GPS/g1000n1_popout` and `sim/GPS/g1000n3_popout` come from published
+    command references, not from a sim anyone here has queried. The nearby
+    `_popup` commands open the panel *inside* X-Plane's window, where it
+    cannot be captured, so the difference matters. A name that does not
+    resolve is reported along with the `g1000n1`/`g1000n3` commands the sim
+    does list, so the failure says what the right name is rather than only
+    that this one was wrong.
+  * **That the commands are momentary rather than toggles.** They are fired
+    only for a window that is not open, so a toggle would still behave; but
+    nothing here has established which they are.
+  * **That every X-Plane window carries the class `X-System`.** That is the
+    user's observation on a running sim, not something Laminar documents. It
+    only ever filters a listing and picks the anchor window -- `--all` shows
+    everything, and no part of the pipeline depends on it -- but if it is
+    wrong on some build, `list-windows` will look empty until `--all` is used.
+  * **`SetWindowPos`, `MonitorFromWindow` and `GetMonitorInfoW`.** Including
+    whether a pop-out's client area really lands at the requested size, what
+    X-Plane's minimum pop-out size actually is, and how any of it behaves
+    under per-monitor DPI scaling, where the coordinates a process sees are
+    not necessarily physical pixels.
+  * **That placing a window at the monitor's origin keeps the taskbar off
+    it.** The premise -- that an occluding taskbar breaks the capture -- is
+    the user's observation, and the fix follows from it rather than from
+    anything measured here.
+  * **The reopen path end to end.** That a closed pop-out is noticed is no
+    longer in doubt: `windows-capture` was seen calling `on_closed` on a real
+    run, which is the signal the whole recovery hangs off. What has not been
+    seen is the rest of it -- the pop-out command going out, the window coming
+    back, and a new capture attaching to it. The decision to rebuild, and every
+    way it can decline to, are covered in `tests/test_main.py`.
 * **The details of the X-Plane API clients.** Whether X-Plane accepts a write
   to a plugin-created Data dataref was PLAN.md's open question, and it is
   answered: both the WebSocket and the REST publisher have been seen updating

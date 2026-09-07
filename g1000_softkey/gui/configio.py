@@ -105,11 +105,8 @@ def document_from_config(config: AppConfig) -> dict[str, Any]:
             "window_title": display.window_title,
             "enabled": display.enabled,
             "dataref_prefix": display.dataref_prefix,
-            "manage_window_size": display.manage_window_size,
             "geometry": dict(display.geometry.as_dict()),
         }
-        if display.window_size is not None:
-            entry["window_size"] = list(display.window_size)
         document["display"][display.key] = entry
     document["ocr"] = {
         setting.key: _plain(getattr(config.ocr, setting.key))
@@ -123,6 +120,11 @@ def document_from_config(config: AppConfig) -> dict[str, Any]:
     document["publish"] = {
         key: getattr(config.publish, key)
         for key in (setting.key for setting in schema.PUBLISH.settings)
+    }
+    # _plain because the size is held as a tuple and TOML has only arrays.
+    document["window_management"] = {
+        key: _plain(getattr(config.window_management, key))
+        for key in (setting.key for setting in schema.WINDOW_MANAGEMENT.settings)
     }
     return document
 

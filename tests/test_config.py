@@ -93,83 +93,6 @@ def test_bad_loop_rate():
         from_mapping({"app": {"loop_hz": 0}})
 
 
-# ---------------------------------------------------------------------------
-# window_size: forcing the pop-out larger so the capture has more pixels
-# ---------------------------------------------------------------------------
-
-
-def test_window_size_is_read_as_a_tuple(tmp_path):
-    """TOML gives a list; the frozen config needs a tuple."""
-    path = tmp_path / "config.toml"
-    path.write_text(
-        '[display.pfd]\nwindow_title = "G1000 PFD"\nwindow_size = [1400, 1000]\n',
-        encoding="utf-8",
-    )
-    config = load_config(path)
-    assert config.display("pfd").window_size == (1400, 1000)
-
-
-def test_window_size_defaults_to_none_so_nothing_is_resized(tmp_path):
-    path = tmp_path / "config.toml"
-    path.write_text('[display.pfd]\nwindow_title = "G1000 PFD"\n', encoding="utf-8")
-    assert load_config(path).display("pfd").window_size is None
-
-
-@pytest.mark.parametrize("value", ["1400", "[1400]", "[1400, 1000, 900]"])
-def test_a_malformed_window_size_is_rejected_with_the_display_named(tmp_path, value):
-    path = tmp_path / "config.toml"
-    path.write_text(f"[display.pfd]\nwindow_size = {value}\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match="display.pfd.window_size"):
-        load_config(path)
-
-
-def test_window_size_alone_does_not_authorise_resizing(tmp_path):
-    """Off by default: a pop-out may be driving external avionics hardware."""
-    path = tmp_path / "config.toml"
-    path.write_text(
-        '[display.pfd]\nwindow_title = "G1000 PFD"\nwindow_size = [1400, 1000]\n',
-        encoding="utf-8",
-    )
-    display = load_config(path).display("pfd")
-    assert display.window_size == (1400, 1000)
-    assert display.manage_window_size is False
-
-
-def test_resizing_happens_only_when_explicitly_enabled(tmp_path):
-    path = tmp_path / "config.toml"
-    path.write_text(
-        '[display.pfd]\nwindow_title = "G1000 PFD"\n'
-        "window_size = [1400, 1000]\nmanage_window_size = true\n",
-        encoding="utf-8",
-    )
-    assert load_config(path).display("pfd").manage_window_size is True
-
-
-def test_managing_the_size_without_a_size_is_rejected(tmp_path):
-    """Otherwise it silently does nothing and looks like a resize that failed."""
-    path = tmp_path / "config.toml"
-    path.write_text(
-        '[display.pfd]\nwindow_title = "G1000 PFD"\nmanage_window_size = true\n',
-        encoding="utf-8",
-    )
-    with pytest.raises(ConfigError, match="no window_size is set"):
-        load_config(path)
-
-
-def test_displays_decide_independently(tmp_path):
-    """One display can drive hardware while the other is ours to resize."""
-    path = tmp_path / "config.toml"
-    path.write_text(
-        '[display.pfd]\nwindow_title = "PFD"\n'
-        "window_size = [1400, 1000]\nmanage_window_size = true\n"
-        '[display.mfd]\nwindow_title = "MFD"\n',
-        encoding="utf-8",
-    )
-    config = load_config(path)
-    assert config.display("pfd").manage_window_size is True
-    assert config.display("mfd").manage_window_size is False
-
-
 def test_the_field_width_agrees_with_the_plugin():
     """The width is fixed in three places; two of them are in this repo.
 
@@ -199,3 +122,40 @@ def test_the_field_width_agrees_with_the_plugin():
 
     assert plugin.FIELD_WIDTH == PublishConfig().field_width
     assert plugin.FIELD_WIDTH == load_config(EXAMPLE).publish.field_width
+
+
+# -- window management ------------------------------------------------------
+
+
+def test_window_management_is_on_by_default_at_a_four_by_three_size():
+    config = default_config()
+    assert config.window_management.enabled is True
+    assert config.window_management.size == (1280, 960)
+
+
+def test_window_management_is_read_from_its_own_table():
+    config = from_mapping({
+        "window_management": {"enabled": False, "size": [1600, 1200]},
+    })
+    assert config.window_management.enabled is False
+    assert config.window_management.size == (1600, 1200)
+
+
+def test_a_size_from_toml_arrives_as_a_tuple():
+    """TOML gives a list; the config is frozen and has to stay hashable."""
+    config = from_mapping({"window_management": {"size": [1024, 768]}})
+    assert config.window_management.size == (1024, 768)
+
+
+def test_a_size_that_is_not_four_by_three_is_refused_rather_than_used(caplog):
+    """And says so: a silently ignored setting is worse than a rejected one.
+
+    The strip geometry is fractions of the window, so a pop-out of the wrong
+    shape moves the softkey strip out from under the calibration -- which shows
+    up as labels that will not read, a long way from the setting that caused it.
+    """
+    with caplog.at_level("WARNING"):
+        config = from_mapping({"window_management": {"size": [1920, 1080]}})
+
+    assert config.window_management.size == (1280, 960)
+    assert "4:3" in caplog.text

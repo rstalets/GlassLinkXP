@@ -41,6 +41,23 @@ Compare each cell against the previous frame and only re-read the ones whose pix
 How much a pixel has to move (0-255) to count as changed. Too low and anti-aliasing noise re-reads every frame; too high and a real change is missed.
 
 
+## Pop-out windows — `[window_management]`
+
+Whether the daemon opens, sizes and positions the PFD and MFD pop-outs itself. On, this replaces a pre-flight routine that fails quietly when you get it wrong: a window that was never popped out, or one with the taskbar over the bottom of it, reads as no labels rather than as an error.
+
+### `enabled`
+
+*Manage the pop-out windows* — true or false. Default: `true`.
+
+Pops out the PFD and MFD if they are not already open, sizes them, and puts them in the top-left corner of the monitor X-Plane is on. Only the displays named 'pfd' and 'mfd' are managed, because those are the ones X-Plane has pop-out commands for. It also puts a pop-out back if you close one while the daemon is running. Turn it off to place the windows yourself -- which is the right call if a pop-out is feeding avionics hardware, where its size and position are part of a physical setup. Nothing else in the daemon sizes or moves a window.
+
+### `size`
+
+*Pop-out size* — a TOML value. Default: `[1280, 960]`.
+
+The client size the pop-outs are set to, as [width, height]. MUST BE 4:3: the G1000 draws a 4:3 panel, and the strip position is stored as fractions of the window, so a window of any other shape moves the softkey strip out from under your calibration. Anything else falls back to 1280x960, which is comfortably above the 1024x768 the G1000 is drawn at, so the labels are not downsampled before they are read.
+
+
 ## Window — `[display.<name>]`
 
 Which window this display is captured from.
@@ -62,18 +79,6 @@ A distinctive part of the pop-out window's title, matched case insensitively. Us
 *Dataref prefix* — text (a path or a name). Default: `'g1000/softkey/<name>'`. Leave it out to leave it unset.
 
 Where the labels are published. Leave empty for g1000/softkey/<name>. Changing it means re-editing every Stream Deck button.
-
-### `manage_window_size`
-
-*Let the daemon resize this window* — true or false. Default: `false`.
-
-Off by default, and deliberately: a pop-out may be feeding external avionics hardware where its size and position are part of a physical setup, and breaking that to make OCR marginally easier is not a trade to make silently.
-
-### `window_size`
-
-*Resize to* — a TOML value. Default: not set. Leave it out to leave it unset.
-
-The client size to force the window to, as [width, height]. Only used when the box above is ticked. The G1000 renders to a 1024x768 texture, so a smaller display area throws detail away before capture sees it -- but the pop-out includes the bezel, so the window has to be bigger than that. Find the number with one calibration pass.
 
 
 ## Softkey strip position — `[display.<name>.geometry]`

@@ -264,3 +264,170 @@ def test_gui_refuses_a_config_file_that_is_broken_rather_than_absent(monkeypatch
 
 def test_every_other_command_still_refuses_a_missing_config(tmp_path):
     assert main(["-c", str(tmp_path / "nope.toml"), "synth", "--out", str(tmp_path)]) == 2
+
+
+# -- reopening a pop-out the user closed ------------------------------------
+#
+# The capture backend reports its window closing, and with window management
+# on that is enough to act on: reopen the window and build a new capture on
+# it. There is no polling for this -- the signal arrives on its own, and the
+# only interval involved paces a reopen that failed.
+
+
+class _LostSource:
+    """A capture whose window has gone, which is what WgcCapture reports."""
+
+    def __init__(self, name="wgc:gone", window_closed=True):
+        self.name = name
+        self.window_closed = window_closed
+        self.closed = False
+
+    def grab(self):
+        return None
+
+    def close(self):
+        self.closed = True
+
+
+def _report(managed=("pfd",), opened=()):
+    from g1000_softkey.windowmgr import DisplayOutcome, Report
+
+    return Report(
+        outcomes=tuple(
+            DisplayOutcome(key, "opened" if key in opened else "already", "detail")
+            for key in managed
+        ),
+        xplane_running=True,
+    )
+
+
+@pytest.fixture
+def reopening(monkeypatch):
+    """Window management and source building, both stood in for."""
+    calls = {"managed": 0, "built": []}
+
+    def fake_manage(config, *a, **kw):
+        calls["managed"] += 1
+        return calls["report"]
+
+    def fake_sources_for(displays, image, managed=frozenset()):
+        calls["built"].append([d.key for d in displays])
+        return {d.key: _LostSource(name=f"wgc:new-{d.key}", window_closed=False)
+                for d in displays}
+
+    calls["report"] = _report()
+    monkeypatch.setattr(main_module.windowmgr, "manage_windows", fake_manage)
+    monkeypatch.setattr(main_module, "sources_for", fake_sources_for)
+    return calls
+
+
+def _config(enabled=True):
+    from g1000_softkey.config import AppConfig, WindowManagementConfig
+
+    return AppConfig(
+        displays=(DisplayConfig(key="pfd", window_title="G1000 PFD"),),
+        window_management=WindowManagementConfig(enabled=enabled),
+    )
+
+
+def test_a_closed_window_is_reopened_and_captured_again(reopening):
+    config = _config()
+    old = _LostSource()
+    sources = {"pfd": old}
+
+    main_module._reopen_closed(config, None, config.display("pfd"), sources)
+
+    assert reopening["managed"] == 1
+    assert sources["pfd"] is not old, "a dead capture cannot be reconnected"
+    assert sources["pfd"].name == "wgc:new-pfd"
+    assert old.closed, "and the old one has to be released"
+
+
+def test_a_window_the_user_reopened_themselves_is_recaptured_too(reopening):
+    """Management finds it already there, so nothing is 'opened' -- but the
+    capture attached to the window that was closed is dead regardless."""
+    reopening["report"] = _report(managed=("pfd",), opened=())
+    config = _config()
+    sources = {"pfd": _LostSource()}
+
+    main_module._reopen_closed(config, None, config.display("pfd"), sources)
+
+    assert sources["pfd"].name == "wgc:new-pfd"
+
+
+def test_nothing_is_rebuilt_when_the_window_could_not_be_brought_back(reopening):
+    """X-Plane has gone too, say. The retry interval covers trying again."""
+    reopening["report"] = _report(managed=())
+    config = _config()
+    old = _LostSource()
+    sources = {"pfd": old}
+
+    main_module._reopen_closed(config, None, config.display("pfd"), sources)
+
+    assert sources["pfd"] is old
+    assert not old.closed
+    assert reopening["built"] == []
+
+
+def test_window_management_switched_off_reopens_nothing(reopening):
+    config = _config(enabled=False)
+    old = _LostSource()
+    sources = {"pfd": old}
+
+    main_module._reopen_closed(config, None, config.display("pfd"), sources)
+
+    assert sources["pfd"] is old
+    assert reopening["managed"] == 0, "not even a look at the desktop"
+
+
+def test_an_image_run_reopens_nothing(reopening):
+    """There is no window behind --image, and no sim to fire commands at."""
+    config = _config()
+    old = _LostSource()
+    sources = {"pfd": old}
+
+    main_module._reopen_closed(config, "frames/pfd.png", config.display("pfd"), sources)
+
+    assert sources["pfd"] is old
+    assert reopening["managed"] == 0
+
+
+def test_the_run_loop_acts_on_a_closed_window_without_being_asked_to_look(monkeypatch):
+    """The wiring, not the policy: a lost source reaches _reopen_closed.
+
+    Checked through `main` rather than by reading the loop, because what makes
+    this feature work is that the check sits on the path every cycle takes --
+    a helper nothing calls would pass every test written about the helper.
+    """
+    seen = []
+    monkeypatch.setattr(
+        main_module, "_reopen_closed",
+        lambda config, image, display, sources: seen.append(display.key),
+    )
+    monkeypatch.setattr(
+        main_module, "_open_sources",
+        lambda config, image, managed=frozenset(): {
+            d.key: _LostSource(name=f"wgc:{d.key}") for d in config.active_displays
+        },
+    )
+
+    assert main(["run", "--once", "--publisher", "console"]) == 0
+    assert seen == ["pfd", "mfd"]
+
+
+def test_a_healthy_source_is_left_alone_by_the_run_loop(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        main_module, "_reopen_closed",
+        lambda config, image, display, sources: seen.append(display.key),
+    )
+    monkeypatch.setattr(
+        main_module, "_open_sources",
+        lambda config, image, managed=frozenset(): {
+            d.key: _LostSource(name=f"wgc:{d.key}", window_closed=False)
+            for d in config.active_displays
+        },
+    )
+
+    assert main(["run", "--once", "--publisher", "console"]) == 0
+    assert seen == []

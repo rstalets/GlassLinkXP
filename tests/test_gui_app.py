@@ -708,13 +708,19 @@ def test_the_next_drain_is_scheduled_even_if_the_reporting_fails(gui, monkeypatc
 
 
 def test_the_form_shows_a_field_for_every_setting(gui):
-    from g1000_softkey.gui import schema
+    """Counted off the layout table, not off a list of groups typed in here.
+
+    The groups used to be named in this test as well as in the tab, so both
+    had to be remembered when one was added -- and the failure, when neither
+    was, is a count that disagrees by a number rather than anything that says
+    which group is missing.
+    """
+    from g1000_softkey.gui import tabs
 
     settings = _tab(gui, "SettingsTab")
-    described = sum(len(group.settings) for group in
-                    (schema.APP, schema.OCR, schema.COLOR, schema.PUBLISH))
-    per_display = len(schema.DISPLAY.settings) + len(schema.GEOMETRY.settings)
-    assert len(settings._fields) == described + per_display * len(gui.display_keys())
+    once = sum(len(group.settings) for _page, group, _path in tabs.SETTINGS_PAGES)
+    per_display = sum(len(group.settings) for group in tabs.PER_DISPLAY_GROUPS)
+    assert len(settings._fields) == once + per_display * len(gui.display_keys())
 
 
 def test_editing_a_field_and_saving_writes_the_file(gui, tmp_path):
@@ -901,12 +907,24 @@ def test_the_raw_editor_shows_the_file_as_it_is_on_disk(gui, tmp_path):
 
 
 def test_the_window_list_is_parsed_and_can_be_applied(gui):
+    """Built from real WindowInfos, not from two lines typed into the test.
+
+    They were typed in, and went stale the moment the listing grew a column:
+    the sample still looked like a window list, so the test failed on the count
+    rather than on anything that told you the format had moved. Formatting the
+    real object is what the neighbouring test does, and it is why that one
+    survived the same change.
+    """
+    from g1000_softkey.capture import WindowInfo
+
+    listed = [
+        WindowInfo(hwnd=0x10F42, title="G1000 PFD (Cessna)", class_name="X-System",
+                   width=1288, height=832, pid=1234, x=0, y=0),
+        WindowInfo(hwnd=0x10F43, title="G1000 MFD (Cessna)", class_name="X-System",
+                   width=1288, height=832, pid=1234, x=1288, y=0),
+    ]
     windows = _tab(gui, "WindowsTab")
-    windows._parse(0, [
-        "2 of 40 visible top-level windows",
-        "  hwnd=0x00010F42 pid=1234   1288x832 class='X-Plane' title='G1000 PFD (Cessna)'",
-        "  hwnd=0x00010F43 pid=1234   1288x832 class='X-Plane' title='G1000 MFD (Cessna)'",
-    ])
+    windows._parse(0, ["2 of 40 visible top-level windows", *(f"  {w}" for w in listed)])
     rows = windows.tree.get_children()
     assert len(rows) == 2
     windows.tree.selection_set(rows[0])

@@ -130,3 +130,58 @@ def test_the_reference_gives_the_default_for_every_setting():
 
 def test_every_group_describes_a_real_config_table():
     assert set(schema.SECTION_CLASSES) == {g.section for g in schema.GROUPS}
+
+
+# -- and the form has to actually render them ------------------------------
+#
+# The coverage above says every setting is *described*. It does not say the
+# group holding it is ever put on a page, and those are different failures
+# with the same symptom: a setting nobody using the GUI can reach. The form
+# used to name each group in the body of `refresh`, so a group added to
+# GROUPS and forgotten there was fully documented, passed every test above,
+# and appeared nowhere in the window -- which is how [window_management]
+# arrived, and it was caught by looking at a screenshot. The layout is now a
+# table, and this is what reads it.
+
+
+def test_every_group_of_settings_is_rendered_somewhere_in_the_form():
+    tabs = pytest.importorskip("g1000_softkey.gui.tabs")
+
+    placed = {group for _page, group, _path in tabs.SETTINGS_PAGES}
+    placed |= set(tabs.PER_DISPLAY_GROUPS)
+    missing = [group.title for group in schema.GROUPS if group not in placed]
+    assert not missing, (
+        f"these groups are in schema.GROUPS but on no page of the form: {missing}. "
+        "Add them to tabs.SETTINGS_PAGES, or to tabs.PER_DISPLAY_GROUPS if they are "
+        "rendered once per display."
+    )
+
+
+def test_the_form_does_not_render_a_group_twice():
+    tabs = pytest.importorskip("g1000_softkey.gui.tabs")
+
+    groups = [group for _page, group, _path in tabs.SETTINGS_PAGES]
+    assert len(groups) == len(set(groups))
+    assert not set(groups) & set(tabs.PER_DISPLAY_GROUPS)
+
+
+def test_every_group_is_placed_on_a_page_that_exists():
+    tabs = pytest.importorskip("g1000_softkey.gui.tabs")
+
+    unknown = {page for page, _group, _path in tabs.SETTINGS_PAGES
+               if page not in tabs.SETTINGS_PAGE_NAMES}
+    assert not unknown, f"no such Settings page: {sorted(unknown)}"
+
+
+def test_each_group_reads_from_the_toml_table_it_documents():
+    """The path into the document has to be the section the schema names.
+
+    Pointed at the wrong table, a group renders perfectly and edits something
+    else -- or nothing, silently creating a section the daemon never reads.
+    """
+    tabs = pytest.importorskip("g1000_softkey.gui.tabs")
+
+    for _page, group, path in tabs.SETTINGS_PAGES:
+        assert path == (group.section,), (
+            f"{group.title} is read from {path} but documents [{group.section}]"
+        )
