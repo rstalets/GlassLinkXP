@@ -14,12 +14,12 @@ rem
 rem  For the window over all of it, use glasslinkxp-gui.cmd (or `glasslinkxp gui`).
 rem ---------------------------------------------------------------------------
 setlocal
-set "PY=%~dp0..\.venv\Scripts\python.exe"
+set "PY=%~dp0.venv\Scripts\python.exe"
 if not exist "%PY%" (
     echo(
     echo   No interpreter at %PY%
     echo(
-    echo   Run install.cmd in the folder above this one first.
+    echo   Run install.cmd first.
     echo(
     exit /b 1
 )

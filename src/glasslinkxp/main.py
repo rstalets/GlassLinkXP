@@ -685,22 +685,91 @@ def cmd_migrate_config(args: argparse.Namespace, config: AppConfig) -> int:
     example = tomllib.loads(example_path.read_text(encoding="utf-8"))
     merged, changes = configmigrate.reconcile(user, example)
 
-    if not changes.any:
+    if changes.any:
+        backup = path.with_suffix(path.suffix + ".bak")
+        shutil.copy2(path, backup)
+        path.write_text(tomli_w.dumps(merged), encoding="utf-8")
+
+        for added in changes.added:
+            print(f"  added   {added}")
+        for removed in changes.removed:
+            print(f"  removed {removed}")
+        for kept in changes.kept_untouched:
+            print(f"  kept    [{kept}] (not a setting this version reads -- left alone)")
+        print(f"updated {path}; the previous version is {backup.name}")
+    else:
         print(f"{path} is already up to date ({example_path.name})")
+
+    return _migrate_vocabulary(path, merged)
+
+
+def _migrate_vocabulary(config_path: Path, document: dict) -> int:
+    """Give the user their own labels.txt, and merge this version's into it.
+
+    The shipped vocabulary lives inside the package, which an update replaces
+    wholesale -- so a vocabulary edited in the Vocabulary tab, at its default
+    location, was being destroyed by the next update. The user's copy belongs
+    beside their config.toml, where the installer keeps it, and the config
+    points at it by a *relative* path so the file stays portable.
+    """
+    import tomli_w
+
+    from . import configmigrate
+    from .config import PACKAGE_DIR
+
+    shipped = PACKAGE_DIR / "labels.txt"
+    if not shipped.is_file():  # pragma: no cover - it ships with the package
+        LOG.error("the vocabulary this version ships is missing: %s", shipped)
+        return 2
+
+    root = config_path.parent
+    configured = str((document.get("ocr") or {}).get("labels_file") or "")
+    if configured and Path(configured).name != "labels.txt":
+        print(f"vocabulary: using your own file ({configured}) -- left alone")
         return 0
 
-    backup = path.with_suffix(path.suffix + ".bak")
-    shutil.copy2(path, backup)
-    path.write_text(tomli_w.dumps(merged), encoding="utf-8")
+    user_labels = root / "labels.txt"
+    snapshot = root / "labels.shipped.txt"
 
-    for added in changes.added:
-        print(f"  added   {added}")
-    for removed in changes.removed:
-        print(f"  removed {removed}")
-    for kept in changes.kept_untouched:
-        print(f"  kept    [{kept}] (not a setting this version reads -- left alone)")
-    print(f"updated {path}; the previous version is {backup.name}")
+    if not user_labels.is_file():
+        shutil.copy2(shipped, user_labels)
+        shutil.copy2(shipped, snapshot)
+        _point_config_at_labels(config_path, document, tomli_w)
+        print(f"vocabulary: your own copy is now {user_labels} (edit it in the Vocabulary tab)")
+        return 0
+
+    merged, changes = configmigrate.reconcile_labels(
+        user_labels.read_text(encoding="utf-8"),
+        shipped.read_text(encoding="utf-8"),
+        snapshot.read_text(encoding="utf-8") if snapshot.is_file() else None,
+    )
+    if changes.any:
+        shutil.copy2(user_labels, user_labels.with_suffix(".txt.bak"))
+        user_labels.write_text(merged, encoding="utf-8")
+        for label in changes.added:
+            print(f"  vocabulary added   {label}")
+        for label in changes.removed:
+            print(f"  vocabulary removed {label}")
+        print(f"updated {user_labels}; the previous version is {user_labels.name}.bak")
+    else:
+        print(f"vocabulary: {user_labels} is already up to date")
+    shutil.copy2(shipped, snapshot)
+    _point_config_at_labels(config_path, document, tomli_w)
     return 0
+
+
+def _point_config_at_labels(config_path: Path, document: dict, tomli_w) -> None:
+    """Make config.toml name the user's copy, relatively, if it does not yet.
+
+    Relative because ``from_mapping`` resolves it against the config file's
+    own directory: an absolute path would pin the config to one install, which
+    is the thing ``labels_file`` is documented as avoiding.
+    """
+    ocr = document.setdefault("ocr", {})
+    if ocr.get("labels_file") == "labels.txt":
+        return
+    ocr["labels_file"] = "labels.txt"
+    config_path.write_text(tomli_w.dumps(document), encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:

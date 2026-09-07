@@ -157,6 +157,23 @@ def _key(text: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", text.upper())
 
 
+def parse_labels(text: str) -> list[str]:
+    """The labels in a vocabulary file, in order: one per line, '#' comments out.
+
+    Here rather than inside :meth:`LabelVocabulary.from_file` because the
+    update path reads the same files to merge a user's vocabulary with the one
+    this version ships (``configmigrate.reconcile_labels``). Two readers of one
+    format is how a merge comes to disagree with the daemon about what counts
+    as a label, so there is one.
+    """
+    labels = []
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            labels.append(line.upper())
+    return labels
+
+
 class LabelVocabulary:
     """The known softkey labels, plus fuzzy lookup."""
 
@@ -173,11 +190,7 @@ class LabelVocabulary:
         file = Path(path)
         if not file.is_file():
             raise FileNotFoundError(f"label vocabulary not found: {file}")
-        labels = []
-        for line in file.read_text(encoding="utf-8").splitlines():
-            line = line.split("#", 1)[0].strip()
-            if line:
-                labels.append(line.upper())
+        labels = parse_labels(file.read_text(encoding="utf-8"))
         LOG.info("loaded %d labels from %s", len(labels), file)
         return cls(labels, cutoff)
 

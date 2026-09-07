@@ -7,7 +7,7 @@
     This is the one-click installer double-clicking install.cmd runs. It:
 
       1. Copies pyproject.toml, uv.lock, .python-version, README.md, LICENSE
-         and the whole src\ folder into %APPDATA%\GlassLinkXP, replacing
+         and the package itself into %APPDATA%\GlassLinkXP, replacing
          anything already installed there (with a confirmation first).
       2. Runs `uv sync --locked` inside that folder, which provisions its own
          pinned Python and installs every dependency -- including the
@@ -16,9 +16,10 @@
          TESSDATA_PREFIX at it for your Windows account.
       4. Adds a "GlassLinkXP" shortcut on the desktop, pointing at the window.
 
-    There is no update mechanism yet: re-run this to reinstall, and it asks
-    before replacing an existing install. Nothing outside %APPDATA%\GlassLinkXP
-    is touched other than the desktop shortcut and the TESSDATA_PREFIX
+    Re-run it to update. It asks before replacing the installed app, keeps
+    your config.toml and labels.txt, and reconciles both with the settings and
+    vocabulary this version ships. Nothing outside %APPDATA%\GlassLinkXP is
+    touched other than the desktop shortcut and the TESSDATA_PREFIX
     environment variable.
 
 .PARAMETER Force
@@ -53,7 +54,7 @@ function Test-Command { param($n) [bool](Get-Command $n -ErrorAction SilentlyCon
 # 0. Sanity
 # --------------------------------------------------------------------------
 Write-Step 'Checking the installer folder'
-foreach ($item in 'pyproject.toml', 'uv.lock', '.python-version', 'src') {
+foreach ($item in 'pyproject.toml', 'uv.lock', '.python-version', 'glasslinkxp') {
     if (-not (Test-Path (Join-Path $SourceRoot $item))) {
         Fail "$item is missing next to install.ps1. Re-extract the zip and run it from there."
     }
@@ -64,10 +65,15 @@ Write-Ok "installing from: $SourceRoot"
 # 1. Where it goes, and whether to replace what is already there
 # --------------------------------------------------------------------------
 #: Your files, not the app's: kept across a reinstall and put back afterwards.
-#: config.toml is the calibration and tuning that setup earned; gui.json is
-#: the window's own preferences, which land in this folder on Windows because
-#: %APPDATA%\glasslinkxp and %APPDATA%\GlassLinkXP are the same directory.
-$Keep = 'config.toml', 'config.toml.bak', 'gui.json'
+#: config.toml is the calibration and tuning that setup earned; labels.txt is
+#: the vocabulary, which the window lets you edit; labels.shipped.txt is what
+#: this app last shipped, which is how the next update can tell a label you
+#: added from one it has retired. gui.json is the window's own preferences,
+#: which land in this folder on Windows because %APPDATA%\glasslinkxp and
+#: %APPDATA%\GlassLinkXP are the same directory.
+$Keep = 'config.toml', 'config.toml.bak',
+        'labels.txt', 'labels.txt.bak', 'labels.shipped.txt',
+        'gui.json'
 $kept = $null
 
 if (Test-Path $Target) {
@@ -99,11 +105,9 @@ New-Item -ItemType Directory -Force -Path $Target | Out-Null
 # 2. Copy the app in
 # --------------------------------------------------------------------------
 Write-Step "Copying GlassLinkXP to $Target"
-foreach ($item in 'pyproject.toml', 'uv.lock', '.python-version', 'README.md', 'LICENSE') {
-    $from = Join-Path $SourceRoot $item
-    if (Test-Path $from) { Copy-Item $from (Join-Path $Target $item) }
-}
-Copy-Item (Join-Path $SourceRoot 'src') (Join-Path $Target 'src') -Recurse
+# Everything, because everything here is the app: this folder is the zip that
+# was downloaded, and nothing that is not needed at install time is in it.
+Copy-Item (Join-Path $SourceRoot '*') $Target -Recurse -Force
 Write-Ok 'copied'
 
 if ($kept) {
@@ -210,7 +214,7 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wP
     & $venvPython -c "import tkinter" 2>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Warn2 'this Python has no Tk support -- the window will not open. The command'
-        Write-Warn2 'line still works: src\glasslinkxp.cmd --help'
+        Write-Warn2 'line still works: glasslinkxp.cmd --help'
     }
 }
 finally { Pop-Location }
@@ -223,7 +227,7 @@ $desktop = [Environment]::GetFolderPath('Desktop')
 $shortcutPath = Join-Path $desktop 'GlassLinkXP.lnk'
 $wsh = New-Object -ComObject WScript.Shell
 $shortcut = $wsh.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = Join-Path $Target 'src\glasslinkxp-gui.cmd'
+$shortcut.TargetPath = Join-Path $Target 'glasslinkxp-gui.cmd'
 $shortcut.WorkingDirectory = $Target
 $shortcut.Description = 'GlassLinkXP -- live G1000 softkey labels on a Stream Deck'
 $shortcut.Save()
@@ -232,7 +236,7 @@ Write-Ok "shortcut: $shortcutPath"
 # --------------------------------------------------------------------------
 # 6. The X-Plane side (optional here -- the window can also do this)
 # --------------------------------------------------------------------------
-$pluginScript = Join-Path $Target 'src\scripts\install-xplane-plugin.ps1'
+$pluginScript = Join-Path $Target 'scripts\install-xplane-plugin.ps1'
 if (-not $SkipXPlanePlugin) {
     Write-Host "`nGlassLinkXP also needs a small plugin installed into X-Plane, so it has" -ForegroundColor Cyan
     Write-Host "somewhere to publish the labels to." -ForegroundColor Cyan

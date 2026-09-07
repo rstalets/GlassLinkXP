@@ -162,3 +162,121 @@ def test_the_shipped_example_needs_no_migration(tmp_path, capsys):
     path.write_text(EXAMPLE.read_text(encoding="utf-8"), encoding="utf-8")
     assert main(["migrate-config", "-c", str(path)]) == 0
     assert "already up to date" in capsys.readouterr().out
+
+
+# -- the vocabulary ---------------------------------------------------------
+
+SHIPPED_V1 = "# vocabulary\nINSET\nOBS\nCDI\n"
+SHIPPED_V2 = "# vocabulary\nINSET\nCDI\nSYNVIS\n"  # OBS retired, SYNVIS added
+
+
+def test_a_label_this_version_adds_reaches_an_edited_vocabulary():
+    user = SHIPPED_V1 + "MY OWN\n"
+    merged, changes = configmigrate.reconcile_labels(user, SHIPPED_V2, SHIPPED_V1)
+    assert changes.added == ["SYNVIS"]
+    assert "SYNVIS" in merged
+    assert "MY OWN" in merged, "their own label is not ours to drop"
+
+
+def test_a_label_this_version_retires_is_taken_out():
+    merged, changes = configmigrate.reconcile_labels(SHIPPED_V1, SHIPPED_V2, SHIPPED_V1)
+    assert changes.removed == ["OBS"]
+    assert "OBS" not in merged
+
+
+def test_a_label_the_user_added_is_never_mistaken_for_one_we_retired():
+    """The whole reason the previous shipped list is kept.
+
+    MY OWN is in their file and not in ours -- indistinguishable from a
+    retired label without knowing what we shipped last time.
+    """
+    user = SHIPPED_V1 + "MY OWN\n"
+    merged, changes = configmigrate.reconcile_labels(user, SHIPPED_V2, SHIPPED_V1)
+    assert changes.removed == ["OBS"]
+    assert "MY OWN" in merged
+
+
+def test_a_label_the_user_deleted_is_not_put_back():
+    """It was shipped before, so it is not new, so it is not re-added."""
+    user = "# vocabulary\nINSET\nCDI\n"  # they deleted OBS themselves
+    merged, changes = configmigrate.reconcile_labels(user, SHIPPED_V1, SHIPPED_V1)
+    assert changes.added == []
+    assert "OBS" not in merged
+
+
+def test_with_no_record_of_what_we_shipped_it_only_ever_adds():
+    """A vocabulary from before this mechanism existed: attribute nothing."""
+    user = SHIPPED_V1 + "MY OWN\n"
+    merged, changes = configmigrate.reconcile_labels(user, SHIPPED_V2, None)
+    assert changes.added == ["SYNVIS"]
+    assert changes.removed == [], "nothing can be attributed, so nothing is taken"
+    assert "OBS" in merged and "MY OWN" in merged
+
+
+def test_the_users_own_comments_and_order_survive():
+    user = "# my notes\n\n# --- approach ---\nINSET\nOBS\nCDI\n"
+    merged, _changes = configmigrate.reconcile_labels(user, SHIPPED_V2, SHIPPED_V1)
+    assert merged.startswith("# my notes\n\n# --- approach ---\n")
+    assert "# --- added by a GlassLinkXP update ---" in merged
+
+
+def test_an_unchanged_vocabulary_is_left_byte_for_byte():
+    user = SHIPPED_V1
+    merged, changes = configmigrate.reconcile_labels(user, SHIPPED_V1, SHIPPED_V1)
+    assert merged == user
+    assert not changes.any
+
+
+def test_the_merge_and_the_daemon_agree_on_what_a_label_is():
+    """One reader of the format, so a merge cannot invent or miss a label."""
+    from glasslinkxp.ocr import parse_labels
+
+    text = "# a comment\n\n  spaced  \nlower\nWITH # trailing\n"
+    assert parse_labels(text) == ["SPACED", "LOWER", "WITH"]
+    _merged, changes = configmigrate.reconcile_labels("", text, None)
+    assert changes.added == ["SPACED", "LOWER", "WITH"]
+
+
+# -- the vocabulary, through the CLI ----------------------------------------
+
+
+def test_the_user_gets_their_own_vocabulary_outside_the_replaceable_package(tmp_path, capsys):
+    """Edited at its packaged default, a vocabulary is destroyed by an update."""
+    path = tmp_path / "config.toml"
+    path.write_text("[app]\nloop_hz = 28.0\n", encoding="utf-8")
+
+    assert main(["migrate-config", "-c", str(path)]) == 0
+
+    assert (tmp_path / "labels.txt").is_file(), "their own copy, beside their config"
+    assert (tmp_path / "labels.shipped.txt").is_file(), "and a record of what we shipped"
+    document = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert document["ocr"]["labels_file"] == "labels.txt", "relative, so it stays portable"
+    # and the daemon resolves that to the user's copy, not the package's
+    assert load_config(path).ocr.labels_file == str(tmp_path / "labels.txt")
+
+
+def test_a_vocabulary_the_user_pointed_elsewhere_is_left_alone(tmp_path, capsys):
+    mine = tmp_path / "my-vocabulary.txt"
+    mine.write_text("INSET\n", encoding="utf-8")
+    path = tmp_path / "config.toml"
+    path.write_text(f'[ocr]\nlabels_file = "{mine.name}"\n', encoding="utf-8")
+
+    assert main(["migrate-config", "-c", str(path)]) == 0
+
+    assert not (tmp_path / "labels.txt").exists()
+    assert mine.read_text(encoding="utf-8") == "INSET\n"
+    assert "left alone" in capsys.readouterr().out
+
+
+def test_migrating_twice_does_not_churn_the_vocabulary_setting(tmp_path, capsys):
+    """ocr.labels_file is absent from the example on purpose, not retired."""
+    path = tmp_path / "config.toml"
+    path.write_text("[app]\nloop_hz = 28.0\n", encoding="utf-8")
+    main(["migrate-config", "-c", str(path)])
+    capsys.readouterr()
+
+    assert main(["migrate-config", "-c", str(path)]) == 0
+
+    out = capsys.readouterr().out
+    assert "ocr.labels_file" not in out, "it was written last time, not dropped this time"
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["ocr"]["labels_file"] == "labels.txt"

@@ -44,6 +44,16 @@ from typing import Any, Mapping
 SECTIONS = ("app", "window_management", "ocr", "color", "publish")
 DISPLAY_SECTION = "display"
 
+#: Settings the example leaves out *on purpose*, so "absent from the example"
+#: does not mean "this version dropped it". These are the ones whose default
+#: is a file inside the package (see ``configio._is_package_default``): the
+#: example omits them so that a config file does not name a path into one
+#: install. Without this, every update removed the ``ocr.labels_file`` the
+#: vocabulary migration had just written, and re-added it, reporting a
+#: change that had not happened.
+#: ``tests/test_gui_schema.py`` keeps this in step with the schema.
+KEPT_THOUGH_ABSENT = frozenset({"ocr.labels_file", "ocr.screens_file"})
+
 
 @dataclass
 class Changes:
@@ -140,9 +150,99 @@ def _reconcile_table(user: Mapping[str, Any], example: Mapping[str, Any],
             merged[key] = _copy(user_value)
 
     for key in user:
-        if key not in example:
-            changes.removed.append(f"{path}.{key}")
+        if key in example:
+            continue
+        where = f"{path}.{key}"
+        if where in KEPT_THOUGH_ABSENT:
+            merged[key] = _copy(user[key])
+        else:
+            changes.removed.append(where)
     return merged
+
+
+# ---------------------------------------------------------------------------
+# the vocabulary
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class VocabularyChanges:
+    """What a vocabulary merge did."""
+
+    added: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+
+    @property
+    def any(self) -> bool:
+        return bool(self.added or self.removed)
+
+
+def reconcile_labels(user_text: str, shipped_text: str,
+                     previous_shipped_text: str | None) -> tuple[str, VocabularyChanges]:
+    """Merge the vocabulary this version ships into the user's own copy.
+
+    ``labels.txt`` is meant to be edited -- the softkey set depends on the
+    aircraft and the X-Plane version -- so an update must not simply overwrite
+    it, and must not simply leave it either, or a label added upstream never
+    reaches anyone who has run the app once.
+
+    Three inputs, not two, and that is the whole point. Given only the user's
+    file and the new shipped one, a label in theirs and not in ours is
+    ambiguous: it is either one they added or one we retired, and guessing
+    wrong either deletes their work or keeps ours forever. ``previous_shipped``
+    -- a copy of the vocabulary this app last shipped, kept beside the user's
+    file for exactly this -- settles it:
+
+    * shipped now and not shipped before, and not already theirs -> **added**;
+    * shipped before but not now, and in their file -> **removed** (it came
+      from us, so it is ours to withdraw);
+    * anything else in their file is theirs, and is left alone.
+
+    With no previous snapshot -- a file from before this mechanism existed --
+    nothing can be attributed, so it only ever adds, and never removes.
+
+    The user's file is edited as *lines*, not rewritten from a set: their
+    comments, their groupings and their order are theirs too.
+    """
+    from .ocr import parse_labels  # noqa: PLC0415 - one reader of the format
+
+    user = parse_labels(user_text)
+    shipped = parse_labels(shipped_text)
+    previously_shipped = (
+        parse_labels(previous_shipped_text) if previous_shipped_text is not None else None
+    )
+
+    have = set(user)
+    changes = VocabularyChanges()
+
+    if previously_shipped is None:
+        # Nothing to attribute anything to: add what they are missing, and
+        # never take anything away.
+        changes.added = [label for label in shipped if label not in have]
+    else:
+        was_shipped = set(previously_shipped)
+        # New upstream, and not something they already have or deleted on
+        # purpose -- a label they removed was shipped before, so it is not new.
+        changes.added = [
+            label for label in shipped if label not in have and label not in was_shipped
+        ]
+        withdrawn = was_shipped - set(shipped)
+        changes.removed = [label for label in user if label in withdrawn]
+
+    if not changes.any:
+        return user_text, changes
+
+    lines = user_text.splitlines()
+    removed = set(changes.removed)
+    kept = [line for line in lines if line.split("#", 1)[0].strip().upper() not in removed]
+
+    if changes.added:
+        if kept and kept[-1].strip():
+            kept.append("")
+        kept.append("# --- added by a GlassLinkXP update ---")
+        kept.extend(changes.added)
+
+    return "\n".join(kept) + "\n", changes
 
 
 class _Missing:

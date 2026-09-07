@@ -185,3 +185,22 @@ def test_each_group_reads_from_the_toml_table_it_documents():
         assert path == (group.section,), (
             f"{group.title} is read from {path} but documents [{group.section}]"
         )
+
+
+def test_the_migration_keeps_exactly_the_settings_the_example_omits():
+    """configmigrate must not read "absent from the example" as "retired".
+
+    The example leaves out the settings whose default is a file inside the
+    package, so an update would otherwise delete them from a config and then
+    write them back. The two lists are in different layers -- one is the
+    daemon's, one is the form's -- so this is what keeps them equal.
+    """
+    from glasslinkxp.configmigrate import KEPT_THOUGH_ABSENT
+
+    package_defaults = {
+        f"{group.section}.{setting.key}"
+        for group in schema.GROUPS
+        for setting in group.settings
+        if setting.package_default
+    }
+    assert KEPT_THOUGH_ABSENT == package_defaults

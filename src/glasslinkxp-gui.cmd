@@ -12,14 +12,14 @@ rem  console interpreter first, because a pythonw that cannot import tkinter
 rem  fails with no window and no message at all.
 rem ---------------------------------------------------------------------------
 setlocal
-set "PY=%~dp0..\.venv\Scripts\python.exe"
-set "PYW=%~dp0..\.venv\Scripts\pythonw.exe"
+set "PY=%~dp0.venv\Scripts\python.exe"
+set "PYW=%~dp0.venv\Scripts\pythonw.exe"
 
 if not exist "%PY%" (
     echo(
     echo   No interpreter at %PY%
     echo(
-    echo   Run install.cmd in the folder above this one first.
+    echo   Run install.cmd first.
     echo(
     exit /b 1
 )

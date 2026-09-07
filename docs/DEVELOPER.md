@@ -9,11 +9,17 @@ and `CLAUDE.md` for the fuller set of conventions this codebase follows.
 ## Layout
 
 ```
-install.cmd / install.ps1   the end-user installer (see README.md)
-pyproject.toml, uv.lock, .python-version   dependency manifest, shared by
-                                            dev checkouts and every install
-src/                         everything that ships: this is copied wholesale
-                              into %appdata%\GlassLinkXP by the installer
+src/            EVERYTHING THAT SHIPS. Zip this directory and it is what a
+                user downloads; the installer copies it to %appdata%\GlassLinkXP
+  install.cmd   what they double-click
+  install.ps1   copies this folder into %appdata%, runs uv sync, fetches the
+                OCR language data, adds the desktop shortcut, and reconciles
+                a config and vocabulary kept from an older install
+  pyproject.toml, uv.lock, .python-version
+                the manifest -- read by `uv sync` on the user's machine at
+                install time, which is why it is inside the zip
+  README.md, LICENSE   the user-facing doc (the repository root's README is
+                a landing page for GitHub, not this)
   glasslinkxp/
     main.py       CLI: run | gui | list-windows | manage-windows | calibrate
                        | dump-cells | dump-colors | bench | screen-template
@@ -38,8 +44,9 @@ src/                         everything that ships: this is copied wholesale
   scripts/install-xplane-plugin.ps1   installs XPPython3 + the dataref plugin
   glasslinkxp.cmd, glasslinkxp-gui.cmd   run any command / open the window
                                           without activating a venv
-  config.example.toml
+  config.example.toml   what a new config.toml is seeded from
 tests/          offline tests over the whole pipeline (not shipped)
+tools/make_zip.py   builds dist/glasslinkxp-<version>.zip from src/
 docs/
   PIPELINE.md       flowcharts of the daemon loop and the per-frame path
   GUI.md            how the window is put together, and what it is coupled to
@@ -48,17 +55,22 @@ docs/
   DEVELOPER.md      this file
 ```
 
-`pyproject.toml` points `[tool.setuptools] package-dir` at `src/`, so
-`uv sync --locked` at the repository root works exactly the same way for a
-dev checkout as it does inside an installed copy under `%appdata%` -- the
-installer just copies the same manifest and `src/` into that folder and runs
-the same command there.
+`src/` is the unit of distribution: zip it and that is what a user
+downloads, with `install.cmd` at the top level. The manifest lives in it for
+that reason -- `pyproject.toml`, `uv.lock` and `.python-version` are read by
+`uv sync` *at install time*, on the user's machine, so they cannot sit outside
+the zip. `tools/make_zip.py` builds it, and `tests/test_packaging.py` keeps
+the invariant honest in both directions: everything install time needs is
+inside `src/`, and nothing development-only is.
+
+That also means the installed layout and a dev checkout are the same shape:
+`src/` here is `%appdata%\GlassLinkXP` there, venv and all.
 
 ## Working on it
 
 ```
-uv sync --locked                 # once, or after pulling a lockfile change
-python -m pytest -q              # all offline, keep them green
+uv sync --project src --locked   # once; the venv lands in src/.venv
+src/.venv/bin/python -m pytest -q          # all offline, keep them green
 python -m glasslinkxp.main synth --out frames
 python -m glasslinkxp.main run --once --image frames/xpdr.png --publisher console -v
 python -m glasslinkxp.main gui                       # the window
@@ -72,7 +84,7 @@ collect at all**, because `gui/tabs.py` imports it at module scope. If
 before anything else. To run all of them here:
 
 ```
-xvfb-run -a python -m pytest -q
+xvfb-run -a src/.venv/bin/python -m pytest -q
 ```
 
 The window itself can be driven headlessly the same way: `xvfb-run -a python

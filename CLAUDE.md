@@ -25,8 +25,13 @@ truth, and it is a low-resolution, anti-aliased, GPU-composited image.**
 | `PLAN.md` | The original design rationale, including approaches that were considered and rejected. |
 | `src/config.example.toml` | A starting point to copy, commented because people read it. The generated reference above is the authority. |
 
-Everything under `src/` ships in the distribution zip (see `install.ps1`);
-everything else here (`tests/`, `docs/`, `CLAUDE.md`, `PLAN.md`) is dev-only.
+**`src/` is the distribution zip.** Zip that directory and it is what a user
+downloads and extracts, with `install.cmd` at its top level -- so the manifest
+(`pyproject.toml`, `uv.lock`, `.python-version`) lives inside it too, because
+`uv sync` reads them on the user's machine at install time. Everything else
+here (`tests/`, `docs/`, `tools/`, `CLAUDE.md`, `PLAN.md`) is dev-only and
+never ships. `tests/test_packaging.py` enforces both halves of that, and
+`tools/make_zip.py` builds the zip.
 
 ## Shape of the system
 
@@ -50,6 +55,8 @@ also the only way to stop the daemon with a signal it handles: `cmd_run` calls
 `signal.signal`, which only works on the main thread, and Tk owns that.
 
 ```
+src/            <- the zip: install.cmd, install.ps1, pyproject.toml, uv.lock,
+                   .python-version, README.md, LICENSE, config.example.toml
 src/glasslinkxp/
   main.py       CLI: run, gui, list-windows, manage-windows, calibrate,
                      dump-cells, dump-colors, bench, screen-template, tune,
@@ -75,11 +82,10 @@ src/glasslinkxp/
                 wizard.py included, is tested without a display
 ```
 
-`pyproject.toml` maps `[tool.setuptools] package-dir` at the repository root
-to `src/`, so `uv sync --locked` at the root behaves identically for a dev
-checkout and for a copy installed under `%appdata%` by `install.ps1` --
-the installer just copies the manifest and `src/` there and runs the same
-command.
+`src/` and an installed copy are the same shape: `uv sync` runs *in* `src/`
+here and in `%appdata%\GlassLinkXP` there, and the venv, the launchers and
+config.toml sit beside the package in both. That is why `prefs.project_root()`
+is simply the package's parent.
 
 ## The lesson this codebase was built on
 
@@ -212,6 +218,7 @@ test rather than a comment.
 ## Working on it
 
 ```
+uv sync --project src --locked   # the venv lands in src/.venv
 python -m pytest -q              # all offline, keep them green
 python -m glasslinkxp.main synth --out frames
 python -m glasslinkxp.main run --once --image frames/xpdr.png --publisher console -v
