@@ -276,10 +276,10 @@ asked to do:
 20:26:10 INFO    glasslinkxp: GlassLinkXP 1.2.3: run
 ```
 
-The number comes from `glasslinkxp/VERSION`, which the release build stamps
-with the tag it was built from; a copy built from a checkout says `0.0.0`, and
-`NO_VERSION` means there was no VERSION file to read at all -- a dev build, or
-a copy it did not ship in. It is the first line of every log so
+The number comes from `glasslinkxp/VERSION`, which the release build creates,
+holding the tag it was built from. `NO_VERSION` means there was no such file
+to read -- a checkout, or a zip built without a tag -- and is deliberately not
+a number, so a dev build cannot be mistaken in a report for a released one. It is the first line of every log so
 that a log pasted into an issue answers "which version?" without anyone having
 to ask.
 

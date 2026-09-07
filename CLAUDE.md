@@ -140,19 +140,25 @@ daemon and the plugin have to agree without either checking: send a number to a
 name the plugin registered as `Type_Data` and the write fails at the sim, not
 here. Adding a dataref means touching both sides.
 
-**The version lives in three files and moving one alone ships a broken zip.**
-`src/pyproject.toml` says `0.0.0` and so do the `glasslinkxp` block in
-`src/uv.lock` and `src/glasslinkxp/VERSION`; a release stamps the tag into all
-three. The first two because `uv sync --locked` -- what `install.ps1` runs on
-the user's machine -- refuses to run when the lock and the manifest disagree
-about the project's own version. That is measured: bumping `pyproject.toml`
-alone makes `uv lock --check` report the lockfile out of date. The third is
-the only one the *running* app reads: `version.py` reads it at import and
-`main()` logs it on the first line of every command, so a log answers "which
-build?" on its own. So there is nothing to bump by hand for a release, and
-`tools/make_zip.py` is the only thing that writes a version -- it stamps all
-three or fails, into the zip rather than into the tree. If you find yourself
-editing a version number, stop and read *Releasing* in `docs/DEVELOPER.md`.
+**The version is written by the build, into the zip, never into the tree.**
+`src/pyproject.toml` says `0.0.0` and so does the `glasslinkxp` block in
+`src/uv.lock`; a release stamps the tag into both, because `uv sync --locked`
+-- what `install.ps1` runs on the user's machine -- refuses to run when the
+lock and the manifest disagree about the project's own version. That is
+measured: bumping `pyproject.toml` alone makes `uv lock --check` report the
+lockfile out of date.
+
+A third file, `glasslinkxp/VERSION`, is the only one the *running* app reads
+(`version.py` at import; `main()` logs it on the first line of every command
+and the window shows it bottom-right) and **it does not exist in a checkout**:
+the build creates it for a release only, so a clone finds nothing and reports
+`NO_VERSION`. It shipped checked-in at `0.0.0` once, and a clone then claimed
+`0.0.0` -- a number, in logs and bug reports, for a build nobody released. Do
+not add it back to the tree; `.gitignore` carries it, and `make_zip.py` skips
+any it finds. So there is nothing to bump by hand for a release, and
+`tools/make_zip.py` is the only thing that writes a version. If you find
+yourself editing a version number, stop and read *Releasing* in
+`docs/DEVELOPER.md`.
 
 **The plugin may only import the standard library.** It runs inside XPPython3's
 own bundled Python 3.12, not this project's venv. No numpy, no requests.

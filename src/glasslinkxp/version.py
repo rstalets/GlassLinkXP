@@ -1,15 +1,20 @@
-"""What version this is, read from the file the release build stamps.
+"""What version this is, read from the file the release build writes.
 
-There is no version in the source: ``VERSION`` beside this module says
-``0.0.0`` in a checkout, and ``tools/make_zip.py`` writes the release tag into
-it (along with ``pyproject.toml`` and ``uv.lock``) when it builds the zip. So
-a running copy can always say which download it came from, and a copy built
-from a checkout says ``0.0.0``, which is true.
+There is no version in the source, and no ``VERSION`` file in a checkout:
+``tools/make_zip.py`` creates one, holding the release tag, when it builds
+the zip. So a copy that came from a download says which download, and a copy
+running from a clone finds nothing and says :data:`NO_VERSION`.
 
-A plain text file rather than the manifest: this is read on every start of
-every command, ``pyproject.toml`` is not beside the *package* but beside the
-install root, and a version is one line -- there is nothing here worth a TOML
-parse or an installed-metadata lookup that an editable install can get wrong.
+That asymmetry is the point, and it was got wrong first time round: the file
+was checked in holding ``0.0.0``, so every clone reported ``0.0.0`` -- which
+reads in a log or a bug report like a build somebody released, not like the
+absence of one. A dev build has no version, and the honest thing is to say so.
+
+A plain text file rather than the manifest, for the same reason: the manifest
+is in every checkout, so anything derived from it would give a dev build the
+same answer a release gets. It is also read on every start of every command,
+and there is nothing here worth a TOML parse or an installed-metadata lookup
+that an editable install can get wrong.
 """
 
 from __future__ import annotations

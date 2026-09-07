@@ -180,9 +180,9 @@ so anything packed after it would be squeezed out by a long one. The version
 is there because a screenshot is how most of what this window does gets
 reported, and a screenshot carries no log; it is `display_version()` over the
 same `glasslinkxp/VERSION` file the CLI logs on its first line, so the window
-and the log cannot disagree about which build somebody is running. A build
-with no version file reads `NO_VERSION` there rather than `v` followed by
-nothing that means anything.
+and the log cannot disagree about which build somebody is running. A checkout has no version file -- the
+release build creates it -- so a dev build reads `NO_VERSION` there rather
+than a number nobody stamped.
 
 ## Queueing a page for the sharpening tuner
 

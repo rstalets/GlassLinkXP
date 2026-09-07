@@ -9,10 +9,10 @@ install.ps1 runs on the user's machine -- refuses to run when they disagree.
 Stamping one alone would build a zip that cannot install, and nothing
 downstream of the build would notice.
 
-The third is ``glasslinkxp/VERSION``, the one the running app reads and logs.
-It has no such failure mode; what it has is the opposite one -- a version that
-disagrees with the zip it came in would be a wrong answer in every bug report
-made from that build -- so it is stamped in the same operation.
+The third, ``glasslinkxp/VERSION``, is the one the running app reads and logs,
+and it is *not in the tree*: the build creates it, for a release only. A
+checkout has never been released, so it must find no file and say
+``NO_VERSION`` rather than report a number.
 
 Nothing here needs Tk, a display or a network.
 """
@@ -20,6 +20,7 @@ Nothing here needs Tk, a display or a network.
 import re
 import shlex
 import sys
+import tempfile
 import tomllib
 import zipfile
 from pathlib import Path
@@ -31,12 +32,23 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import make_zip  # noqa: E402
 
-from glasslinkxp.version import NO_VERSION, read_version  # noqa: E402
+from glasslinkxp.version import (  # noqa: E402
+    NO_VERSION,
+    __version__,
+    read_version,
+)
 
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 LOCK = ROOT / "src" / "uv.lock"
 PYPROJECT = ROOT / "src" / "pyproject.toml"
 VERSION_FILE = ROOT / "src" / "glasslinkxp" / "VERSION"
+
+
+def read_version_of(contents: str) -> str:
+    """What the app would make of a VERSION file holding ``contents``."""
+    path = Path(tempfile.mkdtemp()) / "VERSION"
+    path.write_text(contents, encoding="utf-8")
+    return read_version(path)
 
 
 def lock_version(text: str, name: str = "glasslinkxp") -> str:
@@ -58,11 +70,14 @@ def test_the_checked_in_version_is_the_unreleased_one():
     assert make_zip.version() == make_zip.DEFAULT_VERSION
 
 
-def test_everything_that_carries_a_version_carries_the_same_one():
-    """Including the file the app reads: a running copy that reported a
-    version the zip was not built at would be a wrong answer in every bug
-    report made from it."""
-    assert read_version(VERSION_FILE) == make_zip.version()
+def test_a_checkout_has_no_version_file_and_says_so():
+    """The bug this replaced: `VERSION` was checked in holding `0.0.0`, so a
+    clone reported `0.0.0` -- which reads like a build somebody released,
+    rather than like the absence of one. The file a release stamps has to be
+    made by the release; a dev build must find nothing."""
+    assert not VERSION_FILE.exists(), "a checkout must not carry a version"
+    assert read_version(VERSION_FILE) == NO_VERSION
+    assert __version__ == NO_VERSION, "the running tree reports itself as unreleased"
 
 
 def test_the_manifest_and_the_lock_agree_about_the_version():
@@ -135,10 +150,9 @@ def test_stamping_the_lock_touches_only_the_project_it_locked():
 
 
 def test_the_version_file_is_the_version_and_a_newline():
-    """It is read by a `read_text().strip()`, so what matters is that a
-    stamped file holds the number and nothing else -- whatever was in it."""
-    assert make_zip.stamp_version_file("0.0.0\n", "1.2.3") == "1.2.3\n"
-    assert make_zip.stamp_version_file("", "1.2.3") == "1.2.3\n"
+    """It is read by a `read_text().strip()`, so the file is just the number."""
+    assert make_zip.version_file("1.2.3") == "1.2.3\n"
+    assert read_version_of(make_zip.version_file("1.2.3")) == "1.2.3"
 
 
 def test_stamping_refuses_a_file_it_does_not_recognise():
@@ -163,24 +177,41 @@ def test_a_release_build_carries_the_stamped_manifest(tmp_path):
         shipped = zf.read("glasslinkxp/VERSION").decode("utf-8")
     assert manifest["project"]["version"] == "1.2.3"
     assert lock_version(lock) == "1.2.3", "the lock would refuse to install against that manifest"
-    assert shipped.strip() == "1.2.3", "the running app would report a version this was not built at"
+    assert read_version_of(shipped) == "1.2.3", "the app would report a version this was not built at"
 
 
 def test_a_release_build_leaves_the_checkout_alone(tmp_path):
     """Stamping writes into the zip, never into the tree: a build that edited
     files in place would leave a half-stamped checkout to commit by accident."""
-    before = [f.read_text(encoding="utf-8") for f in (PYPROJECT, LOCK, VERSION_FILE)]
+    before = [f.read_text(encoding="utf-8") for f in (PYPROJECT, LOCK)]
     make_zip.build(tmp_path, "9.9.9")
-    assert [f.read_text(encoding="utf-8") for f in (PYPROJECT, LOCK, VERSION_FILE)] == before
+    assert [f.read_text(encoding="utf-8") for f in (PYPROJECT, LOCK)] == before
+    assert not VERSION_FILE.exists(), "the build wrote a version into the tree"
 
 
-def test_a_developer_build_stamps_nothing(tmp_path):
+def test_a_developer_build_stamps_nothing_and_ships_no_version(tmp_path):
+    """A zip built without a tag is not a release, so it carries no version at
+    all -- installed from one, the app says NO_VERSION, same as a checkout."""
     target = make_zip.build(tmp_path)
     assert target.name == f"glasslinkxp-{make_zip.DEFAULT_VERSION}.zip"
     with zipfile.ZipFile(target) as zf:
         assert zf.read("pyproject.toml").decode("utf-8") == PYPROJECT.read_text(encoding="utf-8")
         assert zf.read("uv.lock").decode("utf-8") == LOCK.read_text(encoding="utf-8")
-        assert zf.read("glasslinkxp/VERSION").decode("utf-8") == VERSION_FILE.read_text(encoding="utf-8")
+        assert make_zip.VERSION_MEMBER not in zf.namelist()
+
+
+def test_a_stray_version_file_in_a_working_tree_never_ships(tmp_path, monkeypatch):
+    """One copied back from an install, or left by an older build: shipping it
+    would put a number on this zip that this build did not stamp."""
+    stray = ROOT / "src" / "glasslinkxp" / "VERSION"
+    stray.write_text("9.9.9\n", encoding="utf-8")
+    try:
+        with zipfile.ZipFile(make_zip.build(tmp_path)) as zf:
+            assert make_zip.VERSION_MEMBER not in zf.namelist()
+        with zipfile.ZipFile(make_zip.build(tmp_path, "1.2.3")) as zf:
+            assert zf.read(make_zip.VERSION_MEMBER).decode("utf-8").strip() == "1.2.3"
+    finally:
+        stray.unlink()
 
 
 # ---------------------------------------------------------------------------
@@ -266,9 +297,9 @@ def test_the_issue_templates_are_the_shape_github_expects():
 # What the running app makes of that file
 # ---------------------------------------------------------------------------
 
-def test_the_version_is_read_from_the_file_the_build_stamps(tmp_path):
+def test_the_version_is_read_from_the_file_the_build_writes(tmp_path):
     stamped = tmp_path / "VERSION"
-    stamped.write_text(make_zip.stamp_version_file("", "1.2.3"), encoding="utf-8")
+    stamped.write_text(make_zip.version_file("1.2.3"), encoding="utf-8")
     assert read_version(stamped) == "1.2.3"
 
 

@@ -25,12 +25,17 @@ was measured, not assumed: bumping pyproject.toml alone makes `uv lock
 again. So stamping either without the other would ship a zip that cannot
 install.
 
-The third is ``glasslinkxp/VERSION``, which is the only one the *running* app
-reads: every command logs it on its first line, so a log says which download
-produced it. It is stamped here rather than derived from the manifest at
-runtime because the manifest sits beside the install root, not inside the
-package, and because a number a user reads in a bug report should not depend
-on an import succeeding.
+The third, ``glasslinkxp/VERSION``, is not in the tree at all: this *creates*
+it, and only for a release build. It is the only one the running app reads --
+every command logs it on its first line -- so a checkout, which was never
+released, must not have one to find: a clone that reported ``0.0.0`` would be
+claiming a version number, and ``0.0.0`` in a bug report reads like a build
+rather than like the absence of one. With no file to read the app says
+``NO_VERSION``, which cannot be mistaken for either.
+
+That is also why it is a file rather than a value derived from the manifest at
+runtime: the manifest is in every checkout, so anything reading it would give
+a dev build the same answer a release gets.
 """
 
 from __future__ import annotations
@@ -127,12 +132,8 @@ def stamp_lock(text: str, version: str, name: str) -> str:
     return _substitute(text, pattern, version, "uv.lock")
 
 
-def stamp_version_file(text: str, version: str) -> str:
-    """The whole file is the version, so there is nothing to substitute.
-
-    ``text`` is taken only to keep the three stampers one shape; a VERSION
-    file with anything else in it is not something to preserve.
-    """
+def version_file(version: str) -> str:
+    """The contents of the VERSION file for a release: the number, one line."""
     return f"{version}\n"
 
 
@@ -151,17 +152,28 @@ def should_include(relative: Path) -> bool:
         return False
     if len(relative.parts) == 1 and relative.name in EXCLUDED_FILES:
         return False
+    if relative.as_posix() == VERSION_MEMBER:
+        # Only ever the one this build writes. A VERSION file in a working
+        # tree came from somewhere else -- an installed copy copied back, an
+        # earlier build -- and shipping it would put a number on this zip that
+        # this build did not stamp.
+        return False
     return relative.name not in {"gui.json", "config.toml"}
 
 
-#: The files a release stamps, and how. Every one is written into the zip
-#: from memory rather than edited in the tree: a build leaves the checkout as
-#: it found it, so there is no half-stamped state to commit by accident.
+#: Files that exist in the tree and are rewritten on the way into the zip.
+#: Written from memory rather than edited in place: a build leaves the
+#: checkout as it found it, so there is no half-stamped state to commit by
+#: accident.
 STAMPED = {
     "pyproject.toml": lambda text, version, name: stamp_pyproject(text, version),
     "uv.lock": lambda text, version, name: stamp_lock(text, version, name),
-    "glasslinkxp/VERSION": lambda text, version, name: stamp_version_file(text, version),
 }
+
+#: The version file, which does not exist in the tree and is *created* here --
+#: for a release build only. See the module docstring: a checkout has no
+#: version, and the app saying so is the point.
+VERSION_MEMBER = "glasslinkxp/VERSION"
 
 
 def project() -> dict:
@@ -194,6 +206,9 @@ def build(out_dir: Path | None = None, release_version: str | None = None) -> Pa
                 zf.writestr(arcname, stamper(path.read_text(encoding="utf-8"), stamped, name))
             else:
                 zf.write(path, arcname)
+            written += 1
+        if release_version:
+            zf.writestr(VERSION_MEMBER, version_file(stamped))
             written += 1
     print(f"{target}  ({written} files)")
     return target

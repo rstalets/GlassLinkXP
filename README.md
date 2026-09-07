@@ -196,5 +196,5 @@ src/.venv/bin/python tools/make_zip.py     # -> dist/glasslinkxp-0.0.0.zip
 
 Releases are cut by publishing a GitHub release tagged `vX.Y.Z`: a workflow
 zips `src/`, stamps that version into it and attaches it. Nothing in the tree
-carries a version -- it says `0.0.0` until a release names one. See
-[*Releasing*](docs/DEVELOPER.md#releasing).
+carries a version, so a copy run from a checkout reports `NO_VERSION` rather
+than a number. See [*Releasing*](docs/DEVELOPER.md#releasing).

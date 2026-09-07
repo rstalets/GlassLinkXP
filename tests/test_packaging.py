@@ -26,7 +26,6 @@ MUST_SHIP = (
     "glasslinkxp/main.py",                # the app
     "glasslinkxp/labels.txt",             # the vocabulary it ships with
     "glasslinkxp/screens.toml",
-    "glasslinkxp/VERSION",                # what a running copy says it is
     "glasslinkxp.cmd",                    # the launchers
     "glasslinkxp-gui.cmd",
     "config.example.toml",                # what a new config is seeded from
@@ -135,13 +134,16 @@ def test_declining_xppython3_is_a_state_the_summary_can_report():
 
 
 def test_the_version_file_is_package_data():
-    """It ships inside the package, so it has to be declared as package data.
+    """The release build puts it inside the package, so setuptools has to know.
 
-    The zip is what a user installs and `uv sync` builds the package from it;
-    a file setuptools does not know about would be missing from the installed
-    copy while still being present in the zip -- which is the sort of
-    difference nobody looks for.
+    It is not in the tree -- `tests/test_release.py` is where that is pinned --
+    but the zip is what a user installs, and a file setuptools does not know
+    about would be missing from the installed copy while still being in the
+    zip, which is the sort of difference nobody looks for. Declaring package
+    data that is not there is harmless; not declaring it is not.
     """
+    assert not (SHIPPED / "glasslinkxp" / "VERSION").exists(), \
+        "a checkout must not carry a version -- see tests/test_release.py"
     manifest = (SHIPPED / "pyproject.toml").read_text(encoding="utf-8")
     match = re.search(r"(?m)^glasslinkxp = \[([^\]]*)\]", manifest)
     assert match, "no package-data entry for glasslinkxp"

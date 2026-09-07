@@ -18,7 +18,7 @@ body:
     id: version
     attributes:
       label: GlassLinkXP version
-      description: "The first line of any command's output names it -- `GlassLinkXP 1.2.3: run`. `0.0.0` means it was built from a checkout, and `NO_VERSION` that the version file was missing."
+      description: "The first line of any command's output names it -- `GlassLinkXP 1.2.3: run` -- and so does the bottom-right corner of the window. `NO_VERSION` means it was not installed from a release zip."
       placeholder: "1.2.3"
     validations:
       required: true
