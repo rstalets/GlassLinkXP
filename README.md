@@ -102,13 +102,6 @@ For PFD softkey 1:
 `:s16` is PilotsDeck's string-dataref address syntax: read 16 bytes as a
 NUL-terminated string.
 
-> **Upgrading from a release that used `:s64`?** The label fields are 16 bytes
-> again. Re-address every button from `:s64` to `:s16`, and -- because the
-> installer keeps your `config.toml` rather than replacing it -- check that
-> `field_width` under `[publish]` says `16` (Settings tab, *Label field width*).
-> The plugin, the daemon and the button address all have to agree, and X-Plane
-> has to be restarted for the new plugin width to take effect.
-
 Alongside each label, GlassLinkXP also publishes the colour of the cell the
 label sits on, as an int dataref:
 
