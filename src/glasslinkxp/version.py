@@ -39,3 +39,12 @@ def read_version(path: Path = VERSION_FILE) -> str:
 
 #: Read once, at import: the file does not change under a running process.
 __version__ = read_version()
+
+
+def display_version(version: str = __version__) -> str:
+    """How the version is shown to a person: ``v1.2.3``.
+
+    The placeholder is passed through as it is -- ``vNO_VERSION`` would read
+    like a version somebody tagged, which is the one thing it must not do.
+    """
+    return version if version == NO_VERSION else f"v{version}"

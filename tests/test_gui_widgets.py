@@ -12,7 +12,8 @@ import pytest
 
 tk = pytest.importorskip("tkinter")
 
-from glasslinkxp.gui.widgets import ImageView, _load_scaled  # noqa: E402
+from glasslinkxp.gui.widgets import ImageView, StatusBar, _load_scaled  # noqa: E402
+from glasslinkxp.version import NO_VERSION, __version__, display_version  # noqa: E402
 
 
 @pytest.fixture
@@ -100,3 +101,31 @@ def test_imageview_with_shrink_disallowed_never_blurs_a_cell_smaller_than_its_bo
     root.update_idletasks()
     view._render()
     assert (view._image.width(), view._image.height()) == (w, h)
+
+
+# ---------------------------------------------------------------------------
+# the status bar's corner
+# ---------------------------------------------------------------------------
+
+def test_the_status_bar_shows_which_build_this_is(root):
+    """A screenshot carries no log, and a screenshot is how the window gets
+    reported. Same string the CLI logs, from the same file."""
+    bar = StatusBar(root)
+    assert bar.version.cget("text") == display_version(__version__)
+
+
+def test_a_long_status_message_does_not_push_the_version_off(root):
+    """The version is packed first for this reason: a widget packed after one
+    with expand=True gets what that one left over, which is nothing."""
+    bar = StatusBar(root)
+    bar.pack(fill="x")
+    bar.set("something went wrong: " + "and then some more detail " * 20, "error")
+    root.update_idletasks()
+    assert bar.version.winfo_reqwidth() > 0
+    assert bar.version.winfo_reqwidth() == StatusBar(root).version.winfo_reqwidth()
+
+
+def test_a_build_with_no_version_file_says_so_in_the_corner(root):
+    """`vNO_VERSION` would read like something somebody tagged."""
+    bar = StatusBar(root, version=display_version(NO_VERSION))
+    assert bar.version.cget("text") == NO_VERSION
