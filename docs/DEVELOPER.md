@@ -18,7 +18,8 @@ src/                         everything that ships: this is copied wholesale
     main.py       CLI: run | gui | list-windows | manage-windows | calibrate
                        | dump-cells | dump-colors | bench | screen-template
                        | tune | synth
-    gui/          the window: one tab per command, over the same CLI (see docs/GUI.md)
+    gui/          the window: one tab per command, over the same CLI, plus the
+                  setup wizard bar (wizard.py) -- see docs/GUI.md
     capture.py    WGC backend (Windows) + PNG backend (offline dev/test)
     windowmgr.py  opens, sizes and places the PFD/MFD pop-outs
     command.py    fires X-Plane commands over the web API (the pop-out commands)

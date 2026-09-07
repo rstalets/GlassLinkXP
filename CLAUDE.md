@@ -66,9 +66,10 @@ src/glasslinkxp/
   config.py     frozen dataclasses + TOML loader (reading only; the GUI
                 writes with tomli-w)
   gui/          the window (see docs/GUI.md), including the calibration editor
-                where the strip is drawn on the frame with the mouse. Only
-                app.py, tabs.py and widgets.py import Tk; the rest, geometry.py
-                included, is tested without a display
+                where the strip is drawn on the frame with the mouse, and the
+                setup wizard (wizard.py: the steps, no Tk in it). Only app.py,
+                tabs.py and widgets.py import Tk; the rest, geometry.py and
+                wizard.py included, is tested without a display
 ```
 
 `pyproject.toml` maps `[tool.setuptools] package-dir` at the repository root
@@ -199,6 +200,7 @@ None of these couplings is visible to the type checker:
 | a field on any config dataclass | `test_gui_schema.py` -- a field must be in `gui/schema.py` or in `NOT_IN_THE_FORM` with a reason |
 | `strip_rect` or `cell_rects` | `test_gui_geometry.py` and `test_gui_canvas.py` -- the calibration editor draws what `cell_rects` returns, and both check it against the real thing |
 | `clipped_edges` or `CLIP_MARGIN` | `test_gui_checks.py` -- the margin is 0 because the ink extents were measured across the corpus, and a test keeps that measurement true; the calibration editor and `run -v` share the function |
+| a tab class name, or the setup steps | `test_gui_wizard.py` -- every step in `gui/wizard.py` names its tab by class name, and the test resolves each through `tabs.tab_index` |
 
 Fix the GUI in the same commit; do not weaken the test. A GUI that has drifted
 from the daemon still looks like it is working, which is what makes it worth a
@@ -250,6 +252,7 @@ commit, not afterwards.
 | a config setting, or its default | `gui/schema.py` (the help text is the documentation), then regenerate `docs/CONFIGURATION.md` -- a test fails until you do -- and `src/config.example.toml` |
 | a CLI subcommand or flag | the command list in `CLAUDE.md` and the relevant `README.md` section, and `gui/commands.py` -- `test_gui_commands.py` fails until the GUI covers it |
 | a tab, or how the GUI runs a command | `docs/GUI.md`, including its flowchart and the tab table |
+| the setup steps, or what a step checks | the *setup wizard is a bar* section and its flowchart in `docs/GUI.md`, and the first-run list in `README.md` |
 | anything a CLI subcommand prints that the GUI reads | `gui/logparse.py` -- and its format-then-parse test; see *Things that will catch you out* |
 | a config dataclass field | `gui/schema.py` -- see *Things that will catch you out* |
 | dataref names, types or field width | `README.md` PilotsDeck wiring, the plugin docstring, `src/config.example.toml` |

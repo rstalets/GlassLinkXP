@@ -21,10 +21,10 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable
 
 from ..config import ConfigError
-from . import commands, configio, prefs
+from . import commands, configio, prefs, wizard
 from .logparse import classify
 from .runner import CommandRunner, Event, Failed, Finished, Line, Started
-from .widgets import OutputPane, StatusBar, help_label
+from .widgets import OutputPane, StatusBar, WizardBar, help_label
 
 #: How often the UI drains the child processes' output. 20 Hz: fast enough
 #: that the log reads as live next to a 28 Hz daemon, slow enough that the
@@ -48,10 +48,16 @@ class GuiApp:
         #: No config file found on launch -- nothing has been calibrated yet.
         #: Read once at startup rather than kept in sync with config_path: it
         #: describes how this session started, not whether a file happens to
-        #: be open right now, so creating one with New... does not turn it off.
+        #: be open right now, so the wizard creating one does not turn it off.
         self.first_run = self.config_path is None
+        #: Which setup step is showing, and whether the bar is up at all.
+        #: Remembered between sessions so closing the window half way through
+        #: setup is not the same as starting again.
+        self.wizard_step = wizard.clamp(self.prefs.get("wizard_step") or 0)
+        self.wizard_active = False
         self.document: dict[str, Any] = {}
         self._config_listeners: list[Callable[[], None]] = []
+        self._wizard_listeners: list[Callable[[], None]] = []
 
         self.daemon = CommandRunner("daemon")
         self.task = CommandRunner("command")
@@ -143,6 +149,15 @@ class GuiApp:
         self.status = StatusBar(self.root)
         self.status.pack(fill="x", side="bottom")
 
+        # Built here but not packed: show_wizard_step() puts it in above the
+        # notebook, which has to exist first for `before=` to name it.
+        self.wizard_bar = WizardBar(
+            self.root,
+            on_back=self.wizard_back,
+            on_next=self.wizard_next,
+            on_exit=self.close_wizard,
+        )
+
         self.notebook = ttk.Notebook(self.root, padding=(8, 6))
         self.notebook.pack(fill="both", expand=True)
 
@@ -154,6 +169,84 @@ class GuiApp:
             self.notebook.select(index)
         except tk.TclError:
             pass
+
+    # -- the setup wizard ----------------------------------------------------
+
+    def on_wizard_changed(self, callback: Callable[[], None]) -> None:
+        self._wizard_listeners.append(callback)
+
+    def notify_wizard_changed(self) -> None:
+        for callback in list(self._wizard_listeners):
+            callback()
+
+    def start_wizard(self, restart: bool = True) -> None:
+        """Put the setup bar up, at the first step or where it was left."""
+        if restart:
+            self.wizard_step = 0
+        self.wizard_active = True
+        self.wizard_bar.pack(fill="x", padx=10, pady=(2, 0), before=self.notebook)
+        self.show_wizard_step()
+
+    def show_wizard_step(self) -> None:
+        """Draw the current step, and open the tab it is done in."""
+        from . import tabs  # noqa: PLC0415 - avoids a cycle; tabs imports this module
+
+        step = wizard.step(self.wizard_step)
+        self.wizard_bar.show(
+            index=wizard.clamp(self.wizard_step),
+            total=len(wizard.STEPS),
+            title=step.title,
+            instruction=step.instruction,
+            trail=wizard.trail(self.wizard_step),
+            last=wizard.is_last(self.wizard_step),
+        )
+        if step.tab:
+            self.select_tab(tabs.tab_index(step.tab))
+        self.notify_wizard_changed()
+
+    def wizard_next(self) -> None:
+        """Finish this step and move on, asking first if it looks unfinished."""
+        step = wizard.step(self.wizard_step)
+        if step.key == "preflight" and self.config_path is None:
+            if not self.create_config(self.project_root / "config.toml"):
+                return
+            self.set_status(f"Created {self.config_path}.")
+        reason = step.check(self.document) if step.check is not None else ""
+        if reason and not messagebox.askokcancel(
+            TITLE,
+            f"This step does not look finished:\n\n{reason}\n\nMove on to the next "
+            "step anyway?",
+            parent=self.root, icon="warning", default="cancel",
+        ):
+            return
+        if wizard.is_last(self.wizard_step):
+            self.finish_wizard()
+            return
+        self.wizard_step += 1
+        self.show_wizard_step()
+
+    def wizard_back(self) -> None:
+        self.wizard_step = wizard.clamp(self.wizard_step - 1)
+        self.show_wizard_step()
+
+    def finish_wizard(self) -> None:
+        """Setup is done: put the bar away and forget where we were."""
+        self.wizard_step = 0
+        self._hide_wizard()
+        self.set_status("Setup finished. Start it again any time from the Start here tab.")
+
+    def close_wizard(self) -> None:
+        """Put the bar away, keeping the step so it can be picked back up."""
+        self._hide_wizard()
+        self.set_status(
+            f"Setup closed at step {wizard.clamp(self.wizard_step) + 1} of "
+            f"{len(wizard.STEPS)}. Resume it from the Start here tab."
+        )
+
+    def _hide_wizard(self) -> None:
+        self.wizard_active = False
+        self.wizard_bar.pack_forget()
+        self.notify_wizard_changed()
 
     # -- configuration -------------------------------------------------------
 
@@ -208,21 +301,29 @@ class GuiApp:
         )
         if not path:
             return
-        target = Path(path)
+        if self.create_config(Path(path)):
+            self.set_status(f"Created {self.config_path}. Set the window titles next.")
+
+    def create_config(self, target: Path) -> bool:
+        """Write a new config file at ``target`` and open it. False on failure.
+
+        Shared with the wizard, which creates one without asking where: every
+        tab that writes a setting degrades to "this is only set for now" with
+        no file open, so a walkthrough that did not make one would spend five
+        steps quietly discarding the user's work.
+        """
         example = prefs.example_config()
         try:
             if example is not None:
                 target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
-                seeded = f"copied from {example.name}"
             else:
                 configio.save(target, configio.default_document(), backup=False)
-                seeded = "written from the built-in defaults"
         except OSError as exc:
             messagebox.showerror(TITLE, f"Could not create {target}:\n{exc}", parent=self.root)
-            return
+            return False
         self.config_path = target
         self.load_config(quiet=True)
-        self.set_status(f"Created {target} ({seeded}). Set the window titles next.")
+        return True
 
     def config_argument(self) -> str | None:
         """The ``-c`` value for a child, or None when no file is open."""
@@ -455,6 +556,8 @@ class GuiApp:
             "publisher": self.publisher.get(),
             "window": self.root.winfo_geometry(),
             "tab": self.notebook.index("current") if self.notebook.tabs() else 0,
+            "wizard_active": bool(self.wizard_active),
+            "wizard_step": wizard.clamp(self.wizard_step),
         })
         prefs.save(self.prefs)
         self.root.destroy()
@@ -469,15 +572,14 @@ def build(root: tk.Tk, config_path: str | Path | None = None) -> GuiApp:
     for tab in tabs.build_tabs(app):
         app.add_tab(tab, tab.tab_title)
     if app.first_run:
-        # No config yet, so nothing has been calibrated: land on the
-        # walkthrough regardless of which tab a previous install last used,
-        # rather than dropping a new user onto a Run tab that will not work.
-        app.select_tab(tabs.tab_index("StartTab"))
-        app.set_status(
-            "First run: start X-Plane with your aircraft on the ground, then work "
-            "through the steps below.",
-            "info",
-        )
+        # Nothing configured, so there is nothing this window can usefully do
+        # until setup has been through: put the wizard up at step one.
+        app.start_wizard()
+        app.set_status("Setup: follow the steps in the bar at the top of the window.")
+    elif app.prefs.get("wizard_active"):
+        # Closed part way through last time. Pick it back up where it was,
+        # rather than on whichever tab happened to be open.
+        app.start_wizard(restart=False)
     else:
         app.select_tab(int(app.prefs.get("tab") or 0))
     app.notify_config_changed()

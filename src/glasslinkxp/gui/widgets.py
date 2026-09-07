@@ -383,6 +383,105 @@ def section_heading(parent: tk.Misc, text: str) -> ttk.Label:
     return ttk.Label(parent, text=text, font=heading)
 
 
+#: The setup wizard's band. A light panel rather than the window's own grey,
+#: because its job is to be the thing you notice while you are working in a
+#: tab underneath it.
+WIZARD_BACKGROUND = "#eef3f7"
+WIZARD_BORDER = "#9fb6c6"
+WIZARD_DONE_COLOR = "#14670f"
+
+
+class WizardBar(tk.Frame):
+    """The setup walkthrough, across the top of the window.
+
+    Presentation only: it is told which step to draw and calls back when a
+    button is pressed. Which steps exist and what counts as finished is
+    ``wizard.py``'s, and driving them is ``app.py``'s.
+
+    It sits above the notebook rather than inside a tab so that it stays put
+    while the user works in whichever tab the current step needs -- the point
+    being that they never have to navigate back to something to find out what
+    they were doing.
+    """
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        on_back: Callable[[], None],
+        on_next: Callable[[], None],
+        on_exit: Callable[[], None],
+    ) -> None:
+        super().__init__(parent, background=WIZARD_BACKGROUND,
+                         highlightbackground=WIZARD_BORDER, highlightthickness=1)
+        self.columnconfigure(0, weight=1)
+
+        left = tk.Frame(self, background=WIZARD_BACKGROUND)
+        left.grid(row=0, column=0, sticky="ew", padx=10, pady=(7, 8))
+        left.columnconfigure(1, weight=1)
+
+        self.position = tk.Label(left, text="", background=WIZARD_BACKGROUND,
+                                 foreground=HELP_COLOR)
+        self.position.grid(row=0, column=0, sticky="w")
+        self.trail = tk.Frame(left, background=WIZARD_BACKGROUND)
+        self.trail.grid(row=0, column=1, sticky="w", padx=(10, 0))
+        self._pips: list[tk.Label] = []
+        self._plain_font = tkfont.nametofont("TkDefaultFont")
+        self._pip_font = tkfont.Font(font=self._plain_font)
+        self._pip_font.configure(weight="bold")
+
+        heading = tkfont.Font(font=tkfont.nametofont("TkDefaultFont"))
+        heading.configure(weight="bold")
+        self.title = tk.Label(left, text="", background=WIZARD_BACKGROUND, font=heading,
+                              anchor="w", justify="left")
+        self.title.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.instruction = tk.Label(left, text="", background=WIZARD_BACKGROUND,
+                                    foreground=HELP_COLOR, wraplength=820,
+                                    anchor="w", justify="left")
+        self.instruction.grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
+        buttons = tk.Frame(self, background=WIZARD_BACKGROUND)
+        buttons.grid(row=0, column=1, sticky="e", padx=10)
+        self.exit_button = ttk.Button(buttons, text="Close setup", width=12, command=on_exit)
+        self.exit_button.grid(row=0, column=0, padx=(0, 16))
+        self.back_button = ttk.Button(buttons, text="< Back", width=9, command=on_back)
+        self.back_button.grid(row=0, column=1)
+        self.next_button = ttk.Button(buttons, text="Next >", width=9, command=on_next)
+        self.next_button.grid(row=0, column=2, padx=(4, 0))
+
+    def show(self, index: int, total: int, title: str, instruction: str,
+             trail: tuple[str, ...], last: bool) -> None:
+        self.position.configure(text=f"Setup  ·  step {index + 1} of {total}")
+        self.title.configure(text=title)
+        self.instruction.configure(text=instruction)
+        self.back_button.configure(state="disabled" if index == 0 else "normal")
+        self.next_button.configure(text="Finish" if last else "Next >")
+        self._draw_trail(trail)
+
+    def _draw_trail(self, trail: tuple[str, ...]) -> None:
+        """One box per step: done, the one being worked on, still to come.
+
+        The state is carried by colour and weight over the step's own number,
+        never by a symbol. A tick (U+2713) is not in every font Tk may fall
+        back to, and Tk's failure mode for a missing glyph is to draw the
+        escape -- "\\u2713" in a box where the tick should be, which is worse
+        than the plain number it replaced.
+        """
+        while len(self._pips) < len(trail):
+            pip = tk.Label(self.trail, width=3, relief="solid", borderwidth=1)
+            pip.pack(side="left", padx=1)
+            self._pips.append(pip)
+        for index, (pip, state) in enumerate(zip(self._pips, trail), start=1):
+            if state == "done":
+                pip.configure(text=str(index), background="#cfe6c8",
+                              foreground=WIZARD_DONE_COLOR, font=self._pip_font)
+            elif state == "current":
+                pip.configure(text=str(index), background="#00507a",
+                              foreground="#ffffff", font=self._pip_font)
+            else:
+                pip.configure(text=str(index), background=WIZARD_BACKGROUND,
+                              foreground=HELP_COLOR, font=self._plain_font)
+
+
 class StatusBar(ttk.Frame):
     """One line at the bottom of the window: what just happened."""
 

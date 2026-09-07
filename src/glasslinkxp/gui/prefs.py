@@ -23,6 +23,11 @@ DEFAULTS: dict[str, Any] = {
     "publisher": "",
     "window": "",
     "tab": 0,
+    #: Whether the setup bar was up when the window last closed, and which
+    #: step it was on. Kept so that closing the window half way through setup
+    #: is not the same as abandoning it.
+    "wizard_active": False,
+    "wizard_step": 0,
     #: Whether the displays after the first one take their strip position
     #: from it. None means the user has not said, and the answer is worked
     #: out from whether the geometries already match -- so a configuration

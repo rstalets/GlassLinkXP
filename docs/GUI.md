@@ -64,11 +64,65 @@ see. So the loop survives a handler that raises, and says so in the status
 bar with a count and the traceback kept on the app (`poll_failures`,
 `last_poll_error`) -- kept alive is not the same as kept quiet.
 
+## The setup wizard is a bar, not a tab
+
+Setup is six steps done in five different tabs, and the first version of it
+was a list of them on the **Start here** tab with a "go there" button each.
+That is not a walkthrough. It can send somebody off to do a step and then has
+nothing further to say: they finish, and finding out what came next meant
+navigating back to a tab they had left and remembering which of six things
+they had already done.
+
+So the walkthrough is a band across the top of the window instead, above the
+notebook, and it stays there while the user works in whichever tab the step
+needs. Pressing **Next** opens the next step's tab for them.
+
+```mermaid
+flowchart LR
+    LAUNCH["gui opens"] --> Q{"config.toml<br/>found?"}
+    Q -->|no| W["wizard bar up,<br/>step 1"]
+    Q -->|"yes, but setup was<br/>closed part way"| R["wizard bar up,<br/>at the stored step"]
+    Q -->|yes| T["the remembered tab"]
+    W --> STEP
+    R --> STEP
+    STEP["show step:<br/>select its tab"] -->|Next| CHECK{"does it<br/>look done?"}
+    CHECK -->|yes| STEP
+    CHECK -->|no| ASK["ask, do not refuse"]
+    ASK -->|"go on anyway"| STEP
+    ASK -->|cancel| STEP
+    STEP -->|"Finish / Close setup"| HIDE["bar down,<br/>step remembered"]
+```
+
+Three things make it a wizard rather than a nag:
+
+* **It creates `config.toml`.** Pressing Next on step one writes one, seeded
+  from `config.example.toml`. Every tab that saves a setting degrades to
+  "this is only set for now" with no file open, so a walkthrough that did not
+  make one would spend five steps quietly discarding the user's work.
+* **It survives being closed.** The step is kept in the preferences, so
+  closing the window half way through setup is not the same as abandoning it;
+  the bar comes back where it was, and the Start here tab's button says which
+  step it would resume at.
+* **The checks ask, they never block.** Two of the six steps are somebody
+  looking at a picture and deciding it is right, which nothing here can see,
+  and the two checks that do exist (a window chosen per display; a strip
+  position moved off the built-in default) can be fooled by a hand-edited
+  config. A check that cannot tell a finished step from an unusual one, but
+  refuses anyway, only teaches people to click past it -- the same reasoning
+  as the calibration editor's clipping warning.
+
+The steps live in `gui/wizard.py` with no Tk in it, so the list, its order and
+the checks are testable without a display (`tests/test_gui_wizard.py`); the
+band itself is `widgets.WizardBar`, which is told what to draw and knows
+nothing else; `app.py` owns the one instance and drives it. Each step names
+its tab by class name through `tabs.tab_index`, so reordering the tab strip
+cannot leave a step pointing somewhere else.
+
 ## The tabs
 
 | Tab | Runs | For |
 | --- | --- | --- |
-| Start here | `synth` | The six steps of setting this up, each with a button to the tab that does it. And a way to try the whole thing with no X-Plane. |
+| Start here | `synth` | What this is, a button that starts or resumes setup, and a way to try the whole thing with no X-Plane. |
 | Run | `run` | Start/stop, the publisher, the rate, debug output, and a live board of the twelve softkeys per display. |
 | Find windows | `list-windows`, `manage-windows` | Pick the pop-out windows off a list; applying one writes `window_title` into the config. Only X-Plane's own windows are listed unless *Show every window* is ticked. *Set up pop-outs* opens, sizes and places the PFD and MFD, then lists again -- what you are here to do is pick a window, and the ones worth picking are the ones that now exist. Windows only. |
 | Calibrate | `calibrate` | Draw the strip on the captured frame with the mouse, judge it in a magnified close-up, and work through three steps. The MFD copies the PFD unless told otherwise. See below. |

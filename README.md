@@ -33,19 +33,24 @@ Requires Windows and X-Plane 12.1.1+ (for its web API).
 ## First run
 
 Start X-Plane with your aircraft **on the ground**, then open GlassLinkXP
-from the desktop shortcut. With no configuration yet, it opens on a
-walkthrough that covers, in order:
+from the desktop shortcut. With nothing configured yet it starts setup: a bar
+across the top of the window that takes you through six steps, one at a time,
+opening the right tab for each and staying put while you work in it.
 
-1. Popping the PFD and MFD out into their own windows.
-2. Telling GlassLinkXP which windows those are.
-3. Calibrating: drawing a box around the softkey strip on a captured picture.
-4. Checking that the reader is looking at clean text.
-5. Fixing a label that reads wrong, if one does, with the sharpening tuner.
-6. Watching the labels locally before wiring anything to X-Plane.
+1. Start X-Plane, aircraft on the ground (this creates your config file).
+2. Find the PFD and MFD pop-out windows.
+3. Draw a box around the softkey strip — the step that decides whether
+   anything reads correctly.
+4. Check what is actually being read, and tune it if a label comes out wrong.
+5. Watch the labels locally, without touching X-Plane.
+6. Publish them to X-Plane.
 
-Every step has a button straight to the tab that does it. If you have no
-X-Plane to hand yet, the same tab can generate sample pictures so you can see
-the whole thing work first.
+Press **Next** to move on; it warns you if a step looks unfinished, but never
+stops you. **Close setup** puts the bar away and remembers where you were —
+the Start here tab offers to resume from that step.
+
+If you have no X-Plane to hand yet, the Start here tab can generate sample
+pictures so you can see the whole thing work first.
 
 ## Wiring a PilotsDeck button
 

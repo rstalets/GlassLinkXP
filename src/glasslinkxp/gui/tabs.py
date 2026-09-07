@@ -24,7 +24,7 @@ from dataclasses import replace
 
 from ..color import BACKGROUND_NAMES, BLACK
 from ..config import StripGeometry
-from . import checks, commands, configio, geometry, schema
+from . import checks, commands, configio, geometry, schema, wizard
 from .logparse import (
     classify,
     parse_calibration,
@@ -102,40 +102,17 @@ class Tab(ttk.Frame):
 # ---------------------------------------------------------------------------
 
 
-#: The walkthrough on the first tab. The last item of each step names the
-#: tab it sends you to -- by class rather than by position, so reordering
-#: the tab strip cannot silently point these buttons at the wrong one.
-STEPS: tuple[tuple[str, str, str], ...] = (
-    ("Pop the PFD and MFD out into their own windows in X-Plane",
-     "Right-click each G1000 display and pop it out. GlassLinkXP can read the labels even "
-     "when a window is behind something else, but it does have to exist and be drawing.", ""),
-    ("Tell GlassLinkXP which windows those are",
-     "The Find windows tab lists everything open. Pick the two pop-outs and apply them "
-     "to the PFD and the MFD.", "WindowsTab"),
-    ("Line the reader up with the softkey strip",
-     "The Calibrate tab takes a picture of each window and draws the twelve boxes it is "
-     "about to read on top of it. Each box has to sit around exactly one label -- this is "
-     "the step that matters most, since nearly every bad reading turns out to be a box in "
-     "the wrong place.", "CalibrateTab"),
-    ("Check what the reader is actually looking at",
-     "The Cells tab shows every cell as it is about to be read: black text on white, about "
-     "30 pixels tall. If a cell is clipped or inverted, fix the geometry rather than the "
-     "OCR settings.", "CellsTab"),
-    ("Fix a label that reads wrong",
-     "Type what a cell should say into the box below it on the Cells tab, then press "
-     "Run tuning. It searches sharpening settings for one that fixes it without breaking "
-     "any other cell you have queued.", "CellsTab"),
-    ("Watch the labels before wiring anything up",
-     "On the Run tab, set Publish to 'console' and press Start. The board fills in with "
-     "what is being read. Nothing is sent to X-Plane in this mode.", "RunTab"),
-    ("Send them to X-Plane",
-     "Install the X-Plane plugin (see README.md), then set Publish to 'websocket' and press "
-     "Start. Your Stream Deck buttons read glasslinkxp/softkey/pfd/1:s64 and .../1/bg.",
-     "RunTab"),
-)
-
-
 class StartTab(Tab):
+    """What this is, and the way in to setup.
+
+    The walkthrough itself is not here: it is the bar across the top of the
+    window (``wizard.py`` and :class:`widgets.WizardBar`). A list of steps on
+    a tab can only send somebody away to do one, which leaves them to remember
+    where they were; the bar goes with them instead. This tab is what is left
+    -- what the thing is, a way to start or resume setup, and the escape
+    hatch for trying it with no X-Plane running.
+    """
+
     tab_title = "Start here"
 
     def __init__(self, app) -> None:
@@ -151,7 +128,7 @@ class StartTab(Tab):
             body,
             "GlassLinkXP reads the softkey labels off the G1000 screen and republishes them "
             "so a Stream Deck can show them. It has to be shown where on the screen to look, "
-            "once -- that is what the steps below are for.",
+            "once -- which is what setup does.",
             width=860,
         ).pack(anchor="w", pady=(0, 8))
         ttk.Label(
@@ -161,20 +138,10 @@ class StartTab(Tab):
             foreground=WARN_COLOR, wraplength=860, justify="left",
         ).pack(anchor="w", pady=(0, 12))
 
-        for number, (title, text, target) in enumerate(STEPS, start=1):
-            block = ttk.Frame(body)
-            block.pack(fill="x", pady=(0, 10))
-            block.columnconfigure(1, weight=1)
-            badge = tk.Label(block, text=str(number), width=3, relief="solid", borderwidth=1,
-                             background="#eef3f7")
-            badge.grid(row=0, column=0, rowspan=2, sticky="n", padx=(0, 10))
-            section_heading(block, title).grid(row=0, column=1, sticky="w")
-            help_label(block, text, width=760).grid(row=1, column=1, sticky="w")
-            if target:
-                ttk.Button(
-                    block, text="Go there", width=10,
-                    command=lambda name=target: self.app.select_tab(tab_index(name)),
-                ).grid(row=0, column=2, rowspan=2, sticky="e", padx=(10, 0))
+        self.setup_button = ttk.Button(body, text="Start setup", command=self._start_setup)
+        self.setup_button.pack(anchor="w")
+        self.setup_note = help_label(body, "", width=860)
+        self.setup_note.pack(anchor="w", pady=(6, 0))
 
         ttk.Separator(body).pack(fill="x", pady=10)
         section_heading(body, "No X-Plane to hand?").pack(anchor="w")
@@ -191,6 +158,42 @@ class StartTab(Tab):
                    command=self._make_frames).pack(anchor="w")
         self.output = OutputPane(body, height=6)
         self.output.pack(fill="both", expand=True, pady=(10, 0))
+
+        app.on_wizard_changed(self.refresh_setup_button)
+        self.refresh_setup_button()
+
+    def refresh_setup_button(self) -> None:
+        """Start / Resume / already running, in one place.
+
+        Resume names the step it would go back to: "carry on" is only
+        reassuring if it says what it is carrying on with.
+        """
+        total = len(wizard.STEPS)
+        if self.app.wizard_active:
+            self.setup_button.configure(state="disabled", text="Setup is running")
+            self.setup_note.configure(
+                text="The setup bar is at the top of the window; it follows you from tab "
+                     "to tab."
+            )
+            return
+        self.setup_button.configure(state="normal")
+        step = wizard.clamp(self.app.wizard_step)
+        if step > 0:
+            self.setup_button.configure(text=f"Resume setup (step {step + 1} of {total})")
+            self.setup_note.configure(
+                text=f"Setup was closed at step {step + 1}: {wizard.step(step).title}."
+            )
+        else:
+            self.setup_button.configure(text="Start setup")
+            self.setup_note.configure(
+                text=f"{total} steps: find the windows, line up the softkey strip, check "
+                     "what is being read, then publish to X-Plane."
+            )
+
+    def _start_setup(self) -> None:
+        # Resume where it was left unless it was finished (step back at 0),
+        # which is what the button already says it will do.
+        self.app.start_wizard(restart=self.app.wizard_step <= 0)
 
     def _make_frames(self) -> None:
         out = self.app.project_root / "frames"

@@ -95,48 +95,175 @@ def test_opening_with_no_config_file_falls_back_to_the_defaults(gui):
     assert "no file" in gui.config_display.get()
 
 
-def test_first_run_with_no_config_lands_on_start_here_regardless_of_the_remembered_tab(
-    tmp_path, monkeypatch,
-):
-    from glasslinkxp.gui import tabs
+@pytest.fixture
+def window(tmp_path, monkeypatch):
+    """Build the window yourself, for the tests that care how it opened."""
     from glasslinkxp.gui.app import build
 
     monkeypatch.setattr(prefs, "prefs_path", lambda: tmp_path / "gui.json")
     monkeypatch.setattr(prefs, "project_root", lambda: tmp_path)
-    prefs.save({**prefs.DEFAULTS, "tab": tabs.tab_index("RunTab")})
-    try:
-        root = tk.Tk()
-    except tk.TclError as exc:  # pragma: no cover
-        pytest.skip(f"no display available for Tk ({exc})")
-    root.withdraw()
-    try:
-        app = build(root, None)
-        assert app.first_run is True
-        assert app.notebook.index("current") == tabs.tab_index("StartTab")
-    finally:
-        root.destroy()
+    roots = []
+
+    def make(config_path=None, **stored):
+        if stored:
+            prefs.save({**prefs.DEFAULTS, **stored})
+        try:
+            root = tk.Tk()
+        except tk.TclError as exc:  # pragma: no cover - depends on the machine
+            pytest.skip(f"no display available for Tk ({exc})")
+        root.withdraw()
+        roots.append(root)
+        return build(root, config_path)
+
+    yield make
+    for root in roots:
+        try:
+            root.destroy()
+        except tk.TclError:
+            pass  # a test that called on_close() has already destroyed it
 
 
-def test_a_config_file_turns_first_run_off_and_honours_the_remembered_tab(tmp_path, monkeypatch):
+def test_first_run_with_no_config_opens_the_wizard_at_step_one(window):
+    from glasslinkxp.gui import tabs, wizard
+
+    app = window(tab=tabs.tab_index("RunTab"))
+    assert app.first_run is True
+    assert app.wizard_active is True
+    assert app.wizard_step == 0
+    # The bar is up, and the remembered tab did not win over the first step's.
+    assert app.wizard_bar.winfo_manager() == "pack"
+    assert app.notebook.index("current") == tabs.tab_index(wizard.STEPS[0].tab)
+
+
+def test_a_config_file_turns_first_run_off_and_honours_the_remembered_tab(window, tmp_path):
     from glasslinkxp.gui import tabs
-    from glasslinkxp.gui.app import build
 
-    monkeypatch.setattr(prefs, "prefs_path", lambda: tmp_path / "gui.json")
-    monkeypatch.setattr(prefs, "project_root", lambda: tmp_path)
-    prefs.save({**prefs.DEFAULTS, "tab": tabs.tab_index("RunTab")})
     path = tmp_path / "config.toml"
     path.write_text("[app]\nloop_hz = 3.5\n", encoding="utf-8")
-    try:
-        root = tk.Tk()
-    except tk.TclError as exc:  # pragma: no cover
-        pytest.skip(f"no display available for Tk ({exc})")
-    root.withdraw()
-    try:
-        app = build(root, path)
-        assert app.first_run is False
-        assert app.notebook.index("current") == tabs.tab_index("RunTab")
-    finally:
-        root.destroy()
+    app = window(path, tab=tabs.tab_index("RunTab"))
+    assert app.first_run is False
+    assert app.wizard_active is False
+    assert app.wizard_bar.winfo_manager() == ""
+    assert app.notebook.index("current") == tabs.tab_index("RunTab")
+
+
+def test_setup_closed_part_way_through_is_picked_back_up_where_it_was(window, tmp_path):
+    """Closing the window mid-setup is not the same as abandoning it."""
+    from glasslinkxp.gui import tabs, wizard
+
+    path = tmp_path / "config.toml"
+    path.write_text("[app]\nloop_hz = 3.5\n", encoding="utf-8")
+    app = window(path, wizard_active=True, wizard_step=2, tab=tabs.tab_index("RunTab"))
+    assert app.wizard_active is True
+    assert app.wizard_step == 2
+    assert app.notebook.index("current") == tabs.tab_index(wizard.STEPS[2].tab)
+
+
+def test_the_wizard_walks_forward_and_back_through_the_tabs(gui, monkeypatch):
+    from glasslinkxp.gui import tabs, wizard
+
+    monkeypatch.setattr("tkinter.messagebox.askokcancel", lambda *a, **k: True)
+    assert gui.wizard_step == 0
+    for expected in wizard.STEPS[1:]:
+        gui.wizard_next()
+        assert gui.notebook.index("current") == tabs.tab_index(expected.tab)
+    assert gui.wizard_step == len(wizard.STEPS) - 1
+
+    gui.wizard_back()
+    assert gui.wizard_step == len(wizard.STEPS) - 2
+    assert gui.notebook.index("current") == tabs.tab_index(wizard.STEPS[-2].tab)
+
+
+def test_the_first_step_creates_the_config_file(gui, monkeypatch):
+    """Every tab that writes a setting needs a file to write it into."""
+    monkeypatch.setattr("tkinter.messagebox.askokcancel", lambda *a, **k: True)
+    assert gui.config_path is None
+
+    gui.wizard_next()
+
+    assert gui.config_path == gui.project_root / "config.toml"
+    assert gui.config_path.is_file()
+    assert gui.document["display"]["pfd"]["window_title"]
+
+
+def test_a_step_that_looks_unfinished_asks_before_moving_on(gui, monkeypatch):
+    from glasslinkxp.gui import wizard
+
+    asked = []
+    monkeypatch.setattr(
+        "tkinter.messagebox.askokcancel",
+        lambda *a, **k: (asked.append(a[1]), False)[1],
+    )
+    gui.wizard_step = 1  # the window picker, whose displays have no window set
+    gui.document["display"]["pfd"]["window_title"] = ""
+    gui.show_wizard_step()
+
+    gui.wizard_next()
+
+    assert gui.wizard_step == 1, "declining the question leaves the step where it was"
+    assert asked and "pfd" in asked[0]
+
+    # And saying yes moves on regardless: it asks, it does not refuse.
+    monkeypatch.setattr("tkinter.messagebox.askokcancel", lambda *a, **k: True)
+    gui.wizard_next()
+    assert gui.wizard_step == 2
+    assert wizard.STEPS[2].key == "calibrate"
+
+
+def test_finishing_puts_the_bar_away_and_forgets_where_it_was(gui, monkeypatch):
+    from glasslinkxp.gui import wizard
+
+    monkeypatch.setattr("tkinter.messagebox.askokcancel", lambda *a, **k: True)
+    gui.wizard_step = len(wizard.STEPS) - 1
+    gui.show_wizard_step()
+
+    gui.wizard_next()
+
+    assert gui.wizard_active is False
+    assert gui.wizard_step == 0
+    assert gui.wizard_bar.winfo_manager() == ""
+
+
+def test_closing_setup_keeps_the_step_so_it_can_be_resumed(gui):
+    gui.wizard_step = 3
+    gui.show_wizard_step()
+
+    gui.close_wizard()
+
+    assert gui.wizard_active is False
+    assert gui.wizard_step == 3
+    assert gui.wizard_bar.winfo_manager() == ""
+
+    # And the Start here tab offers to take it back up, naming the step.
+    start = _tab(gui, "StartTab")
+    assert "Resume setup" in start.setup_button.cget("text")
+    assert "step 4" in start.setup_button.cget("text")
+
+    start._start_setup()
+    assert gui.wizard_active is True
+    assert gui.wizard_step == 3, "resuming does not send you back to the beginning"
+
+
+def test_where_setup_got_to_is_remembered_between_sessions(window, tmp_path):
+    """Closing the window mid-setup and reopening it lands on the same step."""
+    from glasslinkxp.gui import tabs, wizard
+
+    path = tmp_path / "config.toml"
+    path.write_text("[app]\nloop_hz = 3.5\n", encoding="utf-8")
+    app = window(path)
+    app.start_wizard()
+    app.wizard_step = 2
+    app.show_wizard_step()
+    app.on_close()  # writes the preferences, and destroys its own root
+
+    stored = prefs.load()
+    assert stored["wizard_active"] is True
+    assert stored["wizard_step"] == 2
+
+    reopened = window(path)
+    assert reopened.wizard_active is True
+    assert reopened.wizard_step == 2
+    assert reopened.notebook.index("current") == tabs.tab_index(wizard.STEPS[2].tab)
 
 
 def test_opening_a_config_file_reads_it(tmp_path, monkeypatch):
@@ -1286,11 +1413,3 @@ def test_a_relative_path_in_the_config_resolves_beside_the_config(gui, tmp_path)
     gui.config_path = tmp_path / "config.toml"
     configio.set_in(gui.document, ("ocr", "labels_file"), "my-labels.txt")
     assert config_path_setting(gui, "labels_file") == tmp_path / "my-labels.txt"
-
-
-def test_the_walkthrough_only_points_at_tabs_that_exist(gui):
-    from glasslinkxp.gui import tabs
-
-    for _title, _text, target in tabs.STEPS:
-        if target:
-            assert 0 <= tabs.tab_index(target) < len(tabs.TAB_CLASSES)
