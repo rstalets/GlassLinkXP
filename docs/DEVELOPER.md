@@ -108,21 +108,33 @@ Publish a GitHub release tagged `vX.Y.Z` and `.github/workflows/release.yml`
 attaches `glasslinkxp-X.Y.Z.zip` to it a minute later. There is nothing to
 build first and nothing to bump by hand.
 
-**The tree is unreleased.** `src/pyproject.toml` says `0.0.0`, and so does the
-`glasslinkxp` entry in `src/uv.lock`; the version is stamped in at build time
-from the tag. A checkout is not a release of anything, and a zip a developer
-builds locally says so on its face.
+**The tree is unreleased.** `src/pyproject.toml` says `0.0.0`, and so do the
+`glasslinkxp` entry in `src/uv.lock` and `src/glasslinkxp/VERSION`; the
+version is stamped in at build time from the tag. A checkout is not a release
+of anything, and a zip a developer builds locally says so on its face.
 
-**Both files are stamped, together, and that is not tidiness.** `uv.lock`
+**`glasslinkxp/VERSION` is the one the running app reads.** Every command
+logs it on its first line (`GlassLinkXP 1.2.3: run`), so a log pasted into an
+issue says which download produced it. It is a plain text file inside the
+package, stamped by the build, rather than a lookup at runtime: the manifest
+sits beside the install root and not inside the package, and installed
+metadata is a thing an editable install can get wrong -- neither is worth
+having a bug report's version number depend on. A copy with no VERSION file --
+a dev build run from a tree without it -- logs `NO_VERSION`, which is
+deliberately not a number: it cannot be mistaken in an issue for a version
+anything was released at.
+
+**The manifest and the lock are stamped together, and that is not tidiness.** `uv.lock`
 records the version it locked the project at, and `uv sync --locked` -- which
 is what `install.ps1` runs on the *user's* machine -- refuses to run when the
 lock and the manifest disagree. That was measured rather than assumed: bumping
 `pyproject.toml` alone makes `uv lock --check` report the lockfile out of
 date, and stamping both makes it pass again. So stamping one would produce a
 zip that downloads, extracts, and then fails at `uv sync`, on a machine none
-of us can see. `tools/make_zip.py` does both in one operation and refuses to
+of us can see. `tools/make_zip.py` does all three in one operation and refuses to
 build if either substitution finds nothing; `tests/test_release.py` pins that,
-including that the two files agree in the tree as checked in.
+including that all three agree in the tree as checked in. Stamping writes into
+the zip, never into the tree, so a build leaves the checkout as it found it.
 
 The tag is the only input. `make_zip.py` normalises and validates it
 (`v1.2.3` -> `1.2.3`, and a tag that is not a version stops the build), which

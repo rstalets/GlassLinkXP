@@ -18,7 +18,7 @@ body:
     id: version
     attributes:
       label: GlassLinkXP version
-      description: The zip you installed from, e.g. `glasslinkxp-1.2.3.zip`. `0.0.0` means you built it from a checkout.
+      description: "The first line of any command's output names it -- `GlassLinkXP 1.2.3: run`. `0.0.0` means it was built from a checkout, and `NO_VERSION` that the version file was missing."
       placeholder: "1.2.3"
     validations:
       required: true

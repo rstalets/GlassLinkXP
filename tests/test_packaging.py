@@ -26,6 +26,7 @@ MUST_SHIP = (
     "glasslinkxp/main.py",                # the app
     "glasslinkxp/labels.txt",             # the vocabulary it ships with
     "glasslinkxp/screens.toml",
+    "glasslinkxp/VERSION",                # what a running copy says it is
     "glasslinkxp.cmd",                    # the launchers
     "glasslinkxp-gui.cmd",
     "config.example.toml",                # what a new config is seeded from
@@ -131,3 +132,17 @@ def test_declining_xppython3_is_a_state_the_summary_can_report():
     user sees is 48 datarefs missing and no reason given."""
     text = _plugin_script()
     assert "NOT INSTALLED -- nothing will load the plugin until it is" in text
+
+
+def test_the_version_file_is_package_data():
+    """It ships inside the package, so it has to be declared as package data.
+
+    The zip is what a user installs and `uv sync` builds the package from it;
+    a file setuptools does not know about would be missing from the installed
+    copy while still being present in the zip -- which is the sort of
+    difference nobody looks for.
+    """
+    manifest = (SHIPPED / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r"(?m)^glasslinkxp = \[([^\]]*)\]", manifest)
+    assert match, "no package-data entry for glasslinkxp"
+    assert "VERSION" in match.group(1)

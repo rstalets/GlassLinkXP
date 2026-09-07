@@ -1,12 +1,18 @@
 """What a release is made of: the version, and who stamps it in.
 
-The tree is unreleased -- ``pyproject.toml`` says ``0.0.0`` -- and the release
-workflow passes the tag it is building to ``tools/make_zip.py``, which stamps
-it into the two files that carry it. Those two have to move together:
-``pyproject.toml`` names the version and ``uv.lock`` records the version it
-locked, and ``uv sync --locked`` -- what install.ps1 runs on the user's
-machine -- refuses to run when they disagree. Stamping one alone would build a
-zip that cannot install, and nothing downstream of the build would notice.
+The tree is unreleased -- everything that carries a version says ``0.0.0`` --
+and the release workflow passes the tag it is building to
+``tools/make_zip.py``, which stamps it into the three files that carry it. Two
+of them have to move together: ``pyproject.toml`` names the version and
+``uv.lock`` records the version it locked, and ``uv sync --locked`` -- what
+install.ps1 runs on the user's machine -- refuses to run when they disagree.
+Stamping one alone would build a zip that cannot install, and nothing
+downstream of the build would notice.
+
+The third is ``glasslinkxp/VERSION``, the one the running app reads and logs.
+It has no such failure mode; what it has is the opposite one -- a version that
+disagrees with the zip it came in would be a wrong answer in every bug report
+made from that build -- so it is stamped in the same operation.
 
 Nothing here needs Tk, a display or a network.
 """
@@ -25,9 +31,12 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import make_zip  # noqa: E402
 
+from glasslinkxp.version import NO_VERSION, read_version  # noqa: E402
+
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 LOCK = ROOT / "src" / "uv.lock"
 PYPROJECT = ROOT / "src" / "pyproject.toml"
+VERSION_FILE = ROOT / "src" / "glasslinkxp" / "VERSION"
 
 
 def lock_version(text: str, name: str = "glasslinkxp") -> str:
@@ -47,6 +56,13 @@ def lock_version(text: str, name: str = "glasslinkxp") -> str:
 def test_the_checked_in_version_is_the_unreleased_one():
     """A checkout is not a release of anything, and says so."""
     assert make_zip.version() == make_zip.DEFAULT_VERSION
+
+
+def test_everything_that_carries_a_version_carries_the_same_one():
+    """Including the file the app reads: a running copy that reported a
+    version the zip was not built at would be a wrong answer in every bug
+    report made from it."""
+    assert read_version(VERSION_FILE) == make_zip.version()
 
 
 def test_the_manifest_and_the_lock_agree_about_the_version():
@@ -118,6 +134,13 @@ def test_stamping_the_lock_touches_only_the_project_it_locked():
         assert lock_version(stamped, other) == lock_version(text, other)
 
 
+def test_the_version_file_is_the_version_and_a_newline():
+    """It is read by a `read_text().strip()`, so what matters is that a
+    stamped file holds the number and nothing else -- whatever was in it."""
+    assert make_zip.stamp_version_file("0.0.0\n", "1.2.3") == "1.2.3\n"
+    assert make_zip.stamp_version_file("", "1.2.3") == "1.2.3\n"
+
+
 def test_stamping_refuses_a_file_it_does_not_recognise():
     """A silent no-op here would ship a zip stamped 0.0.0 under a release
     number, and the first sign of it would be a user's install failing."""
@@ -137,8 +160,18 @@ def test_a_release_build_carries_the_stamped_manifest(tmp_path):
     with zipfile.ZipFile(target) as zf:
         manifest = tomllib.loads(zf.read("pyproject.toml").decode("utf-8"))
         lock = zf.read("uv.lock").decode("utf-8")
+        shipped = zf.read("glasslinkxp/VERSION").decode("utf-8")
     assert manifest["project"]["version"] == "1.2.3"
     assert lock_version(lock) == "1.2.3", "the lock would refuse to install against that manifest"
+    assert shipped.strip() == "1.2.3", "the running app would report a version this was not built at"
+
+
+def test_a_release_build_leaves_the_checkout_alone(tmp_path):
+    """Stamping writes into the zip, never into the tree: a build that edited
+    files in place would leave a half-stamped checkout to commit by accident."""
+    before = [f.read_text(encoding="utf-8") for f in (PYPROJECT, LOCK, VERSION_FILE)]
+    make_zip.build(tmp_path, "9.9.9")
+    assert [f.read_text(encoding="utf-8") for f in (PYPROJECT, LOCK, VERSION_FILE)] == before
 
 
 def test_a_developer_build_stamps_nothing(tmp_path):
@@ -147,6 +180,7 @@ def test_a_developer_build_stamps_nothing(tmp_path):
     with zipfile.ZipFile(target) as zf:
         assert zf.read("pyproject.toml").decode("utf-8") == PYPROJECT.read_text(encoding="utf-8")
         assert zf.read("uv.lock").decode("utf-8") == LOCK.read_text(encoding="utf-8")
+        assert zf.read("glasslinkxp/VERSION").decode("utf-8") == VERSION_FILE.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -226,3 +260,30 @@ def test_the_issue_templates_are_the_shape_github_expects():
                 assert field["id"], f"{path.name}: every field needs an id"
     config = yaml.safe_load((directory / "config.yml").read_text(encoding="utf-8"))
     assert isinstance(config["blank_issues_enabled"], bool)
+
+
+# ---------------------------------------------------------------------------
+# What the running app makes of that file
+# ---------------------------------------------------------------------------
+
+def test_the_version_is_read_from_the_file_the_build_stamps(tmp_path):
+    stamped = tmp_path / "VERSION"
+    stamped.write_text(make_zip.stamp_version_file("", "1.2.3"), encoding="utf-8")
+    assert read_version(stamped) == "1.2.3"
+
+
+@pytest.mark.parametrize("contents", ["", "   \n", "\n\n"])
+def test_an_empty_version_file_reads_as_no_version(tmp_path, contents):
+    path = tmp_path / "VERSION"
+    path.write_text(contents, encoding="utf-8")
+    assert read_version(path) == NO_VERSION
+
+
+def test_a_missing_version_file_does_not_stop_the_app(tmp_path):
+    """A dev build run from a tree without the file still starts, and says so.
+
+    The placeholder is not a number on purpose: `NO_VERSION` in a log cannot
+    be mistaken for something a release was tagged, and cannot be compared,
+    sorted or reported as one."""
+    assert read_version(tmp_path / "nothing-here") == NO_VERSION
+    assert not NO_VERSION[0].isdigit()

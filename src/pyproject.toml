@@ -95,4 +95,4 @@ build-backend = "setuptools.build_meta"
 packages = ["glasslinkxp", "glasslinkxp.gui"]
 
 [tool.setuptools.package-data]
-glasslinkxp = ["labels.txt", "screens.toml"]
+glasslinkxp = ["labels.txt", "screens.toml", "VERSION"]

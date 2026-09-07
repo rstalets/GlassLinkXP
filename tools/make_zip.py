@@ -15,14 +15,22 @@ config.toml would hand the next user this machine's calibration, and the
 window would not offer them setup at all.
 
 The version is stamped in at build time, not held in the tree: the checked-in
-``pyproject.toml`` says ``0.0.0`` and the release workflow passes the tag it
-is building. Two files carry it and they have to move together --
-``pyproject.toml`` names the version and ``uv.lock`` records the version it
-locked, and ``uv sync --locked`` (which is what install.ps1 runs on the user's
-machine) *fails* when they disagree. That was measured, not assumed: bumping
-pyproject.toml alone makes `uv lock --check` report the lockfile out of date,
-and stamping both makes it pass again. So stamping either without the other
-would ship a zip that cannot install.
+files say ``0.0.0`` and the release workflow passes the tag it is building.
+Three files carry it, and they are stamped in one operation because the first
+two have to move *together* -- ``pyproject.toml`` names the version and
+``uv.lock`` records the version it locked, and ``uv sync --locked`` (which is
+what install.ps1 runs on the user's machine) *fails* when they disagree. That
+was measured, not assumed: bumping pyproject.toml alone makes `uv lock
+--check` report the lockfile out of date, and stamping both makes it pass
+again. So stamping either without the other would ship a zip that cannot
+install.
+
+The third is ``glasslinkxp/VERSION``, which is the only one the *running* app
+reads: every command logs it on its first line, so a log says which download
+produced it. It is stamped here rather than derived from the manifest at
+runtime because the manifest sits beside the install root, not inside the
+package, and because a number a user reads in a bug report should not depend
+on an import succeeding.
 """
 
 from __future__ import annotations
@@ -119,6 +127,15 @@ def stamp_lock(text: str, version: str, name: str) -> str:
     return _substitute(text, pattern, version, "uv.lock")
 
 
+def stamp_version_file(text: str, version: str) -> str:
+    """The whole file is the version, so there is nothing to substitute.
+
+    ``text`` is taken only to keep the three stampers one shape; a VERSION
+    file with anything else in it is not something to preserve.
+    """
+    return f"{version}\n"
+
+
 def should_include(relative: Path) -> bool:
     """Whether a path inside src/ belongs in a fresh download.
 
@@ -135,6 +152,16 @@ def should_include(relative: Path) -> bool:
     if len(relative.parts) == 1 and relative.name in EXCLUDED_FILES:
         return False
     return relative.name not in {"gui.json", "config.toml"}
+
+
+#: The files a release stamps, and how. Every one is written into the zip
+#: from memory rather than edited in the tree: a build leaves the checkout as
+#: it found it, so there is no half-stamped state to commit by accident.
+STAMPED = {
+    "pyproject.toml": lambda text, version, name: stamp_pyproject(text, version),
+    "uv.lock": lambda text, version, name: stamp_lock(text, version, name),
+    "glasslinkxp/VERSION": lambda text, version, name: stamp_version_file(text, version),
+}
 
 
 def project() -> dict:
@@ -162,10 +189,9 @@ def build(out_dir: Path | None = None, release_version: str | None = None) -> Pa
             if not should_include(relative):
                 continue
             arcname = relative.as_posix()
-            if release_version and arcname == "pyproject.toml":
-                zf.writestr(arcname, stamp_pyproject(path.read_text(encoding="utf-8"), stamped))
-            elif release_version and arcname == "uv.lock":
-                zf.writestr(arcname, stamp_lock(path.read_text(encoding="utf-8"), stamped, name))
+            stamper = STAMPED.get(arcname) if release_version else None
+            if stamper is not None:
+                zf.writestr(arcname, stamper(path.read_text(encoding="utf-8"), stamped, name))
             else:
                 zf.write(path, arcname)
             written += 1

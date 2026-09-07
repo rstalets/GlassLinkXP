@@ -156,6 +156,9 @@ because they are what actually settles a wrong label:
 .\glasslinkxp.cmd dump-cells             # what Tesseract was shown
 ```
 
+Every log starts with the version it came from
+(`GlassLinkXP 1.2.3: run`), so pasting the log answers that question too.
+
 Attach the `dump-cells` images and debug logs (`-v`/`Debug Output` enabled). Every 
 hard reading bug in this project so far has been diagnosed from a picture of the preprocessed 
 cell and none from a description of one -- the screen is the only source of truth 

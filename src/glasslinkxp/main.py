@@ -17,6 +17,7 @@ import numpy as np
 
 from . import capture as capture_module
 from . import synth, windowmgr
+from .version import __version__
 from .capture import (
     XPLANE_WINDOW_CLASS,
     CaptureError,
@@ -974,6 +975,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     _setup_logging(getattr(args, "verbose", False))
+    # First line of every run, whatever the subcommand: which build this is.
+    # A bug report arrives as a log, and the first question asked of one is
+    # always which version produced it -- so the log answers it without anybody
+    # having to remember to ask. `unknown` means the VERSION file did not ship,
+    # which is itself worth seeing.
+    LOG.info("GlassLinkXP %s: %s", __version__, args.command)
     try:
         try:
             config = load_config(getattr(args, "config", None))
