@@ -338,27 +338,36 @@ def finish_cell(
     as the crop tightens in a way the raw one does not; it is here for callers
     that have no colour configuration, not as an equal option.
 
-    The frame is cropped away first either way. :func:`_crop_to_content` only
-    fires on a bright box inside a dark surround, which is itself a light
-    background that does not fill the crop -- the one case any ring reading of
-    the whole cell answers for the wrong rectangle, and the one case that
-    needs no further measurement once it has been found.
+    :func:`_crop_to_content` runs *after* the polarity is settled, which is
+    where it has always run and where it is safe. Moving it earlier, so that
+    the fallback ring reading would see the label's own background rather than
+    the surround around a highlight box, looked harmless and was not: its
+    guard -- four or more rows and columns more than half bright -- is not
+    specific to a box. A full-width word at a tight vertical crop satisfies it
+    too, and a hit was then being read as "this cell has a light background",
+    overriding the classifier that had just said otherwise. A cell whose
+    polarity was measured correctly came out the wrong way up anyway. The
+    shape of a crop is not evidence about polarity when a real measurement is
+    in hand, and it is only used as a hint on the fallback path where there is
+    nothing better.
     """
     if polarity not in POLARITIES:
         raise ValueError(f"unknown polarity {polarity!r} (use one of {POLARITIES})")
 
-    cropped = _crop_to_content(binary)
-    if cropped.shape != binary.shape:
-        # _crop_to_content only fires on a bright box inside a dark surround,
-        # which *is* a light background that does not fill the crop -- the one
-        # case a ring reading of the whole cell answers for the wrong
-        # rectangle. Having found it, there is nothing left to measure.
-        light = True
-    elif light_background is not None:
+    if light_background is not None:
         light = light_background
     else:
-        light = _background_is_white(cropped, ring_fraction)
-    binary = cropped
+        # No classification to go on. Read the binarised ring instead, and
+        # crop any dark frame away first so the ring is the label's own
+        # background rather than the surround around a highlight box; a crop
+        # that fires here is itself weak evidence of such a box. Weak evidence
+        # is worth having only when there is no strong evidence, which is why
+        # this whole branch sits under the `is None`.
+        probe = _crop_to_content(binary)
+        light = (
+            True if probe.shape != binary.shape
+            else _background_is_white(probe, ring_fraction)
+        )
 
     flip = not light
     if polarity == "opposite":
@@ -367,6 +376,11 @@ def finish_cell(
         # The bright class is the text, not the paper -> flip so that
         # Tesseract gets dark glyphs on a light background.
         binary = cv2.bitwise_not(binary)
+
+    # Now that the cell is dark-on-light, a dark frame around a highlight box
+    # is the only thing left that looks like one, and a plain word's border is
+    # white so this returns it untouched.
+    binary = _crop_to_content(binary)
 
     if border > 0:
         binary = cv2.copyMakeBorder(

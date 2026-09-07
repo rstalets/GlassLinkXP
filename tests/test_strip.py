@@ -10,6 +10,7 @@ from glasslinkxp.strip import (
     sharpen,
     RING_FRACTION,
     _background_is_white,
+    _crop_to_content,
     finish_cell,
     ring_bright_fraction,
     threshold_cell,
@@ -361,3 +362,40 @@ def test_the_ring_is_the_colour_stage_s_ring():
     from glasslinkxp.config import ColorConfig
 
     assert RING_FRACTION == ColorConfig().ring_fraction
+
+
+def test_a_crop_hit_never_overrides_a_measured_polarity():
+    """The regression this test exists for, and it shipped.
+
+    ``_crop_to_content`` was moved ahead of the polarity decision so the
+    fallback ring reading would see the label's own background rather than the
+    dark surround around a highlight box. Its guard -- four or more rows and
+    columns more than half bright -- was described in a comment as "a box and
+    never a row of glyphs". That is false: a full-width word at a tight
+    vertical crop satisfies it. A hit was then taken as proof of a light
+    background, overriding ``color.classify_cell``, so a cell whose background
+    had been measured correctly as black came out of preprocessing still
+    white-on-black. ``dump-cells`` printed "background black" on the line
+    above the picture that disagreed with it.
+    """
+    # A cell that trips _crop_to_content's guard: a dark border, and a broad
+    # bright region whose rows and columns are more than half bright.
+    binary = np.zeros((40, 40), dtype=np.uint8)
+    binary[8:32, 8:32] = 255
+    assert _crop_to_content(binary).shape != binary.shape, "the guard must fire here"
+
+    told_dark = finish_cell(binary, "auto", border=0, light_background=False)
+    assert told_dark.mean() > 127, "a measured black background must still be inverted"
+
+    told_light = finish_cell(binary, "auto", border=0, light_background=True)
+    assert told_light.mean() > 127, "and a light one is already the right way up"
+    assert not np.array_equal(told_dark, told_light), "the two must not be the same image"
+
+
+def test_the_fallback_still_reads_a_highlight_box_inside_a_dark_surround():
+    """With no classification to go on, a crop hit is the only hint there is,
+    and it stays -- but only on that path."""
+    binary = np.zeros((40, 40), dtype=np.uint8)
+    binary[8:32, 8:32] = 255
+    binary[16:24, 12:28] = 0  # dark "glyphs" inside the bright box
+    assert finish_cell(binary, "auto", border=0).mean() > 127

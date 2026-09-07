@@ -198,6 +198,18 @@ with `value_max` at 60 between them -- it does not degrade at all. It had been
 driving `/bg` correctly the whole time while polarity used the fragile
 statistic beside it.
 
+**`_crop_to_content` runs after the polarity is settled, and that ordering is
+load-bearing.** It was moved ahead of it so the fallback ring reading would
+see the label's own background rather than the surround around a highlight
+box. Its guard -- four or more rows and columns more than half bright -- was
+described in the comment as "a box and never a row of glyphs", and that is
+false: a full-width word at a tight vertical crop satisfies it. A hit was then
+read as "light background", overriding `classify_cell`, so a cell measured
+correctly as black came out white-on-black anyway -- with `dump-cells`
+printing `background black` on the line above the picture that disagreed with
+it. The shape of a crop is not evidence about polarity when a real
+measurement is in hand.
+
 The opposite-polarity rung stays as the backstop, and the vocabulary decides
 there: `retry_opposite_polarity` is that decision, and
 `SoftkeyReader._rank` is what keeps it honest: a retry wins only by landing on
