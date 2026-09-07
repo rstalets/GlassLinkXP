@@ -260,6 +260,22 @@ if ((Test-Path $dest) -and -not $Force) {
 }
 
 # --------------------------------------------------------------------------
+# The plugin this one was renamed from
+# --------------------------------------------------------------------------
+# XPPython3 loads every PI_*.py it finds, so leaving the old file behind means
+# both plugins load: the old one goes on registering the g1000/softkey/*
+# datarefs this no longer writes to, which is stale state to debug against
+# rather than a clean upgrade.
+$legacyPlug = Join-Path $pyPluginDir 'PI_G1000SoftkeyLabels.py'
+if (Test-Path $legacyPlug) {
+    Write-Step 'Removing the plugin this replaces'
+    Remove-Item $legacyPlug -Force
+    Write-Ok "removed: $legacyPlug (it registered the old g1000/softkey/* datarefs)"
+    Write-Warn2 'any Stream Deck buttons still addressing g1000/softkey/... need'
+    Write-Warn2 'changing to glasslinkxp/softkey/... -- see README.md.'
+}
+
+# --------------------------------------------------------------------------
 # Next steps
 # --------------------------------------------------------------------------
 $running = @(Get-Process -Name 'X-Plane*' -ErrorAction SilentlyContinue)

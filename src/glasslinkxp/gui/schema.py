@@ -16,6 +16,7 @@ has to be told what ``blank_contrast`` does before they can sensibly move it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from ..config import (
@@ -347,6 +348,13 @@ def default_value(section: str, setting: "Setting") -> Any:
 
 def _default_for(section: str, setting: "Setting") -> str:
     value = default_value(section, setting)
+    if setting.package_default:
+        # Never the real path. This document is committed and read by people
+        # on other machines, and the value here is an absolute path into
+        # whichever checkout or install generated it -- which made the test
+        # that regenerates and compares this file pass only on the machine it
+        # was last generated on, and fail for everybody else.
+        return f"the `{Path(str(value)).name}` that ships inside the package"
     if value is None:
         return "not set"
     if isinstance(value, bool):
@@ -370,9 +378,8 @@ def as_markdown() -> str:
                 kind += " " + ", ".join(f"`{c}`" for c in setting.choices)
             note = f"{kind}. Default: {_default_for(group.section, setting)}."
             if setting.package_default:
-                note += (" Leave it out to use the copy that comes with the package -- "
-                         "the default above is a path into this install, so writing it "
-                         "into your config file would tie the file to it.")
+                note += (" Leave it out to use that copy. Setting it writes an absolute "
+                         "path into your config file, which ties the file to one install.")
             elif setting.optional:
                 note += " Leave it out to leave it unset."
             out.append(f"*{setting.label}* — {note}\n")

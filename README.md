@@ -64,6 +64,11 @@ For PFD softkey 1:
 `:s64` is PilotsDeck's string-dataref address syntax: read 64 bytes as a
 NUL-terminated string.
 
+> **Upgrading from the old `g1000-softkey` release?** The datarefs were renamed
+> along with the project: `g1000/softkey/...` is now `glasslinkxp/softkey/...`.
+> Any buttons you already made need re-addressing. The installer removes the
+> old X-Plane plugin, so the old names stop existing rather than going stale.
+
 Alongside each label, GlassLinkXP also publishes the colour of the cell the
 label sits on, as an int dataref:
 
